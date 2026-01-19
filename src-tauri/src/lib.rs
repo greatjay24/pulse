@@ -1127,11 +1127,11 @@ async fn fetch_supabase_metrics(
 // - This avoids Google's app verification process and scales infinitely
 // - Current setup requires manually adding test users in Google Cloud Console
 
-// TODO: Users should provide their own Google OAuth credentials
-// Create a project at https://console.cloud.google.com and enable the Calendar API
-// Then create OAuth 2.0 credentials and replace these placeholder values
-const GOOGLE_CLIENT_ID: &str = "YOUR_GOOGLE_CLIENT_ID";
-const GOOGLE_CLIENT_SECRET: &str = "YOUR_GOOGLE_CLIENT_SECRET";
+// These are embedded at compile time from environment variables
+// For local dev: create .env file with GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET
+// For CI builds: set as GitHub Actions secrets
+const GOOGLE_CLIENT_ID: &str = env!("GOOGLE_CLIENT_ID");
+const GOOGLE_CLIENT_SECRET: &str = env!("GOOGLE_CLIENT_SECRET");
 
 #[derive(Debug, Serialize, Deserialize)]
 struct GoogleCalendarEvent {
@@ -1172,7 +1172,8 @@ async fn start_google_oauth() -> Result<String, String> {
         .port();
 
     let redirect_uri = format!("http://127.0.0.1:{}", port);
-    let scopes = "https://www.googleapis.com/auth/calendar.readonly";
+    // Request both Calendar and Gmail scopes
+    let scopes = "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/gmail.readonly";
 
     // Build the auth URL
     let auth_url = format!(
@@ -1460,6 +1461,433 @@ async fn fetch_google_calendar(access_token: String) -> Result<String, String> {
 }
 
 // ==========================================
+// Gmail API
+// ==========================================
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GmailLabel {
+    id: String,
+    name: String,
+    #[serde(rename = "type")]
+    label_type: Option<String>,
+    color: Option<GmailLabelColor>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GmailLabelColor {
+    #[serde(rename = "backgroundColor")]
+    background_color: Option<String>,
+    #[serde(rename = "textColor")]
+    text_color: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GmailMessageHeader {
+    name: String,
+    value: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GmailMessagePayload {
+    headers: Option<Vec<GmailMessageHeader>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GmailMessageDetail {
+    id: String,
+    #[serde(rename = "threadId")]
+    thread_id: String,
+    #[serde(rename = "labelIds")]
+    label_ids: Option<Vec<String>>,
+    snippet: Option<String>,
+    payload: Option<GmailMessagePayload>,
+    #[serde(rename = "internalDate")]
+    internal_date: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GmailMessageListItem {
+    id: String,
+    #[serde(rename = "threadId")]
+    thread_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GmailMessageList {
+    messages: Option<Vec<GmailMessageListItem>>,
+    #[serde(rename = "resultSizeEstimate")]
+    result_size_estimate: Option<i32>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GmailLabelsResponse {
+    labels: Option<Vec<GmailLabel>>,
+}
+
+#[tauri::command]
+async fn fetch_gmail(access_token: String) -> Result<String, String> {
+    println!("Fetching Gmail messages...");
+    let client = reqwest::Client::new();
+
+    // First, fetch all labels to get their names and colors
+    let labels_response = client
+        .get("https://gmail.googleapis.com/gmail/v1/users/me/labels")
+        .header("Authorization", format!("Bearer {}", access_token))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch labels: {}", e))?;
+
+    let labels_data: GmailLabelsResponse = labels_response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse labels: {}", e))?;
+
+    let labels: std::collections::HashMap<String, (String, Option<String>)> = labels_data
+        .labels
+        .unwrap_or_default()
+        .into_iter()
+        .map(|l| {
+            let color = l.color.and_then(|c| c.background_color);
+            (l.id.clone(), (l.name.clone(), color))
+        })
+        .collect();
+
+    // Fetch unread messages from inbox (limit to 20)
+    let messages_response = client
+        .get("https://gmail.googleapis.com/gmail/v1/users/me/messages")
+        .query(&[
+            ("q", "is:unread"),
+            ("maxResults", "20"),
+        ])
+        .header("Authorization", format!("Bearer {}", access_token))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch messages: {}", e))?;
+
+    let messages_list: GmailMessageList = messages_response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse messages list: {}", e))?;
+
+    let unread_count = messages_list.result_size_estimate.unwrap_or(0);
+    let message_ids: Vec<String> = messages_list
+        .messages
+        .unwrap_or_default()
+        .into_iter()
+        .take(10) // Only fetch details for first 10
+        .map(|m| m.id)
+        .collect();
+
+    // Fetch full details for each message
+    let mut messages = Vec::new();
+    for msg_id in message_ids {
+        let msg_response = client
+            .get(&format!(
+                "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}",
+                msg_id
+            ))
+            .query(&[("format", "metadata"), ("metadataHeaders", "From"), ("metadataHeaders", "Subject")])
+            .header("Authorization", format!("Bearer {}", access_token))
+            .send()
+            .await;
+
+        if let Ok(response) = msg_response {
+            if let Ok(detail) = response.json::<GmailMessageDetail>().await {
+                // Extract headers
+                let headers = detail.payload.and_then(|p| p.headers).unwrap_or_default();
+                let from = headers.iter()
+                    .find(|h| h.name.to_lowercase() == "from")
+                    .map(|h| h.value.clone())
+                    .unwrap_or_default();
+                let subject = headers.iter()
+                    .find(|h| h.name.to_lowercase() == "subject")
+                    .map(|h| h.value.clone())
+                    .unwrap_or_default();
+
+                // Parse "from" to extract name and email
+                let (from_name, from_email) = if from.contains('<') {
+                    let parts: Vec<&str> = from.splitn(2, '<').collect();
+                    let name = parts.get(0).map(|s| s.trim().trim_matches('"').to_string());
+                    let email = parts.get(1).map(|s| s.trim_end_matches('>').to_string()).unwrap_or(from.clone());
+                    (name, email)
+                } else {
+                    (None, from.clone())
+                };
+
+                // Extract label IDs and check unread status first
+                let label_ids = detail.label_ids.unwrap_or_default();
+                let is_unread = label_ids.contains(&"UNREAD".to_string());
+
+                // Resolve label IDs to label objects
+                let msg_labels: Vec<serde_json::Value> = label_ids
+                    .iter()
+                    .filter_map(|id| {
+                        labels.get(id).map(|(name, color)| {
+                            serde_json::json!({
+                                "id": id,
+                                "name": name,
+                                "color": color,
+                                "type": if id.starts_with("CATEGORY_") || ["INBOX", "SENT", "DRAFT", "SPAM", "TRASH", "UNREAD", "STARRED", "IMPORTANT"].contains(&id.as_str()) { "system" } else { "user" }
+                            })
+                        })
+                    })
+                    .collect();
+
+                // Parse internal date
+                let date: i64 = detail.internal_date
+                    .and_then(|d| d.parse().ok())
+                    .unwrap_or(0) / 1000; // Convert ms to seconds
+
+                messages.push(serde_json::json!({
+                    "id": detail.id,
+                    "threadId": detail.thread_id,
+                    "from": from_email,
+                    "fromName": from_name,
+                    "subject": subject,
+                    "snippet": detail.snippet.unwrap_or_default(),
+                    "date": date,
+                    "labels": msg_labels,
+                    "isUnread": is_unread
+                }));
+            }
+        }
+    }
+
+    // Return combined metrics and messages
+    let result = serde_json::json!({
+        "metrics": {
+            "unreadCount": unread_count,
+            "inboxCount": messages.len(),
+            "primaryUnread": unread_count, // Could filter further if needed
+            "lastFetched": chrono::Utc::now().to_rfc3339()
+        },
+        "messages": messages
+    });
+
+    println!("Fetched {} Gmail messages, {} unread", messages.len(), unread_count);
+    Ok(serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string()))
+}
+
+// ==========================================
+// GitHub API
+// ==========================================
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GitHubNotification {
+    id: String,
+    unread: bool,
+    reason: String,
+    updated_at: String,
+    subject: GitHubNotificationSubject,
+    repository: GitHubNotificationRepo,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GitHubNotificationSubject {
+    title: String,
+    url: Option<String>,
+    #[serde(rename = "type")]
+    subject_type: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GitHubNotificationRepo {
+    full_name: String,
+    html_url: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GitHubRepo {
+    name: String,
+    full_name: String,
+    stargazers_count: i32,
+    forks_count: i32,
+    open_issues_count: i32,
+    watchers_count: i32,
+    html_url: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GitHubEvent {
+    id: String,
+    #[serde(rename = "type")]
+    event_type: String,
+    created_at: String,
+    repo: GitHubEventRepo,
+    payload: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GitHubEventRepo {
+    name: String,
+}
+
+#[tauri::command]
+async fn fetch_github_metrics(token: String, username: String, repos: Vec<String>) -> Result<String, String> {
+    println!("Fetching GitHub metrics for {} repos...", repos.len());
+    let client = reqwest::Client::new();
+
+    // Fetch notifications
+    let notif_response = client
+        .get("https://api.github.com/notifications")
+        .header("Authorization", format!("Bearer {}", token))
+        .header("User-Agent", "Pulse-Dashboard")
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch notifications: {}", e))?;
+
+    let notifications: Vec<GitHubNotification> = if notif_response.status().is_success() {
+        notif_response.json().await.unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    // Transform notifications
+    let notif_data: Vec<serde_json::Value> = notifications
+        .into_iter()
+        .take(20)
+        .map(|n| {
+            serde_json::json!({
+                "id": n.id,
+                "type": n.subject.subject_type,
+                "title": n.subject.title,
+                "reason": n.reason,
+                "repoName": n.repository.full_name,
+                "url": n.subject.url.unwrap_or(n.repository.html_url),
+                "updatedAt": n.updated_at,
+                "unread": n.unread
+            })
+        })
+        .collect();
+
+    // Fetch repo stats
+    let mut total_stars = 0;
+    let mut total_forks = 0;
+    let mut total_issues = 0;
+    let mut repo_stats = Vec::new();
+
+    for repo_name in &repos {
+        let repo_response = client
+            .get(&format!("https://api.github.com/repos/{}", repo_name))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("User-Agent", "Pulse-Dashboard")
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await;
+
+        if let Ok(response) = repo_response {
+            if response.status().is_success() {
+                if let Ok(repo) = response.json::<GitHubRepo>().await {
+                    total_stars += repo.stargazers_count;
+                    total_forks += repo.forks_count;
+                    total_issues += repo.open_issues_count;
+
+                    repo_stats.push(serde_json::json!({
+                        "name": repo.name,
+                        "fullName": repo.full_name,
+                        "stars": repo.stargazers_count,
+                        "forks": repo.forks_count,
+                        "openIssues": repo.open_issues_count,
+                        "openPRs": 0, // Would need separate API call
+                        "watchers": repo.watchers_count
+                    }));
+                }
+            }
+        }
+    }
+
+    // Fetch recent activity/events
+    let events_response = client
+        .get(&format!("https://api.github.com/users/{}/events", username))
+        .header("Authorization", format!("Bearer {}", token))
+        .header("User-Agent", "Pulse-Dashboard")
+        .header("Accept", "application/vnd.github+json")
+        .query(&[("per_page", "30")])
+        .send()
+        .await;
+
+    let activity: Vec<serde_json::Value> = if let Ok(response) = events_response {
+        if response.status().is_success() {
+            let events: Vec<GitHubEvent> = response.json().await.unwrap_or_default();
+            events
+                .into_iter()
+                .take(15)
+                .map(|e| {
+                    let event_type = match e.event_type.as_str() {
+                        "PushEvent" => "push",
+                        "PullRequestEvent" => "pr",
+                        "IssuesEvent" => "issue",
+                        "WatchEvent" => "star",
+                        "ForkEvent" => "fork",
+                        "ReleaseEvent" => "release",
+                        "IssueCommentEvent" | "PullRequestReviewCommentEvent" => "comment",
+                        _ => "other"
+                    };
+
+                    let description = match e.event_type.as_str() {
+                        "PushEvent" => {
+                            let commits = e.payload
+                                .as_ref()
+                                .and_then(|p| p.get("commits"))
+                                .and_then(|c| c.as_array())
+                                .map(|c| c.len())
+                                .unwrap_or(0);
+                            format!("Pushed {} commit(s)", commits)
+                        }
+                        "PullRequestEvent" => {
+                            let action = e.payload
+                                .as_ref()
+                                .and_then(|p| p.get("action"))
+                                .and_then(|a| a.as_str())
+                                .unwrap_or("updated");
+                            format!("Pull request {}", action)
+                        }
+                        "IssuesEvent" => {
+                            let action = e.payload
+                                .as_ref()
+                                .and_then(|p| p.get("action"))
+                                .and_then(|a| a.as_str())
+                                .unwrap_or("updated");
+                            format!("Issue {}", action)
+                        }
+                        "WatchEvent" => "Starred repository".to_string(),
+                        "ForkEvent" => "Forked repository".to_string(),
+                        "ReleaseEvent" => "Created release".to_string(),
+                        _ => e.event_type.replace("Event", "")
+                    };
+
+                    serde_json::json!({
+                        "id": e.id,
+                        "type": event_type,
+                        "repoName": e.repo.name,
+                        "description": description,
+                        "timestamp": e.created_at
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    let result = serde_json::json!({
+        "totalStars": total_stars,
+        "totalForks": total_forks,
+        "openIssues": total_issues,
+        "openPRs": 0, // Would need separate API calls per repo
+        "notifications": notif_data,
+        "recentActivity": activity,
+        "repos": repo_stats
+    });
+
+    println!("Fetched GitHub metrics: {} stars, {} notifications", total_stars, notif_data.len());
+    Ok(serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string()))
+}
+
+// ==========================================
 // Tauri App Entry Point
 // ==========================================
 
@@ -1516,7 +1944,9 @@ pub fn run() {
             fetch_app_metrics,
             start_google_oauth,
             refresh_google_token,
-            fetch_google_calendar
+            fetch_google_calendar,
+            fetch_gmail,
+            fetch_github_metrics
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

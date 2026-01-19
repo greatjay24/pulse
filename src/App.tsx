@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { Sidebar } from './components/Sidebar';
@@ -15,7 +15,10 @@ import { AddProjectModal } from './components/AddProjectModal';
 import { PlatformTabs } from './components/PlatformTabs';
 import { WidgetPicker } from './components/WidgetPicker';
 import { SettingsIcon, AnalyticsIcon } from './components/Icons';
-import { App, AppMetrics, Settings as SettingsType, DetailPanelType, Platform, GoogleCalendarConfig, CalendarEvent, WidgetType } from './types';
+import { GmailInboxWidget } from './components/GmailInboxWidget';
+import { GitHubActivityWidget } from './components/GitHubActivityWidget';
+import { App, AppMetrics, Settings as SettingsType, DetailPanelType, Platform, GoogleCalendarConfig, CalendarEvent, WidgetType, GmailMessage, GmailMetrics, GitHubMetrics, GridLayoutItem } from './types';
+import { DashboardGrid, DEFAULT_LAYOUT, addWidgetToLayout } from './components/DashboardGrid';
 import { CardRect } from './components/StatCard';
 import { useHistory } from './hooks/useHistory';
 import { migrateApps } from './utils/platforms';
@@ -45,7 +48,12 @@ function DashboardContent() {
   });
   const [showAddProjectModal, setShowAddProjectModal] = useState(false);
   const [showWidgetPicker, setShowWidgetPicker] = useState(false);
-  const [dashboardWidgets, setDashboardWidgets] = useState<WidgetType[]>([]);
+  const [isEditMode, setIsEditMode] = useState(false); // Toggle for customization mode
+  const [gridLayout, setGridLayout] = useState<GridLayoutItem[]>(() =>
+    settings.dashboardLayout && settings.dashboardLayout.length > 0
+      ? settings.dashboardLayout
+      : DEFAULT_LAYOUT
+  );
   const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean; appId: string | null; appName: string }>({
     isOpen: false,
     appId: null,
@@ -53,6 +61,15 @@ function DashboardContent() {
   });
   const [activePlatformTab, setActivePlatformTab] = useState<'overview' | Platform>('overview');
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
+
+  // Gmail data state
+  const [gmailData, setGmailData] = useState<{
+    metrics?: GmailMetrics;
+    messages?: GmailMessage[];
+  } | null>(null);
+
+  // GitHub data state
+  const [githubData, setGithubData] = useState<GitHubMetrics | null>(null);
 
   // Historical data for the selected app (or first app if none selected)
   const effectiveAppId = selectedAppId || settings.apps[0]?.id || null;
@@ -183,6 +200,93 @@ function DashboardContent() {
     setCalendarEvents(allEvents);
   }, [settings.apps]);
 
+  // Fetch Gmail data (uses same Google OAuth tokens as Calendar)
+  const fetchGmailData = useCallback(async () => {
+    if (!IS_TAURI) return;
+
+    // Gmail uses the same OAuth as Calendar - check if any app has Google Calendar connected
+    for (const app of settings.apps) {
+      const config = app.googleCalendar;
+      if (!config?.enabled || !config?.accessToken) continue;
+
+      try {
+        const gmailJson = await invoke<string>('fetch_gmail', {
+          accessToken: config.accessToken,
+        });
+
+        const data = JSON.parse(gmailJson);
+        setGmailData({
+          metrics: data.metrics,
+          messages: data.messages,
+        });
+        return; // Only need data from one account
+      } catch (error) {
+        console.error('Failed to fetch Gmail data:', error);
+        // Try token refresh if expired
+        if (String(error).includes('401') && config.refreshToken) {
+          try {
+            const tokenResponse = await invoke<string>('refresh_google_token', {
+              refreshToken: config.refreshToken,
+            });
+            const newTokens = JSON.parse(tokenResponse);
+            const updatedConfig: GoogleCalendarConfig = {
+              ...config,
+              accessToken: newTokens.access_token,
+            };
+            const updatedApps = settings.apps.map(a =>
+              a.id === app.id ? { ...a, googleCalendar: updatedConfig } : a
+            );
+            const newSettings = { ...settings, apps: updatedApps };
+            setSettings(newSettings);
+            await saveSettingsToStore(newSettings);
+
+            // Retry with new token
+            const retryJson = await invoke<string>('fetch_gmail', {
+              accessToken: newTokens.access_token,
+            });
+            const retryData = JSON.parse(retryJson);
+            setGmailData({
+              metrics: retryData.metrics,
+              messages: retryData.messages,
+            });
+          } catch (refreshError) {
+            console.error('Failed to refresh Gmail token:', refreshError);
+          }
+        }
+      }
+    }
+  }, [settings.apps]);
+
+  // Fetch GitHub data
+  const fetchGitHubData = useCallback(async () => {
+    if (!IS_TAURI) return;
+
+    for (const app of settings.apps) {
+      const githubIntegration = app.integrations.find(i => i.type === 'github');
+      if (!githubIntegration?.enabled || !githubIntegration?.apiKey || !githubIntegration?.projectId) continue;
+
+      const token = githubIntegration.apiKey;
+      const username = githubIntegration.teamId || ''; // We store username in teamId field
+      const repos = githubIntegration.projectId
+        ? githubIntegration.projectId.split(',').map(r => r.trim()).filter(r => r)
+        : [];
+
+      try {
+        const githubJson = await invoke<string>('fetch_github_metrics', {
+          token,
+          username,
+          repos,
+        });
+
+        const data = JSON.parse(githubJson);
+        setGithubData(data);
+        return; // Only need data from one account
+      } catch (error) {
+        console.error('Failed to fetch GitHub data:', error);
+      }
+    }
+  }, [settings.apps]);
+
   const saveSettings = async (apps: App[]) => {
     // Don't save until initial settings are loaded (prevents overwriting with empty data during HMR)
     if (!settingsLoaded) {
@@ -278,6 +382,16 @@ function DashboardContent() {
       const hasAnyCalendarConnected = settings.apps.some(app => app.googleCalendar?.enabled);
       if (hasAnyCalendarConnected) {
         fetchAllCalendarEvents();
+        // Gmail uses the same OAuth, so fetch Gmail too
+        fetchGmailData();
+      }
+
+      // Fetch GitHub data if any app has GitHub integration with repos configured
+      const hasGitHub = settings.apps.some(app =>
+        app.integrations.some(i => i.type === 'github' && i.enabled && i.apiKey && i.projectId)
+      );
+      if (hasGitHub) {
+        fetchGitHubData();
       }
     } catch (error) {
       console.error('Failed to refresh metrics:', error);
@@ -285,7 +399,7 @@ function DashboardContent() {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, [settings.apps, saveSnapshot, fetchAllCalendarEvents]);
+  }, [settings.apps, saveSnapshot, fetchAllCalendarEvents, fetchGmailData, fetchGitHubData]);
 
   useEffect(() => {
     loadSettings();
@@ -439,6 +553,154 @@ function DashboardContent() {
     return `${projectCount} project${projectCount !== 1 ? 's' : ''} · ${displayTotalUsers.toLocaleString()} users · $${displayMRR.toLocaleString()} MRR`;
   };
 
+  // Sync grid layout when settings are loaded
+  useEffect(() => {
+    if (settings.dashboardLayout && settings.dashboardLayout.length > 0) {
+      setGridLayout(settings.dashboardLayout);
+    }
+  }, [settings.dashboardLayout]);
+
+  // Handle layout changes - save to settings
+  const handleLayoutChange = useCallback((newLayout: GridLayoutItem[]) => {
+    setGridLayout(newLayout);
+    // Persist layout to settings
+    const newSettings = { ...settings, dashboardLayout: newLayout };
+    setSettings(newSettings);
+    saveSettingsToStore(newSettings);
+  }, [settings]);
+
+  // Reset layout to default
+  const handleResetLayout = useCallback(() => {
+    setGridLayout(DEFAULT_LAYOUT);
+    const newSettings = { ...settings, dashboardLayout: DEFAULT_LAYOUT };
+    setSettings(newSettings);
+    saveSettingsToStore(newSettings);
+  }, [settings]);
+
+  // Create widget map for DashboardGrid
+  const widgetMap = useMemo(() => ({
+    // Stat cards
+    'stat-mrr': (
+      <StatCard
+        label="Monthly Revenue"
+        value={`$${displayMRR.toLocaleString()}`}
+        change={mrrChange !== undefined ? `${Math.abs(mrrChange).toFixed(1)}%` : undefined}
+        changeType={mrrChange !== undefined ? (mrrChange >= 0 ? 'up' : 'down') : 'up'}
+        icon="revenue"
+        onExpand={handleOpenPanel}
+        expandType="mrr"
+        isLoading={isLoading}
+      />
+    ),
+    'stat-users': (
+      <StatCard
+        label="Total Users"
+        value={displayTotalUsers > 0 ? displayTotalUsers.toLocaleString() : displayPayingUsers.toLocaleString()}
+        change={displayTotalUsers > 0
+          ? (effectiveMetrics?.supabase?.newUsers7d ? `+${effectiveMetrics.supabase.newUsers7d} this week` : undefined)
+          : (subscriberChange !== undefined ? `${Math.abs(subscriberChange).toFixed(1)}%` : undefined)}
+        changeType="up"
+        icon="users"
+        onExpand={handleOpenPanel}
+        expandType="subscribers"
+        isLoading={isLoading}
+      />
+    ),
+    'stat-subscribers': (
+      <StatCard
+        label="Paying Users"
+        value={displayPayingUsers.toLocaleString()}
+        change={subscriberChange !== undefined ? `${Math.abs(subscriberChange).toFixed(1)}%` : undefined}
+        changeType={subscriberChange !== undefined ? (subscriberChange >= 0 ? 'up' : 'down') : 'up'}
+        icon="subscriptions"
+        onExpand={handleOpenPanel}
+        expandType="subscribers"
+        isLoading={isLoading}
+      />
+    ),
+    'stat-churn': (
+      <StatCard
+        label="Churn Rate"
+        value={`${displayChurn.toFixed(1)}%`}
+        change={undefined}
+        changeType="down"
+        icon="churn"
+        onExpand={handleOpenPanel}
+        expandType="churn"
+        isLoading={isLoading}
+      />
+    ),
+    // Charts
+    'chart-revenue': (
+      <MiniChart
+        title="Revenue"
+        data={revenueChartData}
+        color={tokens.colors.accent}
+        type="line"
+        onClick={() => handleOpenPanel('mrr')}
+      />
+    ),
+    'chart-subscribers': (
+      <MiniChart
+        title="Users"
+        data={subscriberChartData}
+        color={tokens.colors.success}
+        type="bar"
+        onClick={() => handleOpenPanel('growth')}
+      />
+    ),
+    'chart-activity': (
+      <MiniChart
+        title="Activity"
+        data={currentMetrics?.stripeEvents?.slice(-12).map(() => 1) || []}
+        color="#8b5cf6"
+        type="bar"
+        onClick={() => handleOpenPanel('stripe-events')}
+      />
+    ),
+    // Calendar
+    'calendar': (
+      <MiniCalendar
+        events={calendarEvents.length > 0 ? calendarEvents : currentMetrics?.calendarEvents}
+        onViewAll={() => handleOpenPanel('calendar')}
+      />
+    ),
+    // Activity Feed
+    'activity-feed': (
+      <ActivityFeed
+        events={currentMetrics?.stripeEvents || []}
+        deployments={(currentMetrics?.vercel as import('./types').VercelMetricsExtended)?.deployments || []}
+        onViewAll={() => handleOpenPanel('stripe-events')}
+      />
+    ),
+    // Gmail Inbox
+    'gmail-inbox': (
+      <GmailInboxWidget
+        messages={gmailData?.messages || []}
+        unreadCount={gmailData?.metrics?.unreadCount || 0}
+        isLoading={isLoading}
+        onViewAll={() => handleOpenPanel('gmail')}
+      />
+    ),
+    // GitHub Activity
+    'github-activity': (
+      <GitHubActivityWidget
+        metrics={githubData || undefined}
+        isLoading={isLoading}
+        onViewAll={() => handleOpenPanel('github')}
+      />
+    ),
+    // Add Widget placeholder
+    'add-widget': (
+      <AddWidgetCard onClick={() => setShowWidgetPicker(true)} />
+    ),
+  }), [
+    displayMRR, mrrChange, displayTotalUsers, displayPayingUsers, subscriberChange,
+    displayChurn, isLoading, effectiveMetrics, revenueChartData, subscriberChartData,
+    currentMetrics, calendarEvents, gmailData, githubData, tokens.colors,
+    handleOpenPanel
+  ]);
+
   return (
     <div
       style={{
@@ -500,6 +762,41 @@ function DashboardContent() {
               </div>
 
               <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                {/* Edit Layout toggle button */}
+                {hasApps && (
+                  <button
+                    onClick={() => {
+                      if (isEditMode) {
+                        // Exiting edit mode - layout is already saved via onLayoutChange
+                        setIsEditMode(false);
+                      } else {
+                        setIsEditMode(true);
+                      }
+                    }}
+                    style={{
+                      padding: '10px 16px',
+                      borderRadius: tokens.radius.sm,
+                      border: `1px solid ${isEditMode ? tokens.colors.accent : tokens.colors.border}`,
+                      background: isEditMode ? `${tokens.colors.accent}15` : 'transparent',
+                      color: isEditMode ? tokens.colors.accent : tokens.colors.textMuted,
+                      fontSize: '13px',
+                      fontWeight: 500,
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                    }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="3" width="7" height="7" />
+                      <rect x="14" y="3" width="7" height="7" />
+                      <rect x="14" y="14" width="7" height="7" />
+                      <rect x="3" y="14" width="7" height="7" />
+                    </svg>
+                    {isEditMode ? 'Done Editing' : 'Edit Layout'}
+                  </button>
+                )}
                 <button
                   onClick={refreshMetrics}
                   disabled={isRefreshing || !hasApps}
@@ -658,133 +955,13 @@ function DashboardContent() {
                 </button>
               </div>
             ) : (
-              <>
-                {/* Stats Row */}
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(4, 1fr)',
-                    gap: '16px',
-                    marginBottom: '24px',
-                  }}
-                >
-                  <StatCard
-                    label="Monthly Revenue"
-                    value={`$${displayMRR.toLocaleString()}`}
-                    change={mrrChange !== undefined ? `${Math.abs(mrrChange).toFixed(1)}%` : undefined}
-                    changeType={mrrChange !== undefined ? (mrrChange >= 0 ? 'up' : 'down') : 'up'}
-                    icon="revenue"
-                    onExpand={handleOpenPanel}
-                    expandType="mrr"
-                    isLoading={isLoading}
-                  />
-                  <StatCard
-                    label="Total Users"
-                    value={displayTotalUsers > 0 ? displayTotalUsers.toLocaleString() : displayPayingUsers.toLocaleString()}
-                    change={displayTotalUsers > 0
-                      ? (effectiveMetrics?.supabase?.newUsers7d ? `+${effectiveMetrics.supabase.newUsers7d} this week` : undefined)
-                      : (subscriberChange !== undefined ? `${Math.abs(subscriberChange).toFixed(1)}%` : undefined)}
-                    changeType="up"
-                    icon="users"
-                    onExpand={handleOpenPanel}
-                    expandType="subscribers"
-                    isLoading={isLoading}
-                  />
-                  <StatCard
-                    label="Paying Users"
-                    value={displayPayingUsers.toLocaleString()}
-                    change={subscriberChange !== undefined ? `${Math.abs(subscriberChange).toFixed(1)}%` : undefined}
-                    changeType={subscriberChange !== undefined ? (subscriberChange >= 0 ? 'up' : 'down') : 'up'}
-                    icon="subscriptions"
-                    onExpand={handleOpenPanel}
-                    expandType="subscribers"
-                    isLoading={isLoading}
-                  />
-                  <StatCard
-                    label="Churn Rate"
-                    value={`${displayChurn.toFixed(1)}%`}
-                    change={undefined}
-                    changeType="down"
-                    icon="churn"
-                    onExpand={handleOpenPanel}
-                    expandType="churn"
-                    isLoading={isLoading}
-                  />
-                </div>
-
-                {/* Charts Row */}
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: '2fr 1fr 1fr',
-                    gap: '16px',
-                    marginBottom: '24px',
-                  }}
-                >
-                  <div style={{ height: '200px' }}>
-                    <MiniChart
-                      title="Revenue"
-                      data={revenueChartData}
-                      color={tokens.colors.accent}
-                      type="line"
-                      onClick={() => handleOpenPanel('mrr')}
-                    />
-                  </div>
-                  <div style={{ height: '200px' }}>
-                    <MiniChart
-                      title="Users"
-                      data={subscriberChartData}
-                      color={tokens.colors.success}
-                      type="bar"
-                      onClick={() => handleOpenPanel('growth')}
-                    />
-                  </div>
-                  <div style={{ height: '200px' }}>
-                    <MiniChart
-                      title="Activity"
-                      data={currentMetrics?.stripeEvents?.slice(-12).map(() => 1) || []}
-                      color="#8b5cf6"
-                      type="bar"
-                      onClick={() => handleOpenPanel('stripe-events')}
-                    />
-                  </div>
-                </div>
-
-                {/* Bottom Section */}
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: '1fr 1fr 1fr',
-                    gap: '16px',
-                    minHeight: '320px',
-                    alignItems: 'stretch',
-                  }}
-                >
-                  {/* Calendar */}
-                  <div style={{ height: '100%', minHeight: '320px' }}>
-                    <MiniCalendar
-                      events={calendarEvents.length > 0 ? calendarEvents : currentMetrics?.calendarEvents}
-                      onViewAll={() => handleOpenPanel('calendar')}
-                    />
-                  </div>
-
-                  {/* Activity Feed */}
-                  <div style={{ height: '100%', minHeight: '320px' }}>
-                    <ActivityFeed
-                      events={currentMetrics?.stripeEvents || []}
-                      deployments={(currentMetrics?.vercel as import('./types').VercelMetricsExtended)?.deployments || []}
-                      onViewAll={() => handleOpenPanel('stripe-events')}
-                    />
-                  </div>
-
-                  {/* Add Widget */}
-                  <div style={{ height: '100%', minHeight: '320px' }}>
-                    <AddWidgetCard
-                      onClick={() => setShowWidgetPicker(true)}
-                    />
-                  </div>
-                </div>
-              </>
+              /* Dashboard Grid - always use grid, edit mode controls drag/resize */
+              <DashboardGrid
+                layout={gridLayout}
+                onLayoutChange={handleLayoutChange}
+                widgetMap={widgetMap}
+                isEditMode={isEditMode}
+              />
             )}
           </>
         )}
@@ -852,30 +1029,56 @@ function DashboardContent() {
         isOpen={showWidgetPicker}
         onClose={() => setShowWidgetPicker(false)}
         onAdd={(widgetType) => {
-          setDashboardWidgets([...dashboardWidgets, widgetType]);
+          // Map widget type to grid widget ID
+          const widgetIdMap: Record<WidgetType, string> = {
+            'stat-mrr': 'stat-mrr',
+            'stat-subscribers': 'stat-subscribers',
+            'stat-churn': 'stat-churn',
+            'stat-arpu': 'stat-arpu',
+            'stat-arr': 'stat-arr',
+            'stat-ltv': 'stat-ltv',
+            'chart-revenue': 'chart-revenue',
+            'chart-subscribers': 'chart-subscribers',
+            'chart-activity': 'chart-activity',
+            'chart-churn': 'chart-churn',
+            'calendar': 'calendar',
+            'activity-feed': 'activity-feed',
+            'stat-gmail-unread': 'gmail-inbox',
+            'gmail-inbox': 'gmail-inbox',
+            'stat-github-stars': 'github-activity',
+            'github-activity': 'github-activity',
+            'stat-analytics-dau': 'stat-analytics-dau',
+            'stat-analytics-mau': 'stat-analytics-mau',
+            'stat-analytics-wau': 'stat-analytics-wau',
+          };
+          const widgetId = widgetIdMap[widgetType] || widgetType;
+          const newLayout = addWidgetToLayout(gridLayout, widgetId);
+          handleLayoutChange(newLayout);
           setShowWidgetPicker(false);
         }}
-        onConnectIntegration={(integrationType) => {
-          // Close widget picker and go to settings to connect the integration
-          setShowWidgetPicker(false);
-          setActiveNav('settings');
-          // Could pass the integration type to pre-select it in settings
-          console.log(`Navigate to settings to connect: ${integrationType}`);
+        existingWidgets={
+          // Get widget types from current grid layout
+          gridLayout.map(item => item.i as WidgetType)
+        }
+        appIntegrations={[
+          // Regular integrations from the app
+          ...(selectedApp?.integrations || []),
+          // Add virtual Gmail integration if Google Calendar is connected (they share OAuth)
+          ...(selectedApp?.googleCalendar?.enabled ? [{
+            type: 'gmail' as const,
+            enabled: true,
+            apiKey: selectedApp.googleCalendar.accessToken,
+          }] : []),
+        ]}
+        // NEW: Context and settings update props
+        context={activeNav === 'overview' ? 'overview' : 'project'}
+        currentApp={selectedApp || undefined}
+        allApps={settings.apps}
+        onUpdateSettings={async (apps) => {
+          const newSettings = { ...settings, apps };
+          setSettings(newSettings);
+          await saveSettingsToStore(newSettings);
         }}
-        existingWidgets={[
-          // Hardcoded widgets already on dashboard
-          'stat-mrr',
-          'stat-subscribers',
-          'stat-churn',
-          'chart-revenue',
-          'chart-subscribers',
-          'chart-activity',
-          'calendar',
-          'activity-feed',
-          // Plus any dynamically added widgets
-          ...dashboardWidgets,
-        ] as import('./types').WidgetType[]}
-        appIntegrations={selectedApp?.integrations || []}
       />
 
       {/* Delete Confirmation Dialog */}
@@ -959,6 +1162,9 @@ function DashboardContent() {
         historicalData={snapshots}
         onClose={handleClosePanel}
         originRect={detailPanel.originRect}
+        gmailMessages={gmailData?.messages}
+        gmailUnreadCount={gmailData?.metrics?.unreadCount}
+        githubMetrics={githubData || undefined}
       />
     </div>
   );

@@ -1,6 +1,7 @@
+import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTheme } from '../../contexts/ThemeContext';
-import { DetailPanelType, AppMetrics, StripeMetricsExtended, MetricSnapshot } from '../../types';
+import { DetailPanelType, AppMetrics, StripeMetricsExtended, MetricSnapshot, GmailMessage, GmailLabel, GitHubMetrics } from '../../types';
 import { MetricHistory } from './MetricHistory';
 import { RevenueBreakdown } from './RevenueBreakdown';
 import { MrrBridge } from './MrrBridge';
@@ -14,6 +15,10 @@ interface DetailPanelProps {
   historicalData?: MetricSnapshot[];
   onClose: () => void;
   originRect?: CardRect | null;
+  // Additional data for Gmail and GitHub panels
+  gmailMessages?: GmailMessage[];
+  gmailUnreadCount?: number;
+  githubMetrics?: GitHubMetrics;
 }
 
 const panelTitles: Record<Exclude<DetailPanelType, null>, string> = {
@@ -24,6 +29,8 @@ const panelTitles: Record<Exclude<DetailPanelType, null>, string> = {
   'revenue-breakdown': 'Revenue by Plan',
   'stripe-events': 'Recent Activity',
   calendar: 'Calendar Events',
+  gmail: 'Gmail Inbox',
+  github: 'GitHub Activity',
 };
 
 const panelIcons: Record<Exclude<DetailPanelType, null>, string> = {
@@ -34,9 +41,11 @@ const panelIcons: Record<Exclude<DetailPanelType, null>, string> = {
   'revenue-breakdown': 'analytics',
   'stripe-events': 'activity',
   calendar: 'calendar',
+  gmail: 'mail',
+  github: 'github',
 };
 
-export function DetailPanel({ isOpen, type, metrics, historicalData, onClose, originRect }: DetailPanelProps) {
+export function DetailPanel({ isOpen, type, metrics, historicalData, onClose, originRect, gmailMessages, gmailUnreadCount, githubMetrics }: DetailPanelProps) {
   const { tokens } = useTheme();
 
   if (!type) return null;
@@ -304,6 +313,264 @@ export function DetailPanel({ isOpen, type, metrics, historicalData, onClose, or
           </div>
         );
 
+      case 'gmail':
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {/* Summary */}
+            {gmailUnreadCount !== undefined && gmailUnreadCount > 0 && (
+              <div style={{
+                padding: '16px',
+                background: 'rgba(239, 68, 68, 0.1)',
+                borderRadius: tokens.radius.md,
+                border: '1px solid rgba(239, 68, 68, 0.2)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+              }}>
+                <div style={{
+                  width: '40px',
+                  height: '40px',
+                  borderRadius: '50%',
+                  background: '#ef4444',
+                  color: '#fff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontWeight: 600,
+                  fontSize: '14px',
+                }}>
+                  {gmailUnreadCount}
+                </div>
+                <div>
+                  <p style={{ fontSize: '14px', fontWeight: 500, color: tokens.colors.text }}>Unread Messages</p>
+                  <p style={{ fontSize: '12px', color: tokens.colors.textMuted }}>Across all labels</p>
+                </div>
+              </div>
+            )}
+            {/* Email list */}
+            {gmailMessages?.length ? (
+              gmailMessages.map((message) => (
+                <div
+                  key={message.id}
+                  style={{
+                    padding: '16px',
+                    background: tokens.colors.bgCard,
+                    borderRadius: tokens.radius.md,
+                    border: `1px solid ${message.isUnread ? tokens.colors.accent : tokens.colors.border}`,
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  <div style={{ display: 'flex', gap: '12px' }}>
+                    {/* Avatar */}
+                    <div
+                      style={{
+                        width: '40px',
+                        height: '40px',
+                        borderRadius: '50%',
+                        background: message.isUnread
+                          ? 'linear-gradient(135deg, #6366f1, #8b5cf6)'
+                          : tokens.colors.bgCardHover,
+                        color: message.isUnread ? '#fff' : tokens.colors.textMuted,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                        fontSize: '14px',
+                        fontWeight: 600,
+                      }}
+                    >
+                      {getEmailInitials(message.fromName, message.from)}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', marginBottom: '4px' }}>
+                        <span style={{
+                          fontSize: '14px',
+                          fontWeight: message.isUnread ? 600 : 400,
+                          color: tokens.colors.text,
+                        }}>
+                          {message.fromName || message.from.split('@')[0]}
+                        </span>
+                        <span style={{ fontSize: '12px', color: tokens.colors.textMuted, whiteSpace: 'nowrap' }}>
+                          {formatGmailTime(message.date)}
+                        </span>
+                      </div>
+                      <p style={{
+                        fontSize: '14px',
+                        fontWeight: message.isUnread ? 500 : 400,
+                        color: message.isUnread ? tokens.colors.text : tokens.colors.textMuted,
+                        marginBottom: '6px',
+                      }}>
+                        {message.subject || '(no subject)'}
+                      </p>
+                      <p style={{
+                        fontSize: '13px',
+                        color: tokens.colors.textDim,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}>
+                        {message.snippet}
+                      </p>
+                      {/* Labels */}
+                      {message.labels && message.labels.length > 0 && (
+                        <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' }}>
+                          {getDisplayLabels(message.labels).slice(0, 3).map((label) => {
+                            const colors = getLabelColor(label);
+                            const displayName = label.name.replace('CATEGORY_', '').toLowerCase();
+                            return (
+                              <span
+                                key={label.id || label.name}
+                                style={{
+                                  fontSize: '11px',
+                                  fontWeight: 500,
+                                  color: colors.text,
+                                  background: colors.bg,
+                                  padding: '2px 8px',
+                                  borderRadius: '4px',
+                                  textTransform: 'capitalize',
+                                }}
+                              >
+                                {displayName}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div style={{ textAlign: 'center', padding: '32px', color: tokens.colors.textMuted }}>
+                <p style={{ fontSize: '48px', marginBottom: '12px' }}>📭</p>
+                <p>Inbox Zero! Well done.</p>
+              </div>
+            )}
+          </div>
+        );
+
+      case 'github':
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {/* Stats Grid */}
+            {githubMetrics && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '12px' }}>
+                <MetricBox
+                  label="Stars"
+                  value={githubMetrics.totalStars.toLocaleString()}
+                  subtext="Total"
+                  tokens={tokens}
+                />
+                <MetricBox
+                  label="Forks"
+                  value={githubMetrics.totalForks.toLocaleString()}
+                  subtext="Total"
+                  tokens={tokens}
+                />
+                <MetricBox
+                  label="Open Issues"
+                  value={githubMetrics.openIssues.toLocaleString()}
+                  subtext="Across repos"
+                  tokens={tokens}
+                />
+                <MetricBox
+                  label="Open PRs"
+                  value={githubMetrics.openPRs.toLocaleString()}
+                  subtext="Awaiting review"
+                  tokens={tokens}
+                />
+              </div>
+            )}
+
+            {/* Notifications */}
+            {githubMetrics?.notifications && githubMetrics.notifications.length > 0 && (
+              <div>
+                <h3 style={{ fontSize: '14px', fontWeight: 500, color: tokens.colors.text, marginBottom: '12px' }}>
+                  Notifications ({githubMetrics.notifications.filter(n => n.unread).length} unread)
+                </h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {githubMetrics.notifications.slice(0, 10).map((notification) => (
+                    <div
+                      key={notification.id}
+                      style={{
+                        padding: '12px 16px',
+                        background: tokens.colors.bgCard,
+                        borderRadius: tokens.radius.md,
+                        border: `1px solid ${notification.unread ? tokens.colors.accent : tokens.colors.border}`,
+                        display: 'flex',
+                        gap: '12px',
+                        alignItems: 'flex-start',
+                      }}
+                    >
+                      <div style={{
+                        width: '28px',
+                        height: '28px',
+                        borderRadius: '6px',
+                        background: notification.unread ? `${tokens.colors.accent}20` : tokens.colors.bgCardHover,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                      }}>
+                        {getGitHubIcon(notification.type, tokens)}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p style={{
+                          fontSize: '13px',
+                          fontWeight: notification.unread ? 500 : 400,
+                          color: tokens.colors.text,
+                          marginBottom: '2px',
+                        }}>
+                          {notification.title}
+                        </p>
+                        <p style={{ fontSize: '12px', color: tokens.colors.textMuted }}>
+                          {notification.repoName} · {notification.reason}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Recent Activity */}
+            {githubMetrics?.recentActivity && githubMetrics.recentActivity.length > 0 && (
+              <div>
+                <h3 style={{ fontSize: '14px', fontWeight: 500, color: tokens.colors.text, marginBottom: '12px' }}>
+                  Recent Activity
+                </h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {githubMetrics.recentActivity.slice(0, 10).map((activity) => (
+                    <div
+                      key={activity.id}
+                      style={{
+                        padding: '12px 16px',
+                        background: tokens.colors.bgCard,
+                        borderRadius: tokens.radius.md,
+                        border: `1px solid ${tokens.colors.border}`,
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
+                        <span style={{ fontSize: '12px', color: tokens.colors.textMuted }}>{activity.repoName}</span>
+                        <span style={{ fontSize: '11px', color: tokens.colors.textDim }}>{formatGitHubTime(activity.timestamp)}</span>
+                      </div>
+                      <p style={{ fontSize: '13px', color: tokens.colors.text }}>{activity.description}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Empty state */}
+            {(!githubMetrics?.notifications?.length && !githubMetrics?.recentActivity?.length) && (
+              <div style={{ textAlign: 'center', padding: '32px', color: tokens.colors.textMuted }}>
+                No GitHub activity found
+              </div>
+            )}
+          </div>
+        );
+
       default:
         return null;
     }
@@ -547,4 +814,111 @@ function formatEventTime(timestamp: number): string {
   if (hours < 24) return `${hours}h ago`;
   if (days < 7) return `${days}d ago`;
   return date.toLocaleDateString();
+}
+
+// Gmail helper functions
+function getEmailInitials(name: string | undefined, email: string): string {
+  if (name) {
+    const parts = name.split(' ');
+    if (parts.length >= 2) {
+      return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+    }
+    return name.substring(0, 2).toUpperCase();
+  }
+  return email.substring(0, 2).toUpperCase();
+}
+
+function formatGmailTime(timestamp: number): string {
+  const date = new Date(timestamp * 1000);
+  const now = new Date();
+  const diff = now.getTime() - date.getTime();
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days < 7) return `${days}d ago`;
+  return date.toLocaleDateString();
+}
+
+function getLabelColor(label: GmailLabel): { bg: string; text: string } {
+  if (label.type === 'system') {
+    switch (label.name) {
+      case 'IMPORTANT':
+        return { bg: 'rgba(234, 179, 8, 0.15)', text: '#eab308' };
+      case 'STARRED':
+        return { bg: 'rgba(234, 179, 8, 0.2)', text: '#eab308' };
+      case 'CATEGORY_SOCIAL':
+        return { bg: 'rgba(239, 68, 68, 0.15)', text: '#ef4444' };
+      case 'CATEGORY_PROMOTIONS':
+        return { bg: 'rgba(34, 197, 94, 0.15)', text: '#22c55e' };
+      case 'CATEGORY_UPDATES':
+        return { bg: 'rgba(168, 85, 247, 0.15)', text: '#a855f7' };
+      case 'CATEGORY_FORUMS':
+        return { bg: 'rgba(6, 182, 212, 0.15)', text: '#06b6d4' };
+      default:
+        return { bg: 'rgba(107, 114, 128, 0.15)', text: '#6b7280' };
+    }
+  }
+  if (label.color) {
+    return { bg: `${label.color}20`, text: label.color };
+  }
+  return { bg: 'rgba(99, 102, 241, 0.15)', text: '#6366f1' };
+}
+
+function getDisplayLabels(labels: GmailLabel[]): GmailLabel[] {
+  const hiddenLabels = ['INBOX', 'UNREAD', 'SENT', 'DRAFT', 'SPAM', 'TRASH', 'CHAT', 'CATEGORY_PERSONAL'];
+  return labels.filter(l => !hiddenLabels.includes(l.id || l.name));
+}
+
+// GitHub helper functions
+function formatGitHubTime(timestamp: string): string {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const diff = now.getTime() - date.getTime();
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days < 7) return `${days}d ago`;
+  return date.toLocaleDateString();
+}
+
+function getGitHubIcon(type: string, tokens: any): React.ReactElement {
+  switch (type) {
+    case 'PullRequest':
+      return (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={tokens.colors.accent} strokeWidth="2">
+          <circle cx="18" cy="18" r="3" />
+          <circle cx="6" cy="6" r="3" />
+          <path d="M6 9v6a3 3 0 0 0 3 3h6" />
+          <line x1="18" y1="9" x2="18" y2="15" />
+        </svg>
+      );
+    case 'Issue':
+      return (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={tokens.colors.success} strokeWidth="2">
+          <circle cx="12" cy="12" r="10" />
+          <line x1="12" y1="8" x2="12" y2="12" />
+          <line x1="12" y1="16" x2="12.01" y2="16" />
+        </svg>
+      );
+    case 'Release':
+      return (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#eab308" strokeWidth="2">
+          <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+        </svg>
+      );
+    default:
+      return (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={tokens.colors.textMuted} strokeWidth="2">
+          <circle cx="12" cy="12" r="10" />
+        </svg>
+      );
+  }
 }

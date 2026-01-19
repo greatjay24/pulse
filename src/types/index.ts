@@ -8,7 +8,9 @@ export interface App {
   color?: string; // Project color for calendar/analytics (e.g., "#8b5cf6")
   platforms: Platform[]; // Multi-platform support (Web, Mobile, Service, Fun)
   integrations: Integration[];
-  googleCalendar?: GoogleCalendarConfig; // Per-project Google Calendar connection
+  googleCalendar?: GoogleCalendarConfig; // Per-project Google Calendar connection (legacy)
+  googleAuth?: GoogleAuthConfig; // Unified Google auth for Calendar + Gmail
+  github?: GitHubConfig; // GitHub integration config
 }
 
 // Predefined project colors
@@ -65,6 +67,7 @@ export type IntegrationType =
   | 'sendgrid'
   | 'convertkit'
   | 'mailchimp'
+  | 'gmail'
   // Monitoring & Errors
   | 'sentry'
   | 'logrocket'
@@ -76,7 +79,9 @@ export type IntegrationType =
   | 'discord'
   // Support
   | 'intercom'
-  | 'crisp';
+  | 'crisp'
+  // Code & Version Control
+  | 'github';
 
 // ==========================================
 // Stripe Types (Extended)
@@ -227,6 +232,117 @@ export interface GoogleCalendarConfig {
   calendarIds: string[];
 }
 
+// Extended Google Auth config that supports multiple services (Calendar + Gmail)
+export interface GoogleAuthConfig {
+  enabled: boolean;
+  accessToken?: string;
+  refreshToken?: string;
+  scopes: string[]; // Track granted scopes (calendar, gmail, etc.)
+  calendarIds?: string[];
+}
+
+// ==========================================
+// Gmail Types
+// ==========================================
+
+export interface GmailLabel {
+  id: string;
+  name: string;
+  color?: string; // Hex color from Gmail
+  type: 'system' | 'user'; // System labels (INBOX, SENT) vs user-created
+}
+
+export interface GmailMessage {
+  id: string;
+  threadId: string;
+  from: string;
+  fromName?: string;
+  subject: string;
+  snippet: string;
+  date: number; // Unix timestamp
+  labels: GmailLabel[]; // Resolved label objects with name + color
+  isUnread: boolean;
+}
+
+export interface GmailMetrics {
+  unreadCount: number;
+  inboxCount: number;
+  primaryUnread: number;
+  lastFetched: string;
+}
+
+// ==========================================
+// GitHub Types
+// ==========================================
+
+export interface GitHubConfig {
+  enabled: boolean;
+  personalAccessToken?: string;
+  username?: string;
+  repos?: string[]; // repos to track (owner/repo format)
+}
+
+export interface GitHubNotification {
+  id: string;
+  type: 'Issue' | 'PullRequest' | 'Release' | 'Discussion' | 'Commit';
+  title: string;
+  reason: string;
+  repoName: string;
+  url: string;
+  updatedAt: string;
+  unread: boolean;
+}
+
+export interface GitHubActivity {
+  id: string;
+  type: 'push' | 'pr' | 'issue' | 'star' | 'fork' | 'release' | 'comment';
+  repoName: string;
+  description: string;
+  timestamp: string;
+  url?: string;
+}
+
+export interface GitHubRepoStats {
+  name: string;
+  fullName: string;
+  stars: number;
+  forks: number;
+  openIssues: number;
+  openPRs: number;
+  watchers: number;
+}
+
+export interface GitHubMetrics {
+  totalStars: number;
+  totalForks: number;
+  openIssues: number;
+  openPRs: number;
+  notifications: GitHubNotification[];
+  recentActivity: GitHubActivity[];
+  repos: GitHubRepoStats[];
+}
+
+// ==========================================
+// Analytics Types (PostHog / Google Analytics)
+// ==========================================
+
+export interface AnalyticsMetrics {
+  source: 'posthog' | 'google_analytics';
+  dau: number; // Daily Active Users
+  wau: number; // Weekly Active Users
+  mau: number; // Monthly Active Users
+  dauChange?: number; // % change from previous period
+  wauChange?: number;
+  mauChange?: number;
+  keyEvents?: AnalyticsEvent[];
+}
+
+export interface AnalyticsEvent {
+  name: string;
+  count: number;
+  change: number; // % change from previous period
+}
+
 // ==========================================
 // Vercel Types (Extended)
 // ==========================================
@@ -312,6 +428,13 @@ export interface AppMetrics {
   supabase?: SupabaseMetrics | SupabaseMetricsExtended;
   stripeEvents?: StripeEvent[];
   calendarEvents?: CalendarEvent[];
+  // Gmail metrics
+  gmail?: GmailMetrics;
+  gmailMessages?: GmailMessage[];
+  // GitHub metrics
+  github?: GitHubMetrics;
+  // Analytics (DAU/MAU/WAU)
+  analytics?: AnalyticsMetrics;
   lastUpdated: string;
 }
 
@@ -358,6 +481,7 @@ export interface Settings {
   launchAtStartup: boolean;
   googleCalendar?: GoogleCalendarConfig;
   historyRetentionDays?: number;
+  dashboardLayout?: GridLayoutItem[]; // User's custom grid layout
 }
 
 // ==========================================
@@ -372,6 +496,8 @@ export type DetailPanelType =
   | 'revenue-breakdown'
   | 'stripe-events'
   | 'calendar'
+  | 'gmail'
+  | 'github'
   | null;
 
 export interface DetailPanelState {
@@ -396,7 +522,17 @@ export type WidgetType =
   | 'chart-activity'
   | 'chart-churn'
   | 'calendar'
-  | 'activity-feed';
+  | 'activity-feed'
+  // Gmail widgets
+  | 'stat-gmail-unread'
+  | 'gmail-inbox'
+  // GitHub widgets
+  | 'stat-github-stars'
+  | 'github-activity'
+  // Analytics widgets
+  | 'stat-analytics-dau'
+  | 'stat-analytics-mau'
+  | 'stat-analytics-wau';
 
 export interface DashboardWidget {
   id: string;
@@ -407,4 +543,38 @@ export interface DashboardWidget {
 
 export interface DashboardLayout {
   widgets: DashboardWidget[];
+}
+
+// ==========================================
+// Grid Layout Types (react-grid-layout)
+// ==========================================
+
+export interface GridLayoutItem {
+  i: string; // Widget ID
+  x: number; // X position in grid units
+  y: number; // Y position in grid units
+  w: number; // Width in grid units
+  h: number; // Height in grid units
+  minW?: number; // Minimum width
+  minH?: number; // Minimum height
+  maxW?: number; // Maximum width
+  maxH?: number; // Maximum height
+  static?: boolean; // If true, can't be moved or resized
+}
+
+export interface GridWidgetConfig {
+  type: WidgetType;
+  title: string;
+  minW: number;
+  minH: number;
+  defaultW: number;
+  defaultH: number;
+  maxW?: number;
+  maxH?: number;
+}
+
+export interface DashboardGridLayout {
+  items: GridLayoutItem[];
+  cols: number;
+  rowHeight: number;
 }
