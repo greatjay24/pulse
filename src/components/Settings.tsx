@@ -41,6 +41,7 @@ const INTEGRATION_LABELS: Partial<Record<IntegrationType, string>> = {
   sendgrid: 'SendGrid',
   convertkit: 'ConvertKit',
   mailchimp: 'Mailchimp',
+  gmail: 'Gmail',
   sentry: 'Sentry',
   logrocket: 'LogRocket',
   google_calendar: 'Google Calendar',
@@ -49,6 +50,7 @@ const INTEGRATION_LABELS: Partial<Record<IntegrationType, string>> = {
   discord: 'Discord',
   intercom: 'Intercom',
   crisp: 'Crisp',
+  github: 'GitHub',
 };
 
 export function Settings({ apps, onSave, onClose, inline = false }: SettingsProps) {
@@ -647,7 +649,7 @@ export function Settings({ apps, onSave, onClose, inline = false }: SettingsProp
 
                       {/* Available integrations */}
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '16px' }}>
-                        {(['stripe', 'vercel', 'posthog', 'supabase'] as IntegrationType[])
+                        {(['stripe', 'vercel', 'posthog', 'supabase', 'github'] as IntegrationType[])
                           .filter(type => !activeApp.integrations.some(i => i.type === type))
                           .map(type => (
                             <button
@@ -725,35 +727,38 @@ export function Settings({ apps, onSave, onClose, inline = false }: SettingsProp
                             </div>
 
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                              <div>
-                                <label
-                                  style={{
-                                    display: 'block',
-                                    fontSize: '11px',
-                                    color: tokens.colors.textDim,
-                                    marginBottom: '6px',
-                                  }}
-                                >
-                                  API Key
-                                </label>
-                                <input
-                                  type="password"
-                                  value={integration.apiKey || ''}
-                                  onChange={(e) => updateIntegration(activeApp.id, integration.type, { apiKey: e.target.value })}
-                                  placeholder={`Enter ${INTEGRATION_LABELS[integration.type]} API key`}
-                                  style={{
-                                    width: '100%',
-                                    padding: '10px 12px',
-                                    fontSize: '13px',
-                                    background: tokens.colors.bg,
-                                    border: `1px solid ${tokens.colors.border}`,
-                                    borderRadius: tokens.radius.sm,
-                                    color: tokens.colors.text,
-                                    fontFamily: 'inherit',
-                                    outline: 'none',
-                                  }}
-                                />
-                              </div>
+                              {/* Show default API Key field for non-GitHub integrations */}
+                              {integration.type !== 'github' && (
+                                <div>
+                                  <label
+                                    style={{
+                                      display: 'block',
+                                      fontSize: '11px',
+                                      color: tokens.colors.textDim,
+                                      marginBottom: '6px',
+                                    }}
+                                  >
+                                    API Key
+                                  </label>
+                                  <input
+                                    type="password"
+                                    value={integration.apiKey || ''}
+                                    onChange={(e) => updateIntegration(activeApp.id, integration.type, { apiKey: e.target.value })}
+                                    placeholder={`Enter ${INTEGRATION_LABELS[integration.type]} API key`}
+                                    style={{
+                                      width: '100%',
+                                      padding: '10px 12px',
+                                      fontSize: '13px',
+                                      background: tokens.colors.bg,
+                                      border: `1px solid ${tokens.colors.border}`,
+                                      borderRadius: tokens.radius.sm,
+                                      color: tokens.colors.text,
+                                      fontFamily: 'inherit',
+                                      outline: 'none',
+                                    }}
+                                  />
+                                </div>
+                              )}
 
                               {(integration.type === 'vercel' || integration.type === 'supabase' || integration.type === 'posthog') && (
                                 <div>
@@ -827,6 +832,115 @@ export function Settings({ apps, onSave, onClose, inline = false }: SettingsProp
                                     Found in your URL: vercel.com/<strong>team-slug</strong>/project
                                   </p>
                                 </div>
+                              )}
+                              {integration.type === 'github' && (
+                                <>
+                                  <div>
+                                    <label
+                                      style={{
+                                        display: 'block',
+                                        fontSize: '11px',
+                                        color: tokens.colors.textDim,
+                                        marginBottom: '6px',
+                                      }}
+                                    >
+                                      Personal Access Token
+                                    </label>
+                                    <input
+                                      type="password"
+                                      value={integration.apiKey || ''}
+                                      onChange={(e) => updateIntegration(activeApp.id, integration.type, { apiKey: e.target.value })}
+                                      placeholder="ghp_xxxxxxxxxxxx"
+                                      style={{
+                                        width: '100%',
+                                        padding: '10px 12px',
+                                        fontSize: '13px',
+                                        background: tokens.colors.bg,
+                                        border: `1px solid ${tokens.colors.border}`,
+                                        borderRadius: tokens.radius.sm,
+                                        color: tokens.colors.text,
+                                        fontFamily: 'inherit',
+                                        outline: 'none',
+                                      }}
+                                    />
+                                    <p
+                                      style={{
+                                        fontSize: '10px',
+                                        color: tokens.colors.textDim,
+                                        marginTop: '4px',
+                                      }}
+                                    >
+                                      Create at github.com/settings/tokens with repo and notifications permissions
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <label
+                                      style={{
+                                        display: 'block',
+                                        fontSize: '11px',
+                                        color: tokens.colors.textDim,
+                                        marginBottom: '6px',
+                                      }}
+                                    >
+                                      GitHub Username
+                                    </label>
+                                    <input
+                                      type="text"
+                                      value={integration.teamId || ''}
+                                      onChange={(e) => updateIntegration(activeApp.id, integration.type, { teamId: e.target.value })}
+                                      placeholder="e.g., octocat"
+                                      style={{
+                                        width: '100%',
+                                        padding: '10px 12px',
+                                        fontSize: '13px',
+                                        background: tokens.colors.bg,
+                                        border: `1px solid ${tokens.colors.border}`,
+                                        borderRadius: tokens.radius.sm,
+                                        color: tokens.colors.text,
+                                        fontFamily: 'inherit',
+                                        outline: 'none',
+                                      }}
+                                    />
+                                  </div>
+                                  <div>
+                                    <label
+                                      style={{
+                                        display: 'block',
+                                        fontSize: '11px',
+                                        color: tokens.colors.textDim,
+                                        marginBottom: '6px',
+                                      }}
+                                    >
+                                      Repositories to track <span style={{ color: tokens.colors.accent }}>*</span>
+                                    </label>
+                                    <input
+                                      type="text"
+                                      value={integration.projectId || ''}
+                                      onChange={(e) => updateIntegration(activeApp.id, integration.type, { projectId: e.target.value })}
+                                      placeholder="owner/repo, owner/another-repo"
+                                      style={{
+                                        width: '100%',
+                                        padding: '10px 12px',
+                                        fontSize: '13px',
+                                        background: tokens.colors.bg,
+                                        border: `1px solid ${integration.projectId ? tokens.colors.border : 'rgba(239, 68, 68, 0.5)'}`,
+                                        borderRadius: tokens.radius.sm,
+                                        color: tokens.colors.text,
+                                        fontFamily: 'inherit',
+                                        outline: 'none',
+                                      }}
+                                    />
+                                    <p
+                                      style={{
+                                        fontSize: '10px',
+                                        color: tokens.colors.textDim,
+                                        marginTop: '4px',
+                                      }}
+                                    >
+                                      Format: owner/repo (comma-separated for multiple)
+                                    </p>
+                                  </div>
+                                </>
                               )}
                             </div>
                           </div>
