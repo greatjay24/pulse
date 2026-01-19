@@ -1,0 +1,7 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Black rounded square background -->
+  <rect x="32" y="32" width="448" height="448" rx="96" fill="#000000"/>
+  <!-- Pulse wave with sharp lines -->
+  <path d="M80 280 L160 280 L192 160 L224 400 L256 200 L288 340 L320 256 L432 256"
+        stroke="white" stroke-width="8" stroke-linecap="square" stroke-linejoin="miter" fill="none"/>
+</svg>

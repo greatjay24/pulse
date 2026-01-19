@@ -1,0 +1,20 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1E1E2E;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#11111B;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="pGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3B82F6;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#1D4ED8;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1E3A8A;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <!-- Dark rounded square -->
+  <rect x="32" y="32" width="448" height="448" rx="96" fill="url(#bgGrad)"/>
+  <!-- Stylized P made of bars -->
+  <rect x="128" y="112" width="48" height="288" rx="24" fill="url(#pGrad)"/>
+  <rect x="128" y="112" width="200" height="48" rx="24" fill="url(#pGrad)"/>
+  <rect x="280" y="112" width="48" height="144" rx="24" fill="url(#pGrad)"/>
+  <rect x="128" y="208" width="200" height="48" rx="24" fill="url(#pGrad)"/>
+</svg>
