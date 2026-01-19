@@ -1,0 +1,22 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#7C3AED;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#4F46E5;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="bar1" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" style="stop-color:#FFFFFF;stop-opacity:0.6" />
+      <stop offset="100%" style="stop-color:#FFFFFF;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <!-- Background -->
+  <rect x="32" y="32" width="448" height="448" rx="96" fill="url(#bg3)"/>
+  <!-- Chart bars with varying heights -->
+  <rect x="96" y="280" width="56" height="120" rx="16" fill="url(#bar1)"/>
+  <rect x="172" y="220" width="56" height="180" rx="16" fill="url(#bar1)"/>
+  <rect x="248" y="160" width="56" height="240" rx="16" fill="url(#bar1)"/>
+  <rect x="324" y="120" width="56" height="280" rx="16" fill="url(#bar1)"/>
+  <!-- Upward arrow/trend line -->
+  <path d="M380 100 L400 100 L400 140" stroke="white" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M360 140 L400 100 L440 140" stroke="white" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

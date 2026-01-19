@@ -1,0 +1,27 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg5" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#8B5CF6;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#7C3AED;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#6D28D9;stop-opacity:1" />
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="8" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <!-- Background -->
+  <rect x="32" y="32" width="448" height="448" rx="96" fill="url(#bg5)"/>
+  <!-- Subtle grid lines -->
+  <line x1="96" y1="256" x2="416" y2="256" stroke="white" stroke-opacity="0.1" stroke-width="2"/>
+  <line x1="96" y1="176" x2="416" y2="176" stroke="white" stroke-opacity="0.1" stroke-width="2"/>
+  <line x1="96" y1="336" x2="416" y2="336" stroke="white" stroke-opacity="0.1" stroke-width="2"/>
+  <!-- Main pulse line with glow -->
+  <path d="M80 256 L140 256 L170 256 L200 160 L230 352 L260 200 L290 300 L320 240 L350 256 L432 256"
+        stroke="white" stroke-width="20" stroke-linecap="round" stroke-linejoin="round" fill="none" filter="url(#glow)"/>
+  <!-- Accent dot at peak -->
+  <circle cx="230" cy="352" r="14" fill="#22C55E"/>
+</svg>
