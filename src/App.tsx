@@ -569,14 +569,6 @@ function DashboardContent() {
     saveSettingsToStore(newSettings);
   }, [settings]);
 
-  // Reset layout to default
-  const handleResetLayout = useCallback(() => {
-    setGridLayout(DEFAULT_LAYOUT);
-    const newSettings = { ...settings, dashboardLayout: DEFAULT_LAYOUT };
-    setSettings(newSettings);
-    saveSettingsToStore(newSettings);
-  }, [settings]);
-
   // Create widget map for DashboardGrid
   const widgetMap = useMemo(() => ({
     // Stat cards
