@@ -102,6 +102,26 @@ This file tracks planned improvements. When starting a new Claude session, refer
 
 ---
 
+### Auto-Launch Settings Toggle
+**Status:** Not started
+**Priority:** Medium
+**Goal:** Let users enable/disable auto-launch from within the app.
+
+**Implementation:**
+- Add `autoLaunchEnabled: boolean` and `autoLaunchTime: string` to Settings type
+- Add toggle in Settings UI under "Preferences" section
+- Create Tauri commands in `lib.rs`:
+  - `enable_auto_launch(time: String)` - installs Launch Agent (macOS) / Task Scheduler (Windows)
+  - `disable_auto_launch()` - removes the scheduled task
+  - `get_auto_launch_status()` - checks if currently enabled
+- Time picker for custom launch time (default 7:30 AM)
+- Platform-specific implementations:
+  - macOS: Write/delete plist in `~/Library/LaunchAgents/`
+  - Windows: Use `schtasks` command or Windows API
+  - Linux: Write/delete systemd user timer
+
+---
+
 ## Completed
 
 - [x] Resizable/draggable dashboard grid with react-grid-layout
@@ -109,6 +129,7 @@ This file tracks planned improvements. When starting a new Claude session, refer
 - [x] Add Widget card in grid
 - [x] GitHub Actions release workflow for DMG/MSI/AppImage builds
 - [x] Environment variables for OAuth credentials (not hardcoded)
+- [x] Terminal setup script with auto-launch prompt (`scripts/setup.sh`)
 
 ---
 
