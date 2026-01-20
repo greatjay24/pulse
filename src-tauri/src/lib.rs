@@ -1888,6 +1888,82 @@ async fn fetch_github_metrics(token: String, username: String, repos: Vec<String
 }
 
 // ==========================================
+// Auto-Launch Management (macOS)
+// ==========================================
+
+const LAUNCH_AGENT_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.pulse.autolaunch</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>open</string>
+        <string>-a</string>
+        <string>Pulse</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>7</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>"#;
+
+fn get_launch_agent_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join("Library/LaunchAgents/com.pulse.autolaunch.plist"))
+}
+
+#[tauri::command]
+fn get_auto_launch_enabled() -> bool {
+    get_launch_agent_path()
+        .map(|path| path.exists())
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+fn set_auto_launch_enabled(enabled: bool) -> Result<(), String> {
+    let plist_path = get_launch_agent_path()
+        .ok_or_else(|| "Could not determine home directory".to_string())?;
+
+    if enabled {
+        // Create LaunchAgents directory if needed
+        if let Some(parent) = plist_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create LaunchAgents directory: {}", e))?;
+        }
+
+        // Write the plist file
+        fs::write(&plist_path, LAUNCH_AGENT_PLIST)
+            .map_err(|e| format!("Failed to write launch agent: {}", e))?;
+
+        // Load the launch agent
+        std::process::Command::new("launchctl")
+            .args(["load", plist_path.to_str().unwrap()])
+            .output()
+            .map_err(|e| format!("Failed to load launch agent: {}", e))?;
+    } else {
+        if plist_path.exists() {
+            // Unload the launch agent first
+            let _ = std::process::Command::new("launchctl")
+                .args(["unload", plist_path.to_str().unwrap()])
+                .output();
+
+            // Delete the plist file
+            fs::remove_file(&plist_path)
+                .map_err(|e| format!("Failed to remove launch agent: {}", e))?;
+        }
+    }
+
+    Ok(())
+}
+
+// ==========================================
 // Tauri App Entry Point
 // ==========================================
 
@@ -1946,7 +2022,9 @@ pub fn run() {
             refresh_google_token,
             fetch_google_calendar,
             fetch_gmail,
-            fetch_github_metrics
+            fetch_github_metrics,
+            get_auto_launch_enabled,
+            set_auto_launch_enabled
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
