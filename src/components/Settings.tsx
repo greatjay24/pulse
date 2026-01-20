@@ -68,6 +68,33 @@ export function Settings({ apps, onSave, onClose, inline = false }: SettingsProp
   const [calendarConnectingAppId, setCalendarConnectingAppId] = useState<string | null>(null);
   const [calendarError, setCalendarError] = useState<string | null>(null);
 
+  // Auto-launch state
+  const [autoLaunchEnabled, setAutoLaunchEnabled] = useState(false);
+  const [autoLaunchLoading, setAutoLaunchLoading] = useState(true);
+
+  // Load auto-launch status on mount
+  useEffect(() => {
+    if (IS_TAURI) {
+      invoke<boolean>('get_auto_launch_enabled')
+        .then(setAutoLaunchEnabled)
+        .catch(console.error)
+        .finally(() => setAutoLaunchLoading(false));
+    } else {
+      setAutoLaunchLoading(false);
+    }
+  }, []);
+
+  const handleAutoLaunchToggle = async () => {
+    if (!IS_TAURI) return;
+    const newValue = !autoLaunchEnabled;
+    try {
+      await invoke('set_auto_launch_enabled', { enabled: newValue });
+      setAutoLaunchEnabled(newValue);
+    } catch (err) {
+      console.error('Failed to toggle auto-launch:', err);
+    }
+  };
+
   const handleConnectCalendar = async (appId: string) => {
     if (!IS_TAURI) {
       setCalendarError('Calendar connection only works in the desktop app');
@@ -456,6 +483,79 @@ export function Settings({ apps, onSave, onClose, inline = false }: SettingsProp
                   Preview: The quick brown fox jumps over the lazy dog. 0123456789
                 </p>
               </div>
+
+              {/* Auto-Launch Toggle */}
+              {IS_TAURI && (
+                <div
+                  style={{
+                    background: tokens.colors.bgCard,
+                    border: `1px solid ${tokens.colors.border}`,
+                    borderRadius: tokens.radius.lg,
+                    padding: '24px',
+                    marginTop: '24px',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <div>
+                      <label
+                        style={{
+                          display: 'block',
+                          color: tokens.colors.text,
+                          fontSize: '14px',
+                          fontWeight: 500,
+                          marginBottom: '4px',
+                        }}
+                      >
+                        Auto-launch at 7:30 AM
+                      </label>
+                      <p
+                        style={{
+                          color: tokens.colors.textDim,
+                          fontSize: '12px',
+                          margin: 0,
+                        }}
+                      >
+                        Open Pulse automatically every morning to review your dashboard
+                      </p>
+                    </div>
+                    <button
+                      onClick={handleAutoLaunchToggle}
+                      disabled={autoLaunchLoading}
+                      style={{
+                        position: 'relative',
+                        width: '44px',
+                        height: '24px',
+                        borderRadius: '12px',
+                        border: 'none',
+                        background: autoLaunchEnabled ? tokens.colors.accent : tokens.colors.bgElevated,
+                        cursor: autoLaunchLoading ? 'wait' : 'pointer',
+                        transition: 'background 0.2s ease',
+                        opacity: autoLaunchLoading ? 0.5 : 1,
+                      }}
+                    >
+                      <div
+                        style={{
+                          position: 'absolute',
+                          top: '2px',
+                          left: autoLaunchEnabled ? '22px' : '2px',
+                          width: '20px',
+                          height: '20px',
+                          borderRadius: '10px',
+                          background: 'white',
+                          boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                          transition: 'left 0.2s ease',
+                        }}
+                      />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
