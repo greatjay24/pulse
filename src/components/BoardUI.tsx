@@ -297,7 +297,8 @@ export function PageHeader({ title, subtitle, right }: { title: ReactNode; subti
         <h1 style={{ fontFamily: tokens.fonts.display, fontSize: tokens.type.title, fontWeight: 500, letterSpacing: '-0.015em', lineHeight: 1.1 }}>
           {title}
         </h1>
-        {subtitle && <p style={{ fontSize: tokens.type.small, color: tokens.colors.textMuted, marginTop: '8px' }}>{subtitle}</p>}
+        {/* A div, not a p: subtitles can be block content such as DataStamps. */}
+        {subtitle && <div style={{ fontSize: tokens.type.small, color: tokens.colors.textMuted, marginTop: '8px' }}>{subtitle}</div>}
       </div>
       {right}
     </header>
