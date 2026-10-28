@@ -4,9 +4,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use tauri::{
-    menu::{Menu, MenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager,
+    image::Image,
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::TrayIconBuilder,
+    AppHandle, Emitter, Manager,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1130,8 +1131,16 @@ async fn fetch_supabase_metrics(
 // These are embedded at compile time from environment variables
 // For local dev: create .env file with GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET
 // For CI builds: set as GitHub Actions secrets
-const GOOGLE_CLIENT_ID: &str = env!("GOOGLE_CLIENT_ID");
-const GOOGLE_CLIENT_SECRET: &str = env!("GOOGLE_CLIENT_SECRET");
+// A build without them still compiles; Google sign-in (SaaS metrics only) then says so.
+const GOOGLE_CLIENT_ID: Option<&str> = option_env!("GOOGLE_CLIENT_ID");
+const GOOGLE_CLIENT_SECRET: Option<&str> = option_env!("GOOGLE_CLIENT_SECRET");
+
+fn google_client() -> Result<(&'static str, &'static str), String> {
+    match (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET) {
+        (Some(id), Some(secret)) => Ok((id, secret)),
+        _ => Err("Google sign-in is not configured in this build (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET were not set at compile time)".to_string()),
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct GoogleCalendarEvent {
@@ -1162,6 +1171,8 @@ async fn start_google_oauth() -> Result<String, String> {
     use tokio::net::TcpListener;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    let (client_id, client_secret) = google_client()?;
+
     // Bind to a random available port on localhost
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -1178,7 +1189,7 @@ async fn start_google_oauth() -> Result<String, String> {
     // Build the auth URL
     let auth_url = format!(
         "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent",
-        GOOGLE_CLIENT_ID,
+        client_id,
         urlencoding::encode(&redirect_uri),
         urlencoding::encode(scopes)
     );
@@ -1244,8 +1255,8 @@ async fn start_google_oauth() -> Result<String, String> {
     // Exchange the code for tokens
     let client = reqwest::Client::new();
     let params = [
-        ("client_id", GOOGLE_CLIENT_ID),
-        ("client_secret", GOOGLE_CLIENT_SECRET),
+        ("client_id", client_id),
+        ("client_secret", client_secret),
         ("code", code.as_str()),
         ("grant_type", "authorization_code"),
         ("redirect_uri", redirect_uri.as_str()),
@@ -1270,11 +1281,12 @@ async fn start_google_oauth() -> Result<String, String> {
 
 #[tauri::command]
 async fn refresh_google_token(refresh_token: String) -> Result<String, String> {
+    let (client_id, client_secret) = google_client()?;
     let client = reqwest::Client::new();
 
     let params = [
-        ("client_id", GOOGLE_CLIENT_ID),
-        ("client_secret", GOOGLE_CLIENT_SECRET),
+        ("client_id", client_id),
+        ("client_secret", client_secret),
         ("refresh_token", &refresh_token),
         ("grant_type", "refresh_token"),
     ];
@@ -2922,50 +2934,82 @@ fn set_auto_launch_enabled(enabled: bool) -> Result<(), String> {
 // Tauri App Entry Point
 // ==========================================
 
+// ==========================================
+// Menu bar item: decisions waiting on the owner, and a way back in
+// ==========================================
+
+const TRAY_ID: &str = "pulse";
+
+// The count beside the menu bar mark; nothing when the queue is empty.
+fn tray_title(count: u32) -> Option<String> {
+    (count > 0).then(|| count.to_string())
+}
+
+fn tray_tooltip(count: u32) -> String {
+    match count {
+        0 => "Pulse: no decisions waiting".to_string(),
+        1 => "Pulse: 1 decision needs you".to_string(),
+        n => format!("Pulse: {} decisions need you", n),
+    }
+}
+
+// The webview computes the count from the same data as Today and sends it here.
+#[tauri::command]
+fn set_tray_count(app: AppHandle, count: u32) -> Result<(), String> {
+    let tray = app.tray_by_id(TRAY_ID).ok_or("menu bar item not created")?;
+    tray.set_title(tray_title(count)).map_err(|e| e.to_string())?;
+    tray.set_tooltip(Some(tray_tooltip(count))).map_err(|e| e.to_string())
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
-            // Create tray menu
-            let quit = MenuItem::with_id(app, "quit", "Quit Pulse", true, None::<&str>)?;
-            let show = MenuItem::with_id(app, "show", "Show Dashboard", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let open = MenuItem::with_id(app, "open", "Open Pulse", true, None::<&str>)?;
+            let today = MenuItem::with_id(app, "today", "Today", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Quit Pulse", true, Some("CmdOrCtrl+Q"))?;
+            let separator = PredefinedMenuItem::separator(app)?;
+            let menu = Menu::with_items(app, &[&open, &today, &separator, &quit])?;
 
-            // Create tray icon
-            let _tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+            // A template image: macOS tints it for light and dark menu bars.
+            let icon = Image::from_bytes(include_bytes!("../icons/tray-template@2x.png"))?;
+            TrayIconBuilder::with_id(TRAY_ID)
+                .icon(icon)
+                .icon_as_template(true)
+                .tooltip(tray_tooltip(0))
                 .menu(&menu)
-                .show_menu_on_left_click(false)
+                .show_menu_on_left_click(true)
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "quit" => {
-                        app.exit(0);
+                    "open" => show_main_window(app),
+                    "today" => {
+                        show_main_window(app);
+                        let _ = app.emit("pulse://navigate", "today");
                     }
-                    "show" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
-                    }
+                    "quit" => app.exit(0),
                     _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
-                    }
                 })
                 .build(app)?;
 
             Ok(())
+        })
+        // Closing the window keeps Pulse in the menu bar; Quit (menu or Cmd+Q) exits.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_settings,
@@ -2982,10 +3026,35 @@ pub fn run() {
             set_auto_launch_enabled,
             read_portfolio,
             set_tv_fullscreen,
-            read_tracker
+            read_tracker,
+            set_tray_count
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app, event| {
+        // Clicking the Dock icon brings the hidden window back.
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Reopen { .. } = event {
+            show_main_window(app);
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (app, event);
+    });
+}
+
+#[cfg(test)]
+mod tray_tests {
+    use super::*;
+
+    #[test]
+    fn titles_and_tooltips_count_decisions() {
+        assert_eq!(tray_title(0), None);
+        assert_eq!(tray_title(7).as_deref(), Some("7"));
+        assert_eq!(tray_tooltip(0), "Pulse: no decisions waiting");
+        assert_eq!(tray_tooltip(1), "Pulse: 1 decision needs you");
+        assert_eq!(tray_tooltip(22), "Pulse: 22 decisions need you");
+    }
 }
 
 #[cfg(test)]

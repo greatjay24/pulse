@@ -13,6 +13,7 @@ import {
 } from '../utils/finance';
 import { BarList, Figure, MonthColumns } from './MoneyCharts';
 import { Card, CommandLine, EntityLogos, EntityMark, SectionHeading } from './BoardUI';
+import { HealthMark } from './Icons';
 
 const DAY = 86400;
 
@@ -41,7 +42,7 @@ export function SourceChips({ money }: { money: TrackerMoney }) {
               whiteSpace: 'nowrap',
             }}
           >
-            <span aria-hidden style={{ color: c.ok ? tokens.colors.success : tokens.colors.textDim }}>{c.ok ? '●' : '○'}</span>
+            <HealthMark health={c.ok ? 'green' : undefined} size={8} color={c.ok ? tokens.colors.success : tokens.colors.textDim} />
             {SOURCE_LABEL[c.source as MoneySourceId]} · {state}
           </span>
         );
@@ -71,7 +72,7 @@ interface MoneyBandProps {
   onOpenEntity: (id: string) => void;
 }
 
-// The board's money band: cash in over 30 and 90 days, who it came in for, and the year.
+// The Money page's lead: cash in over 30 and 90 days, who it came in for, and the year.
 export function MoneyBand({ money, entities, logos, onOpenEntity }: MoneyBandProps) {
   const { tokens } = useTheme();
   const finance = money.finance;
@@ -80,7 +81,7 @@ export function MoneyBand({ money, entities, logos, onOpenEntity }: MoneyBandPro
   if (!money.configured) {
     return (
       <Card style={{ marginBottom: '40px' }}>
-        <SectionHeading right={<SourceChips money={money} />}>Money</SectionHeading>
+        <SectionHeading right={<SourceChips money={money} />}>Cash in</SectionHeading>
         <p style={{ fontSize: tokens.type.body, color: tokens.colors.textMuted, marginBottom: '16px', maxWidth: '640px', lineHeight: 1.55 }}>
           No money source is connected, so there is nothing to count yet. Connect Stripe per project and your bank once:
         </p>
@@ -106,7 +107,7 @@ export function MoneyBand({ money, entities, logos, onOpenEntity }: MoneyBandPro
 
   return (
     <Card style={{ marginBottom: '40px' }} padding="28px 30px">
-      <SectionHeading note="cash in" right={<SourceChips money={money} />}>Money</SectionHeading>
+      <SectionHeading note="all businesses" right={<SourceChips money={money} />}>Cash in</SectionHeading>
       <div
         style={{
           display: 'grid',

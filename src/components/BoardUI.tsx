@@ -2,19 +2,20 @@ import { CSSProperties, ReactNode, useState } from 'react';
 import { inkOn, isHexColor, useTheme } from '../contexts/ThemeContext';
 import { Health, PortfolioEntity } from '../types';
 import { formatAge, hoursSince, isStale } from '../utils/portfolio';
+import { HealthMark } from './Icons';
 
 // Shared pieces for the board, entity dashboards and Today: one card, one label style,
 // one way to show health, so the three views read as one system.
 
-const HEALTH: Record<Health | 'none', { label: string; mark: string }> = {
-  green: { label: 'On track', mark: '●' },
-  yellow: { label: 'Watch', mark: '▲' },
-  red: { label: 'At risk', mark: '■' },
-  none: { label: 'No report', mark: '○' },
+const HEALTH: Record<Health | 'none', { label: string }> = {
+  green: { label: 'On track' },
+  yellow: { label: 'Watch' },
+  red: { label: 'At risk' },
+  none: { label: 'No report' },
 };
 
 // Health as a tinted pill with a shape and a word, so it never depends on color alone.
-export function HealthBadge({ health, large = false }: { health: Health | undefined; large?: boolean }) {
+export function HealthBadge({ health, why, large = false }: { health: Health | undefined; why?: string; large?: boolean }) {
   const { tokens } = useTheme();
   const c = tokens.colors;
   const key = health ?? 'none';
@@ -22,7 +23,7 @@ export function HealthBadge({ health, large = false }: { health: Health | undefi
     key === 'green' ? [c.success, c.successMuted] : key === 'yellow' ? [c.warning, c.warningMuted] : key === 'red' ? [c.danger, c.dangerMuted] : [c.textMuted, 'transparent'];
   return (
     <span
-      title={health ? `Health: ${HEALTH[key].label}` : 'No status report yet'}
+      title={why ? `${HEALTH[key].label}: ${why}` : health ? `Health: ${HEALTH[key].label}` : 'No status report yet'}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -38,9 +39,33 @@ export function HealthBadge({ health, large = false }: { health: Health | undefi
         flexShrink: 0,
       }}
     >
-      <span aria-hidden style={{ fontSize: '0.75em', lineHeight: 1 }}>{HEALTH[key].mark}</span>
+      <HealthMark health={health} size={large ? 10 : 8} color={fg} />
       {HEALTH[key].label}
     </span>
+  );
+}
+
+// The lead's one-line reason for the color (status.json `health_why`). Older reports
+// don't carry it, and then nothing is shown rather than a guess.
+export function HealthWhy({ why, clamp = 2, style }: { why: string | undefined; clamp?: number; style?: CSSProperties }) {
+  const { tokens } = useTheme();
+  if (!why) return null;
+  return (
+    <div
+      title={why}
+      style={{
+        fontSize: tokens.type.small,
+        lineHeight: 1.5,
+        color: tokens.colors.textMuted,
+        display: '-webkit-box',
+        WebkitLineClamp: clamp,
+        WebkitBoxOrient: 'vertical',
+        overflow: 'hidden',
+        ...style,
+      }}
+    >
+      {why}
+    </div>
   );
 }
 
@@ -276,5 +301,42 @@ export function PageHeader({ title, subtitle, right }: { title: ReactNode; subti
       </div>
       {right}
     </header>
+  );
+}
+
+// "as of" for one data source: the time if it was today, else the date; flagged when old.
+function stampText(ms: number, now: number): string {
+  const d = new Date(ms);
+  const sameDay = new Date(now).toDateString() === d.toDateString();
+  return sameDay
+    ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+export interface DataSource {
+  label: string;
+  at: number | null; // epoch ms; null when the source has never been read
+  staleAfterHours: number;
+  detail?: string; // tooltip
+}
+
+// One quiet line saying how fresh each source is, so a number is never read without its age.
+export function DataStamps({ sources, now }: { sources: DataSource[]; now: number }) {
+  const { tokens } = useTheme();
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px', alignItems: 'center', fontSize: tokens.type.micro, color: tokens.colors.textDim }}>
+      <span style={{ textTransform: 'uppercase', letterSpacing: '0.09em', fontWeight: 600 }}>Data as of</span>
+      {sources.map((s) => {
+        const stale = s.at === null || (now - s.at) / 3_600_000 > s.staleAfterHours;
+        return (
+          <span key={s.label} title={s.detail} style={{ display: 'inline-flex', gap: '5px', whiteSpace: 'nowrap' }}>
+            <span>{s.label}</span>
+            <span style={{ color: stale ? tokens.colors.warning : tokens.colors.textMuted, fontVariantNumeric: 'tabular-nums' }}>
+              {s.at === null ? 'not read' : stampText(s.at, now)}
+            </span>
+          </span>
+        );
+      })}
+    </div>
   );
 }

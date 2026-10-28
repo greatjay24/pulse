@@ -482,6 +482,8 @@ export interface Settings {
   googleCalendar?: GoogleCalendarConfig;
   historyRetentionDays?: number;
   dashboardLayout?: GridLayoutItem[]; // User's custom grid layout
+  saasMetrics?: boolean; // show the original SaaS-metrics pages (Overview, Analytics, Calendar); off by default
+  notifications?: boolean; // native alerts for new urgent items; on unless turned off
 }
 
 // ==========================================
@@ -623,11 +625,13 @@ export interface EntityLane {
 }
 
 export interface EntityDecision {
+  id?: string; // stable slug, same decision = same id every run (older reports omit it)
   ask: string;
   recommend?: string;
   why?: string;
   gate?: Gate;
   due?: string | null;
+  on_approve?: string; // what the lead does the moment the owner approves
 }
 
 export interface EntityStatus {
@@ -638,6 +642,7 @@ export interface EntityStatus {
   stage?: string;
   updated?: string;
   health?: Health;
+  health_why?: string; // one line: which health rule set the color
   headline?: string;
   metrics?: EntityMetric[];
   lanes?: Record<string, EntityLane>;
