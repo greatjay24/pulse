@@ -27,6 +27,24 @@
 - **Privacy First** - All data stored locally on your machine
 - **Cross-Platform** - Available for macOS, Windows, and Linux
 
+## Org board
+
+Pulse's home view is a board for every entity in `~/portfolio`. It reads
+`portfolio.json`, each entity's `status.json` (schema in `~/portfolio/STATUS_SCHEMA.md`)
+and `WEEK.md` through a read-only Rust command scoped to `~/portfolio`. No network.
+
+- **Board**: one column per group (operating companies, family, personal, with ventures
+  nested under Personal). Each card shows health, headline, open decisions, top metrics
+  and report age (flagged as stale after 36h). The top strip totals decisions waiting on
+  you and shows the first section of `WEEK.md`.
+- **Entity dashboard**: click a card for metrics, lanes, decisions with recommendations
+  and gates, waiting on, risks, next moves and done this week.
+- **TV mode**: press `T` (or the TV mode button) for fullscreen with larger type and no
+  sidebar; `Esc` exits. `Backspace` returns from an entity to the board.
+- Data re-reads every 60 seconds and whenever the window regains focus.
+
+The SaaS metrics views (Overview, Analytics, Calendar, Projects) are still in the sidebar.
+
 ## Installation
 
 ### Download

@@ -21,6 +21,9 @@ import { App, AppMetrics, Settings as SettingsType, DetailPanelType, Platform, G
 import { DashboardGrid, DEFAULT_LAYOUT, addWidgetToLayout } from './components/DashboardGrid';
 import { CardRect } from './components/StatCard';
 import { useHistory } from './hooks/useHistory';
+import { usePortfolio } from './hooks/usePortfolio';
+import { OrgBoard, boardEntities } from './components/OrgBoard';
+import { EntityDashboard } from './components/EntityDashboard';
 import { migrateApps } from './utils/platforms';
 import './index.css';
 
@@ -40,7 +43,10 @@ function DashboardContent() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
-  const [activeNav, setActiveNav] = useState('overview');
+  const [activeNav, setActiveNav] = useState('board');
+  const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const [tvMode, setTvMode] = useState(false);
+  const portfolio = usePortfolio();
   const [detailPanel, setDetailPanel] = useState<{ isOpen: boolean; type: DetailPanelType; originRect: CardRect | null }>({
     isOpen: false,
     type: null,
@@ -693,6 +699,44 @@ function DashboardContent() {
     handleOpenPanel
   ]);
 
+  // Returning to the board from the sidebar always lands on the board, not a stale entity.
+  const handleNavChange = useCallback((nav: string) => {
+    if (nav === 'board') setSelectedEntityId(null);
+    setActiveNav(nav);
+  }, []);
+
+  // TV mode: board only, no chrome, larger type, native fullscreen.
+  const setTv = useCallback((enabled: boolean) => {
+    setTvMode(enabled);
+    if (enabled) setActiveNav('board');
+    if (IS_TAURI) {
+      invoke('set_tv_fullscreen', { enabled }).catch((e) => console.error('Failed to toggle fullscreen:', e));
+    }
+  }, []);
+
+  // T toggles TV mode, Esc leaves it, Backspace goes from an entity back to the board.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === 't' || e.key === 'T') {
+        e.preventDefault();
+        setTv(!tvMode);
+      } else if (e.key === 'Escape' && tvMode) {
+        setTv(false);
+      } else if (e.key === 'Backspace' && activeNav === 'board' && selectedEntityId) {
+        e.preventDefault();
+        setSelectedEntityId(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [tvMode, setTv, activeNav, selectedEntityId]);
+
+  const boardItems = boardEntities(portfolio.snapshot);
+  const selectedEntity = boardItems.find((i) => i.entity.id === selectedEntityId) ?? null;
+
   return (
     <div
       style={{
@@ -705,22 +749,40 @@ function DashboardContent() {
         transition: 'background 0.2s ease, color 0.2s ease',
       }}
     >
-      {/* Sidebar */}
-      <Sidebar
+      {/* Sidebar (hidden in TV mode) */}
+      {!tvMode && <Sidebar
         apps={settings.apps}
         selectedAppId={selectedAppId}
         onSelectApp={setSelectedAppId}
         onSettingsClick={() => setShowSettings(true)}
         activeNav={activeNav}
-        onNavChange={setActiveNav}
+        onNavChange={handleNavChange}
         totalMRR={displayMRR}
         mrrChange={mrrChange}
         onAddProject={() => setShowAddProjectModal(true)}
         onDeleteApp={handleDeleteApp}
-      />
+      />}
 
       {/* Main Content */}
-      <main style={{ flex: 1, padding: '32px 40px', overflow: 'auto' }}>
+      <main style={{ flex: 1, padding: tvMode ? '40px 56px' : '32px 40px', overflow: 'auto' }}>
+        {/* Org board: the home view (zoomed up for the office TV) */}
+        {activeNav === 'board' && (
+          <div style={{ zoom: tvMode ? 1.4 : 1 }}>
+            {selectedEntity ? (
+              <EntityDashboard item={selectedEntity} onBack={() => setSelectedEntityId(null)} />
+            ) : (
+              <OrgBoard
+                snapshot={portfolio.snapshot}
+                error={portfolio.error}
+                onOpenEntity={setSelectedEntityId}
+                onRefresh={portfolio.refresh}
+                tvMode={tvMode}
+                onToggleTv={() => setTv(!tvMode)}
+              />
+            )}
+          </div>
+        )}
+
         {/* Overview Page */}
         {(activeNav === 'overview' || activeNav === 'project') && (
           <>
