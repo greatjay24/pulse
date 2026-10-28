@@ -2093,6 +2093,269 @@ fn set_tv_fullscreen(window: tauri::WebviewWindow, enabled: bool) -> Result<(), 
 }
 
 // ==========================================
+// Decisions: the owner's answers go to ~/portfolio/bin/act.py, the only thing Pulse runs
+// ==========================================
+// act.py validates again against portfolio.json and status.json, appends to the entity's
+// decisions.jsonl under a lock, and starts the lead in the background. Pulse never writes
+// ~/portfolio itself and has no other way to run a program.
+
+const ACT_ACTIONS: &[&str] = &["approve", "reject", "discuss"];
+const ACT_NOTE_MAX: usize = 2000;
+const ACT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+// Fixed interpreter paths: a GUI app's PATH is not something to trust or rely on.
+const PYTHON_CANDIDATES: &[&str] = &["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"];
+
+// Entity and decision ids: lowercase slugs, so an argument can never read as a flag or a path.
+fn is_slug(s: &str) -> bool {
+    let mut chars = s.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit())
+        && s.len() <= 100
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
+
+// The argv after the script path, or why the request is refused. The note rides as a single
+// `--note=` argument, so its contents never become separate arguments.
+fn act_args(entity_id: &str, decision_id: &str, action: &str, note: Option<&str>) -> Result<Vec<String>, String> {
+    if !is_slug(entity_id) {
+        return Err("invalid entity id".to_string());
+    }
+    if !is_slug(decision_id) {
+        return Err("invalid decision id".to_string());
+    }
+    if !ACT_ACTIONS.contains(&action) {
+        return Err("action must be approve, reject or discuss".to_string());
+    }
+    let note = note.unwrap_or("").trim();
+    if note.chars().count() > ACT_NOTE_MAX {
+        return Err(format!("note is longer than {} characters", ACT_NOTE_MAX));
+    }
+    if note.contains('\0') {
+        return Err("note contains a NUL byte".to_string());
+    }
+    if action == "discuss" && note.is_empty() {
+        return Err("discuss needs a note".to_string());
+    }
+    let mut args = vec![entity_id.to_string(), decision_id.to_string(), action.to_string()];
+    if !note.is_empty() {
+        args.push(format!("--note={}", note));
+    }
+    Ok(args)
+}
+
+fn registry_has_entity(root: &Path, entity_id: &str) -> Result<(), String> {
+    let registry = resolve_portfolio_file(root, ".", "portfolio.json").and_then(|p| read_portfolio_json(&p))?;
+    let known = registry
+        .get("entities")
+        .and_then(|e| e.as_array())
+        .is_some_and(|list| list.iter().any(|e| e.get("id").and_then(|v| v.as_str()) == Some(entity_id)));
+    if known { Ok(()) } else { Err(format!("unknown entity: {}", entity_id)) }
+}
+
+#[tauri::command]
+async fn act_on_decision(entity_id: String, decision_id: String, action: String, note: Option<String>) -> Result<String, String> {
+    let args = act_args(&entity_id, &decision_id, &action, note.as_deref())?;
+    let root = get_portfolio_dir()?;
+    registry_has_entity(&root, &entity_id)?;
+    let script = resolve_portfolio_file(&root, "bin", "act.py").map_err(|e| format!("~/portfolio/bin/act.py: {}", e))?;
+    let python = PYTHON_CANDIDATES
+        .iter()
+        .find(|p| Path::new(p).is_file())
+        .ok_or("python3 not found")?;
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+
+    // act.py appends and hands the lead run to a detached worker, so it exits in well under
+    // a second; the timeout only guards against a hung interpreter.
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut child = std::process::Command::new(python)
+            .arg(&script)
+            .args(&args)
+            .current_dir(home)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("could not start act.py: {}", e))?;
+        let started = std::time::Instant::now();
+        while child.try_wait().map_err(|e| e.to_string())?.is_none() {
+            if started.elapsed() > ACT_TIMEOUT {
+                let _ = child.kill();
+                return Err("act.py did not answer in time".to_string());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let out = child.wait_with_output().map_err(|e| e.to_string())?;
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let line = stdout.lines().last().unwrap_or("").trim().to_string();
+        // act.py prints one JSON line either way; a refusal carries {"ok": false, "error"}.
+        match serde_json::from_str::<serde_json::Value>(&line) {
+            Ok(v) if v.get("ok").and_then(|o| o.as_bool()) == Some(true) => Ok(line),
+            Ok(v) => Err(v.get("error").and_then(|e| e.as_str()).unwrap_or("act.py refused").to_string()),
+            Err(_) => Err(format!("act.py failed: {}", String::from_utf8_lossy(&out.stderr).trim().chars().take(300).collect::<String>())),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// ==========================================
+// Activity: what the organization did. Read-only.
+// ==========================================
+
+const ACTIVITY_MAX_RUN_FILES: usize = 150;
+const ACTIVITY_MAX_ROWS: usize = 500;
+const JSONL_MAX_BYTES: u64 = 4 * 1024 * 1024;
+// Only these ledger fields leave Rust: no recipients, no bodies.
+const DRAFT_FIELDS: &[&str] = &["date", "entity", "prospect", "vertical", "subject", "variant", "source"];
+
+#[derive(Serialize)]
+struct ActivityRunFile {
+    file: String,
+    data: serde_json::Value,
+}
+
+#[derive(Serialize)]
+struct ActivityEntityRows {
+    entity: String,
+    rows: Vec<serde_json::Value>,
+}
+
+#[derive(Serialize)]
+struct ActivityCommit {
+    hash: String,
+    at: String,
+    subject: String,
+}
+
+#[derive(Serialize)]
+struct ActivitySnapshot {
+    runs: Vec<ActivityRunFile>,
+    decisions: Vec<ActivityEntityRows>,
+    drafts: Vec<serde_json::Value>,
+    commits: Vec<ActivityCommit>,
+    errors: Vec<String>,
+    read_at: String,
+}
+
+// The last `max` JSON-object lines of a .jsonl file; bad lines are skipped, not fatal.
+fn read_jsonl_tail(path: &Path, max: usize) -> Result<Vec<serde_json::Value>, String> {
+    let text = read_text_capped(path, JSONL_MAX_BYTES)?;
+    let rows: Vec<serde_json::Value> = text
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|v| v.is_object())
+        .collect();
+    let skip = rows.len().saturating_sub(max);
+    Ok(rows.into_iter().skip(skip).collect())
+}
+
+fn pick_fields(row: &serde_json::Value, fields: &[&str]) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    for f in fields {
+        if let Some(v) = row.get(*f) {
+            out.insert(f.to_string(), v.clone());
+        }
+    }
+    serde_json::Value::Object(out)
+}
+
+// Parses `git log --format=%H%x1f%aI%x1f%s` output.
+fn parse_git_log(text: &str) -> Vec<ActivityCommit> {
+    text.lines()
+        .filter_map(|l| {
+            let mut parts = l.splitn(3, '\u{1f}');
+            Some(ActivityCommit {
+                hash: parts.next()?.to_string(),
+                at: parts.next()?.to_string(),
+                subject: parts.next()?.to_string(),
+            })
+        })
+        .collect()
+}
+
+fn read_activity_at(root: &Path) -> ActivitySnapshot {
+    let mut errors = Vec::new();
+
+    // logs/*.json: nightly runs (an array of agent results) and act runs (one object).
+    let mut runs = Vec::new();
+    if let Ok(dir) = fs::read_dir(root.join("logs")) {
+        let mut names: Vec<String> = dir
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.file_name().to_str().map(String::from))
+            .filter(|n| n.ends_with(".json") && !n.starts_with('.'))
+            .collect();
+        // Names start with a timestamp (act runs after "act-"), so sort by that.
+        names.sort_by_key(|n| std::cmp::Reverse(n.trim_start_matches("act-").to_string()));
+        for name in names.into_iter().take(ACTIVITY_MAX_RUN_FILES) {
+            match resolve_portfolio_file(root, "logs", &name)
+                .and_then(|p| read_portfolio_text(&p))
+                .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).map_err(|e| format!("malformed: {}", e)))
+            {
+                Ok(data) => runs.push(ActivityRunFile { file: name, data }),
+                Err(e) => errors.push(format!("logs/{}: {}", name, e)),
+            }
+        }
+    }
+
+    // Per entity: decisions.jsonl (the owner's answers and the lead's replies) and the sales ledger.
+    let mut decisions = Vec::new();
+    let mut drafts = Vec::new();
+    let registry = resolve_portfolio_file(root, ".", "portfolio.json").and_then(|p| read_portfolio_json(&p));
+    let entities = registry.as_ref().ok().and_then(|r| r.get("entities")).and_then(|e| e.as_array()).cloned().unwrap_or_default();
+    for entity in &entities {
+        let (Some(id), Some(rel)) = (entity.get("id").and_then(|v| v.as_str()), entity.get("path").and_then(|v| v.as_str())) else {
+            continue;
+        };
+        match resolve_portfolio_file(root, rel, "decisions.jsonl").and_then(|p| read_jsonl_tail(&p, ACTIVITY_MAX_ROWS)) {
+            Ok(rows) => decisions.push(ActivityEntityRows { entity: id.to_string(), rows }),
+            Err(e) if e == "missing" => {}
+            Err(e) => errors.push(format!("{}/decisions.jsonl: {}", rel, e)),
+        }
+        let sales = format!("{}/sales", rel.trim_end_matches('/'));
+        match resolve_portfolio_file(root, &sales, "ledger.jsonl").and_then(|p| read_jsonl_tail(&p, ACTIVITY_MAX_ROWS)) {
+            Ok(rows) => drafts.extend(rows.iter().map(|r| {
+                let mut d = pick_fields(r, DRAFT_FIELDS);
+                if let Some(o) = d.as_object_mut() {
+                    o.entry("entity").or_insert_with(|| id.into());
+                }
+                d
+            })),
+            Err(e) if e == "missing" => {}
+            Err(e) => errors.push(format!("{}/ledger.jsonl: {}", sales, e)),
+        }
+    }
+
+    // git log, fixed arguments, read-only.
+    let commits = match std::process::Command::new("/usr/bin/git")
+        .arg("-C")
+        .arg(root)
+        .args(["log", "-n", "300", "--since=30.days", "--format=%H%x1f%aI%x1f%s"])
+        .stdin(std::process::Stdio::null())
+        .output()
+    {
+        Ok(out) if out.status.success() => parse_git_log(&String::from_utf8_lossy(&out.stdout)),
+        Ok(out) => {
+            errors.push(format!("git log: {}", String::from_utf8_lossy(&out.stderr).trim()));
+            vec![]
+        }
+        Err(e) => {
+            errors.push(format!("git log: {}", e));
+            vec![]
+        }
+    };
+
+    ActivitySnapshot { runs, decisions, drafts, commits, errors, read_at: chrono::Local::now().to_rfc3339() }
+}
+
+#[tauri::command]
+async fn read_activity() -> Result<String, String> {
+    let root = get_portfolio_dir()?;
+    let snapshot = tauri::async_runtime::spawn_blocking(move || read_activity_at(&root))
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_string(&snapshot).map_err(|e| e.to_string())
+}
+
+// ==========================================
 // Tracker (~/project-tracker): read-only, a fixed allowlist of files
 // ==========================================
 
@@ -3027,7 +3290,9 @@ pub fn run() {
             read_portfolio,
             set_tv_fullscreen,
             read_tracker,
-            set_tray_count
+            set_tray_count,
+            act_on_decision,
+            read_activity
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -3054,6 +3319,92 @@ mod tray_tests {
         assert_eq!(tray_tooltip(0), "Pulse: no decisions waiting");
         assert_eq!(tray_tooltip(1), "Pulse: 1 decision needs you");
         assert_eq!(tray_tooltip(22), "Pulse: 22 decisions need you");
+    }
+}
+
+#[cfg(test)]
+mod decision_tests {
+    use super::*;
+
+    #[test]
+    fn slugs_are_strict() {
+        assert!(is_slug("acme-90-day-offer"));
+        assert!(is_slug("a_b-1"));
+        for bad in ["", "-x", "--worker", "--record", "Acme", "a b", "a/b", "../x", "a;rm", "a\0", "é"] {
+            assert!(!is_slug(bad), "{bad}");
+        }
+        assert!(!is_slug(&"a".repeat(101)));
+    }
+
+    #[test]
+    fn act_args_validate_every_input() {
+        assert_eq!(
+            act_args("acme", "acme-offer", "approve", None).unwrap(),
+            vec!["acme", "acme-offer", "approve"]
+        );
+        assert!(act_args("acme", "x", "done", None).is_err()); // leads' actions are not Pulse's
+        assert!(act_args("acme", "x", "reply", None).is_err());
+        assert!(act_args("acme", "x", "--record", None).is_err());
+        assert!(act_args("acme", "x", "approve;ls", None).is_err());
+        assert!(act_args("--worker", "x", "approve", None).is_err());
+        assert!(act_args("acme", "--dry-run", "approve", None).is_err());
+        assert!(act_args("acme", "x", "discuss", None).is_err());
+        assert!(act_args("acme", "x", "discuss", Some("   ")).is_err());
+        assert!(act_args("acme", "x", "discuss", Some(&"n".repeat(2001))).is_err());
+        assert!(act_args("acme", "x", "discuss", Some("a\0b")).is_err());
+    }
+
+    #[test]
+    fn note_is_one_argument_even_when_it_looks_like_flags() {
+        let args = act_args("acme", "x", "discuss", Some("--record acme x done; $(rm -rf ~)\n--worker")).unwrap();
+        assert_eq!(args.len(), 4);
+        assert_eq!(args[3], "--note=--record acme x done; $(rm -rf ~)\n--worker");
+    }
+
+    #[test]
+    fn registry_check_rejects_unknown_entities() {
+        let root = std::env::temp_dir().join(format!("pulse-act-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        fs::write(root.join("portfolio.json"), r#"{"entities":[{"id":"acme","path":"companies/acme"}]}"#).unwrap();
+        assert!(registry_has_entity(&root, "acme").is_ok());
+        assert!(registry_has_entity(&root, "other").is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn parses_git_log() {
+        let c = parse_git_log("abc\u{1f}2026-10-28T05:30:00-04:00\u{1f}nightly: acme-lead\nbad line\n");
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].subject, "nightly: acme-lead");
+    }
+
+    #[test]
+    fn activity_reads_logs_decisions_and_strips_drafts() {
+        let root = std::env::temp_dir().join(format!("pulse-activity-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("companies/acme/sales")).unwrap();
+        fs::create_dir_all(root.join("logs")).unwrap();
+        let root = root.canonicalize().unwrap();
+        fs::write(root.join("portfolio.json"), r#"{"entities":[{"id":"acme","path":"companies/acme"}]}"#).unwrap();
+        fs::write(root.join("logs/2026-10-28_0530.json"), r#"[{"agent":"acme-lead","ok":true,"cost_usd":0.2}]"#).unwrap();
+        fs::write(root.join("logs/act-2026-10-28_120000-acme.json"), r#"{"kind":"act","entity":"acme"}"#).unwrap();
+        fs::write(root.join("logs/2026-10-28_0531_sales_learn.log"), "x").unwrap();
+        fs::write(root.join("companies/acme/decisions.jsonl"), "{\"id\":\"a\",\"action\":\"approve\"}\nnot json\n").unwrap();
+        fs::write(
+            root.join("companies/acme/sales/ledger.jsonl"),
+            r#"{"date":"2026-10-28","prospect":"p","subject":"Hi","to":"x@y.com","body":"secret"}"#,
+        )
+        .unwrap();
+        let a = read_activity_at(&root);
+        assert_eq!(a.runs.len(), 2);
+        assert_eq!(a.runs[0].file, "act-2026-10-28_120000-acme.json");
+        assert_eq!(a.decisions[0].rows.len(), 1);
+        assert_eq!(a.drafts.len(), 1);
+        assert!(a.drafts[0].get("to").is_none() && a.drafts[0].get("body").is_none());
+        assert_eq!(a.drafts[0]["entity"], "acme");
+        let _ = fs::remove_dir_all(&root);
     }
 }
 
