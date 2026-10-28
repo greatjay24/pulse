@@ -1933,11 +1933,15 @@ fn resolve_portfolio_file(root: &Path, rel_dir: &str, file_name: &str) -> Result
 }
 
 fn read_portfolio_text(path: &Path) -> Result<String, String> {
+    read_text_capped(path, PORTFOLIO_MAX_FILE_BYTES)
+}
+
+fn read_text_capped(path: &Path, max_bytes: u64) -> Result<String, String> {
     let meta = fs::metadata(path).map_err(|_| "missing".to_string())?;
     if !meta.is_file() {
         return Err("missing".to_string());
     }
-    if meta.len() > PORTFOLIO_MAX_FILE_BYTES {
+    if meta.len() > max_bytes {
         return Err("file too large".to_string());
     }
     fs::read_to_string(path).map_err(|e| format!("unreadable: {}", e))
@@ -2009,6 +2013,607 @@ fn read_portfolio() -> Result<String, String> {
 #[tauri::command]
 fn set_tv_fullscreen(window: tauri::WebviewWindow, enabled: bool) -> Result<(), String> {
     window.set_fullscreen(enabled).map_err(|e| e.to_string())
+}
+
+// ==========================================
+// Tracker (~/project-tracker): read-only, a fixed allowlist of files
+// ==========================================
+
+// tasks.json keeps every task ever seen, so it is allowed to be bigger than a status report.
+const TRACKER_MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
+const TRACKER_DATA_FILES: &[&str] = &[
+    "tasks.json",
+    "email.json",
+    "scan.json",
+    "stripe.json",
+    "bank.json",
+    "payments_email.json",
+];
+const TRACKER_ROOT_FILES: &[&str] = &["projects.json", "notes.json"];
+
+fn get_tracker_dir() -> Result<PathBuf, String> {
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    home.join("project-tracker")
+        .canonicalize()
+        .map_err(|_| "~/project-tracker not found".to_string())
+}
+
+// Only the named files can be read: the data files in ~/project-tracker/data and the two
+// registry files at the root. Anything else (todos.json, accounts.json, ../) is refused, and a
+// symlink that resolves outside its expected directory is refused too.
+fn resolve_tracker_file(root: &Path, name: &str) -> Result<PathBuf, String> {
+    let dir = if TRACKER_DATA_FILES.contains(&name) {
+        root.join("data")
+    } else if TRACKER_ROOT_FILES.contains(&name) {
+        root.to_path_buf()
+    } else {
+        return Err("not an allowed tracker file".to_string());
+    };
+    let resolved = dir.join(name).canonicalize().map_err(|_| "missing".to_string())?;
+    if resolved.parent() != Some(dir.as_path()) {
+        return Err("path is outside ~/project-tracker".to_string());
+    }
+    Ok(resolved)
+}
+
+fn read_tracker_json(root: &Path, name: &str) -> Result<serde_json::Value, String> {
+    let path = resolve_tracker_file(root, name)?;
+    let text = read_text_capped(&path, TRACKER_MAX_FILE_BYTES)?;
+    let value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("malformed: {}", e))?;
+    if !value.is_object() {
+        return Err("malformed: not a JSON object".to_string());
+    }
+    Ok(value)
+}
+
+// Each struct below names only the fields Pulse shows. serde drops everything else
+// (email snippets, task evidence, repo paths, payer names, account ids) before the webview sees it.
+
+#[derive(Deserialize, Serialize)]
+struct TrackerTask {
+    id: String,
+    title: String,
+    #[serde(default)]
+    detail: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    project: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    urgency: Option<String>,
+    status: String,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    first_seen: Option<f64>,
+    #[serde(default)]
+    show_from: Option<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct TrackerEmail {
+    #[serde(default)]
+    account_label: Option<String>,
+    #[serde(default)]
+    sender: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    subject: Option<String>,
+    #[serde(default)]
+    date: Option<String>,
+    #[serde(default)]
+    age_days: Option<f64>,
+    #[serde(default)]
+    project: Option<String>,
+    #[serde(default)]
+    urgency: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+}
+
+#[derive(Serialize)]
+struct TrackerEmailSummary {
+    collected_at: Option<f64>,
+    stale: bool,
+    age_hours: Option<f64>,
+    needs_reply: Vec<TrackerEmail>,
+    replied_count: usize,
+    accounts_not_fetching: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct TrackerRepo {
+    id: String,
+    name: String,
+    exists: bool,
+    is_git: bool,
+    branch: Option<String>,
+    dirty_count: Option<i64>,
+    days_idle: Option<f64>,
+    last_commit_ts: Option<f64>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct TrackerProject {
+    id: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    area: Option<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct TrackerNote {
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    goal: Option<String>,
+    #[serde(default)]
+    next: Option<String>,
+    #[serde(default)]
+    blocked_on: Option<String>,
+}
+
+#[derive(Serialize)]
+struct TrackerSnapshot {
+    error: Option<String>,
+    file_errors: HashMap<String, String>,
+    tasks: Vec<TrackerTask>,
+    tasks_updated_at: Option<f64>,
+    email: Option<TrackerEmailSummary>,
+    repos: Vec<TrackerRepo>,
+    scanned_at: Option<f64>,
+    money: MoneySummary,
+    projects: Vec<TrackerProject>,
+    notes: HashMap<String, TrackerNote>,
+    read_at: String,
+}
+
+// Open and scheduled tasks only; done and stale history stays in the tracker.
+fn tracker_tasks(doc: &serde_json::Value) -> Vec<TrackerTask> {
+    let Some(map) = doc.get("tasks").and_then(|t| t.as_object()) else { return vec![] };
+    map.values()
+        .filter_map(|v| serde_json::from_value::<TrackerTask>(v.clone()).ok())
+        .filter(|t| t.status == "open" || t.status == "scheduled")
+        .collect()
+}
+
+fn tracker_email(doc: &serde_json::Value) -> TrackerEmailSummary {
+    let needs_reply = doc
+        .get("needs_reply")
+        .and_then(|v| v.as_array())
+        .map(|list| list.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect())
+        .unwrap_or_default();
+    let accounts_not_fetching = doc
+        .get("accounts")
+        .and_then(|v| v.as_object())
+        .map(|accts| {
+            accts.iter()
+                .filter(|(_, a)| !a.get("ok").and_then(|v| v.as_bool()).unwrap_or(false))
+                .map(|(id, a)| a.get("label").and_then(|v| v.as_str()).unwrap_or(id).to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    TrackerEmailSummary {
+        collected_at: doc.get("collected_at").and_then(|v| v.as_f64()),
+        stale: doc.get("stale").and_then(|v| v.as_bool()).unwrap_or(true),
+        age_hours: doc.get("age_hours").and_then(|v| v.as_f64()),
+        needs_reply,
+        replied_count: doc.get("replied_to").and_then(|v| v.as_array()).map_or(0, |a| a.len()),
+        accounts_not_fetching,
+    }
+}
+
+fn tracker_repos(doc: &serde_json::Value) -> Vec<TrackerRepo> {
+    let Some(list) = doc.get("projects").and_then(|v| v.as_array()) else { return vec![] };
+    list.iter()
+        .filter_map(|p| {
+            let id = p.get("id")?.as_str()?.to_string();
+            let git = p.get("git");
+            let git_str = |k: &str| git.and_then(|g| g.get(k)).and_then(|v| v.as_str()).map(String::from);
+            Some(TrackerRepo {
+                name: p.get("name").and_then(|v| v.as_str()).unwrap_or(&id).to_string(),
+                id,
+                exists: p.get("exists").and_then(|v| v.as_bool()).unwrap_or(false),
+                is_git: git.and_then(|g| g.get("is_git")).and_then(|v| v.as_bool()).unwrap_or(false),
+                branch: git_str("branch"),
+                dirty_count: git.and_then(|g| g.get("dirty_count")).and_then(|v| v.as_i64()),
+                days_idle: p.get("days_idle").and_then(|v| v.as_f64()),
+                last_commit_ts: git.and_then(|g| g.get("last_commit_ts")).and_then(|v| v.as_f64()),
+            })
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn read_tracker() -> Result<String, String> {
+    let read_at = chrono::Local::now().to_rfc3339();
+    let now = chrono::Local::now().timestamp() as f64;
+    let mut snapshot = TrackerSnapshot {
+        error: None,
+        file_errors: HashMap::new(),
+        tasks: vec![],
+        tasks_updated_at: None,
+        email: None,
+        repos: vec![],
+        scanned_at: None,
+        money: build_money(&serde_json::Value::Null, &serde_json::Value::Null, &serde_json::Value::Null, now),
+        projects: vec![],
+        notes: HashMap::new(),
+        read_at,
+    };
+    let root = match get_tracker_dir() {
+        Ok(root) => root,
+        Err(e) => {
+            snapshot.error = Some(e);
+            return serde_json::to_string(&snapshot).map_err(|e| e.to_string());
+        }
+    };
+
+    let mut read = |name: &str| match read_tracker_json(&root, name) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            snapshot.file_errors.insert(name.to_string(), e);
+            None
+        }
+    };
+    let tasks = read("tasks.json");
+    let email = read("email.json");
+    let scan = read("scan.json");
+    let stripe = read("stripe.json").unwrap_or_default();
+    let bank = read("bank.json").unwrap_or_default();
+    let payments = read("payments_email.json").unwrap_or_default();
+    let projects = read("projects.json");
+    let notes = read("notes.json");
+
+    if let Some(doc) = tasks {
+        snapshot.tasks = tracker_tasks(&doc);
+        snapshot.tasks_updated_at = doc.get("updated_at").and_then(|v| v.as_f64());
+    }
+    snapshot.email = email.as_ref().map(tracker_email);
+    if let Some(doc) = scan {
+        snapshot.repos = tracker_repos(&doc);
+        snapshot.scanned_at = doc.get("generated_at").and_then(|v| v.as_f64());
+    }
+    snapshot.money = build_money(&stripe, &payments, &bank, now);
+    if let Some(list) = projects.as_ref().and_then(|d| d.get("projects")).and_then(|v| v.as_array()) {
+        snapshot.projects = list.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect();
+    }
+    if let Some(map) = notes.as_ref().and_then(|d| d.get("notes")).and_then(|v| v.as_object()) {
+        snapshot.notes = map
+            .iter()
+            .filter_map(|(k, v)| serde_json::from_value(v.clone()).ok().map(|n| (k.clone(), n)))
+            .collect();
+    }
+    serde_json::to_string(&snapshot).map_err(|e| e.to_string())
+}
+
+// ------------------------------------------
+// Money: a port of ~/project-tracker/money.py so Pulse shows the same totals as the brief.
+// The same dollars often arrive three ways (Stripe charge, its payout, the bank deposit), so
+// sightings are matched and only one is counted. Only totals leave this module.
+// ------------------------------------------
+
+const DAY_SECS: f64 = 86400.0;
+const PAYOUT_RAILS: &[&str] = &["stripe", "venmo", "paypal", "square", "cashapp"];
+const FEE_RAILS: &[&str] = &["paypal", "square", "stripe", "venmo", "cashapp"];
+const NOT_INCOME_RAILS: &[&str] = &["transfer", "refund"];
+
+#[derive(Clone, Debug)]
+struct MoneyEvent {
+    id: String,
+    channel: &'static str,
+    source: String,
+    kind: String,
+    amount: f64,
+    net: Option<f64>,
+    currency: String,
+    created: f64,
+    payer: String,
+    project: Option<String>,
+    dup_of: Option<String>,
+    counted: bool,
+}
+
+struct MoneyFlag {
+    kind: &'static str,
+    amount: f64,
+    created: f64,
+}
+
+#[derive(Serialize, Default, Debug, PartialEq)]
+struct MoneyTotals {
+    today: f64,
+    d7: f64,
+    d30: f64,
+}
+
+#[derive(Serialize)]
+struct MoneySource {
+    ok: bool,
+}
+
+#[derive(Serialize)]
+struct MoneySummary {
+    configured: bool,
+    sources: HashMap<String, MoneySource>,
+    totals: MoneyTotals,
+    counts: HashMap<String, usize>,
+    // [tracker project or "unsorted", total] over the window, largest first
+    by_project_d7: Vec<(String, f64)>,
+    by_project_d30: Vec<(String, f64)>,
+    failed_30d: usize,
+    refunds_30d: f64,
+    mrr_total: f64,
+}
+
+fn jstr(v: &serde_json::Value, k: &str) -> String {
+    v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string()
+}
+fn jf64(v: &serde_json::Value, k: &str) -> Option<f64> {
+    v.get(k).and_then(|x| x.as_f64())
+}
+fn jproject(v: &serde_json::Value) -> Option<String> {
+    v.get("project").and_then(|x| x.as_str()).map(String::from)
+}
+fn jlist<'a>(v: &'a serde_json::Value, k: &str) -> impl Iterator<Item = &'a serde_json::Value> {
+    v.get(k).and_then(|x| x.as_array()).into_iter().flatten()
+}
+fn is_ok(v: &serde_json::Value) -> bool {
+    v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn money_event(
+    id: String, channel: &'static str, source: String, kind: &str, amount: f64,
+    net: Option<f64>, currency: String, created: f64, payer: String, project: Option<String>,
+) -> MoneyEvent {
+    MoneyEvent {
+        id, channel, source, kind: kind.to_string(), amount, net, currency, created, payer, project,
+        dup_of: None, counted: false,
+    }
+}
+
+fn money_normalize(stripe: &serde_json::Value, mail: &serde_json::Value, bank: &serde_json::Value) -> (Vec<MoneyEvent>, Vec<MoneyFlag>) {
+    let mut ev = Vec::new();
+    let mut flags = Vec::new();
+    let currency = |v: &serde_json::Value| {
+        let c = jstr(v, "currency");
+        if c.is_empty() { "usd".to_string() } else { c }
+    };
+    if is_ok(stripe) {
+        for c in jlist(stripe, "charges") {
+            let (Some(amount), Some(created)) = (jf64(c, "amount"), jf64(c, "created")) else { continue };
+            ev.push(money_event(jstr(c, "id"), "stripe", "stripe".into(), "payment", amount,
+                jf64(c, "net"), currency(c), created, jstr(c, "payer"), jproject(c)));
+        }
+        for p in jlist(stripe, "payouts") {
+            let Some(amount) = jf64(p, "amount") else { continue };
+            let created = jf64(p, "arrival").or_else(|| jf64(p, "created")).unwrap_or(0.0);
+            let status = jstr(p, "status");
+            if status == "canceled" || status == "failed" {
+                flags.push(MoneyFlag { kind: "payout failed", amount, created });
+                continue;
+            }
+            ev.push(money_event(jstr(p, "id"), "stripe", "stripe".into(), "payout", amount, None,
+                currency(p), created, String::new(), jproject(p)));
+        }
+        for c in jlist(stripe, "failed") {
+            flags.push(MoneyFlag { kind: "failed", amount: jf64(c, "amount").unwrap_or(0.0), created: jf64(c, "created").unwrap_or(0.0) });
+        }
+        for r in jlist(stripe, "refunds") {
+            flags.push(MoneyFlag { kind: "refund", amount: jf64(r, "amount").unwrap_or(0.0), created: jf64(r, "created").unwrap_or(0.0) });
+        }
+    }
+    if is_ok(mail) {
+        for m in jlist(mail, "items") {
+            let (Some(amount), Some(created)) = (jf64(m, "amount"), jf64(m, "created")) else { continue };
+            ev.push(money_event(format!("mail:{}", jstr(m, "id")), "email", jstr(m, "source"),
+                &jstr(m, "kind"), amount, None, "usd".into(), created, jstr(m, "payer"), jproject(m)));
+        }
+    }
+    if is_ok(bank) {
+        for b in jlist(bank, "inflows") {
+            let (Some(amount), Some(created)) = (jf64(b, "amount"), jf64(b, "created")) else { continue };
+            let rail = jstr(b, "rail");
+            ev.push(money_event(format!("bank:{}", jstr(b, "id")), "bank",
+                if rail.is_empty() { "deposit".into() } else { rail }, "deposit", amount, None,
+                currency(b), created, String::new(), jproject(b)));
+        }
+    }
+    ev.sort_by(|a, b| a.created.total_cmp(&b.created));
+    (ev, flags)
+}
+
+fn money_amount_match(primary: &MoneyEvent, secondary: &MoneyEvent, fee_ok: bool) -> bool {
+    let (a, b) = (primary.amount, secondary.amount);
+    (a - b).abs() < 0.011
+        || primary.net.is_some_and(|n| (n - b).abs() < 0.011)
+        || (fee_ok && a * 0.955 - 0.50 <= b && b < a)
+}
+
+fn money_within(primary: &MoneyEvent, secondary: &MoneyEvent, before_days: f64, after_days: f64) -> bool {
+    let d = (secondary.created - primary.created) / DAY_SECS;
+    -before_days <= d && d <= after_days
+}
+
+// Labels duplicates in place. `covered` = sources whose individual payments are already
+// visible. A sighting absorbs at most one duplicate per channel and kind.
+fn money_dedupe(events: &mut [MoneyEvent], covered: &std::collections::HashSet<String>) {
+    let mut used: std::collections::HashSet<(String, &'static str, String)> = Default::default();
+
+    fn find(events: &[MoneyEvent], used: &std::collections::HashSet<(String, &'static str, String)>,
+            e: usize, cands: &[usize], before: f64, after: f64, fee_ok: bool) -> Option<usize> {
+        cands.iter().copied().find(|&p| {
+            p != e
+                && events[p].dup_of.is_none()
+                && !used.contains(&(events[p].id.clone(), events[e].channel, events[e].kind.clone()))
+                && money_amount_match(&events[p], &events[e], fee_ok)
+                && money_within(&events[p], &events[e], before, after)
+        })
+    }
+    fn link(events: &mut [MoneyEvent], used: &mut std::collections::HashSet<(String, &'static str, String)>, dup: usize, prim: usize) {
+        events[dup].dup_of = Some(events[prim].id.clone());
+        used.insert((events[prim].id.clone(), events[dup].channel, events[dup].kind.clone()));
+    }
+
+    let idx = |ch: &str| -> Vec<usize> { (0..events.len()).filter(|&i| events[i].channel == ch).collect() };
+    let (api, mail, bank) = (idx("stripe"), idx("email"), idx("bank"));
+
+    // 1. Stripe emails vs the Stripe API (same object seen twice).
+    for &e in &mail {
+        if events[e].source == "stripe" {
+            let cands: Vec<usize> = api.iter().copied().filter(|&a| events[a].kind == events[e].kind).collect();
+            if let Some(p) = find(events, &used, e, &cands, 3.0, 3.0, false) {
+                link(events, &mut used, e, p);
+            }
+        }
+    }
+    // 2. The same notification in two inboxes / two alerts for one Zelle.
+    for (i, &e) in mail.iter().enumerate() {
+        if events[e].dup_of.is_some() {
+            continue;
+        }
+        for &p in &mail[..i] {
+            let (pe, ee) = (&events[p], &events[e]);
+            let zelle_bank = |s: &str| s == "zelle" || s == "bank";
+            if pe.dup_of.is_none()
+                && pe.kind == ee.kind
+                && (pe.amount - ee.amount).abs() < 0.011
+                && (pe.created - ee.created).abs() < 2.0 * DAY_SECS
+                && ((zelle_bank(&pe.source) && zelle_bank(&ee.source)) || pe.source == ee.source)
+                && (pe.payer.is_empty() || ee.payer.is_empty() || pe.payer.to_lowercase() == ee.payer.to_lowercase())
+            {
+                link(events, &mut used, e, p);
+                break;
+            }
+        }
+    }
+    let payouts: Vec<usize> = api.iter().chain(&mail).copied()
+        .filter(|&i| events[i].kind == "payout" && events[i].dup_of.is_none()).collect();
+    // A bank's email about a platform deposit is a bank line that arrived by email.
+    let landed: Vec<usize> = mail.iter().copied()
+        .filter(|&i| events[i].kind == "deposit" && PAYOUT_RAILS.contains(&events[i].source.as_str()) && events[i].dup_of.is_none())
+        .collect();
+    let payments: Vec<usize> = mail.iter().copied()
+        .filter(|&i| (events[i].kind == "payment" || events[i].kind == "deposit") && events[i].dup_of.is_none() && !landed.contains(&i))
+        .collect();
+    for e in landed.iter().chain(&bank).copied() {
+        let src = events[e].source.clone();
+        // 3. Bank line for a platform payout (arrives 0-5 days after).
+        let rail_payouts: Vec<usize> = payouts.iter().copied()
+            .filter(|&p| events[p].source == src || src == "ach" || src == "deposit").collect();
+        if let Some(p) = find(events, &used, e, &rail_payouts, 1.0, 5.0, false) {
+            link(events, &mut used, e, p);
+            continue;
+        }
+        // 4. Bank line for an emailed payment (Zelle alert, bank deposit alert, PayPal...).
+        let cands: Vec<usize> = payments.iter().copied()
+            .filter(|&p| {
+                let ps = events[p].source.as_str();
+                ps == src || (["zelle", "bank", "quickbooks"].contains(&ps) && ["zelle", "ach", "deposit", "check"].contains(&src.as_str()))
+            })
+            .collect();
+        if let Some(p) = find(events, &used, e, &cands, 1.0, 4.0, FEE_RAILS.contains(&src.as_str())) {
+            link(events, &mut used, e, p);
+            continue;
+        }
+        // 5. A Stripe charge paid out alone (no payout data): bank = net of fee.
+        if src == "stripe" {
+            let charges: Vec<usize> = api.iter().copied().filter(|&a| events[a].kind == "payment").collect();
+            if let Some(p) = find(events, &used, e, &charges, 0.0, 7.0, true) {
+                link(events, &mut used, e, p);
+                continue;
+            }
+        }
+        // 6. A platform cash-out whose individual payments are already counted.
+        if PAYOUT_RAILS.contains(&src.as_str()) && covered.contains(&src) {
+            events[e].dup_of = Some("source".to_string());
+        }
+    }
+}
+
+fn money_classify(events: &mut [MoneyEvent], covered: &std::collections::HashSet<String>) {
+    for e in events.iter_mut().filter(|e| e.dup_of.is_none()) {
+        e.counted = if e.kind == "payout" && covered.contains(&e.source) {
+            false
+        } else if e.kind == "payout" && e.currency == "usd" {
+            true // the payout is the only record of that income
+        } else if e.channel == "bank" && NOT_INCOME_RAILS.contains(&e.source.as_str()) {
+            false
+        } else {
+            e.currency == "usd"
+        };
+    }
+}
+
+fn round_cents(v: f64) -> f64 {
+    // + 0.0 turns the -0.0 of an empty f64 sum into 0.0
+    (v * 100.0).round() / 100.0 + 0.0
+}
+
+fn build_money(stripe: &serde_json::Value, mail: &serde_json::Value, bank: &serde_json::Value, now: f64) -> MoneySummary {
+    let (mut events, flags) = money_normalize(stripe, mail, bank);
+    let mut covered = std::collections::HashSet::new();
+    if is_ok(stripe) {
+        covered.insert("stripe".to_string());
+    }
+    if is_ok(mail) {
+        covered.extend(events.iter().filter(|e| e.channel == "email" && e.kind == "payment").map(|e| e.source.clone()));
+    }
+    money_dedupe(&mut events, &covered);
+    money_classify(&mut events, &covered);
+
+    let midnight = chrono::DateTime::from_timestamp(now as i64, 0)
+        .map(|t| t.with_timezone(&chrono::Local).date_naive())
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .and_then(|d| d.and_local_timezone(chrono::Local).earliest())
+        .map_or(now - DAY_SECS, |t| t.timestamp() as f64);
+    let (d7, d30) = (now - 7.0 * DAY_SECS, now - 30.0 * DAY_SECS);
+    let counted: Vec<&MoneyEvent> = events.iter().filter(|e| e.counted).collect();
+    let sum_since = |s: f64| round_cents(counted.iter().filter(|e| e.created >= s).map(|e| e.amount).sum());
+    let count_since = |s: f64| counted.iter().filter(|e| e.created >= s).count();
+    let by_project = |s: f64| {
+        let mut m: HashMap<String, f64> = HashMap::new();
+        for e in counted.iter().filter(|e| e.created >= s) {
+            *m.entry(e.project.clone().unwrap_or_else(|| "unsorted".into())).or_default() += e.amount;
+        }
+        let mut v: Vec<(String, f64)> = m.into_iter().map(|(k, a)| (k, round_cents(a))).collect();
+        v.sort_by(|a, b| b.1.total_cmp(&a.1));
+        v
+    };
+    let recent_flags: Vec<&MoneyFlag> = flags.iter().filter(|f| f.created >= d30).collect();
+    let mrr_total = if is_ok(stripe) {
+        stripe.get("subscriptions").and_then(|s| s.as_object()).map_or(0.0, |subs| {
+            subs.values()
+                .filter(|s| s.get("active").and_then(|v| v.as_f64()).unwrap_or(0.0) > 0.0)
+                .map(|s| s.get("mrr").and_then(|v| v.as_f64()).unwrap_or(0.0))
+                .sum()
+        })
+    } else {
+        0.0
+    };
+    let sources: HashMap<String, MoneySource> = [("stripe", stripe), ("email", mail), ("bank", bank)]
+        .into_iter()
+        .map(|(k, d)| (k.to_string(), MoneySource { ok: is_ok(d) }))
+        .collect();
+
+    MoneySummary {
+        configured: sources.values().any(|s| s.ok),
+        sources,
+        totals: MoneyTotals { today: sum_since(midnight), d7: sum_since(d7), d30: sum_since(d30) },
+        counts: [("today", count_since(midnight)), ("d7", count_since(d7)), ("d30", count_since(d30))]
+            .into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+        by_project_d7: by_project(d7),
+        by_project_d30: by_project(d30),
+        failed_30d: recent_flags.iter().filter(|f| f.kind == "failed").count(),
+        refunds_30d: round_cents(recent_flags.iter().filter(|f| f.kind == "refund").map(|f| f.amount).sum()),
+        mrr_total: round_cents(mrr_total),
+    }
 }
 
 // ==========================================
@@ -2150,7 +2755,8 @@ pub fn run() {
             get_auto_launch_enabled,
             set_auto_launch_enabled,
             read_portfolio,
-            set_tv_fullscreen
+            set_tv_fullscreen,
+            read_tracker
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -2189,5 +2795,118 @@ mod portfolio_tests {
         fs::write(&path, r#"{"entity":"acme","health":"green"}"#).unwrap();
         assert_eq!(read_portfolio_json(&resolved).unwrap()["health"], "green");
         let _ = fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod tracker_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn temp_root(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("pulse-tracker-test-{}-{}", name, std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("data")).unwrap();
+        dir.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn reads_only_allowlisted_files() {
+        let root = temp_root("allow");
+        fs::write(root.join("data/tasks.json"), r#"{"tasks":{}}"#).unwrap();
+        fs::write(root.join("notes.json"), r#"{"notes":{}}"#).unwrap();
+        fs::write(root.join("todos.json"), "[]").unwrap();
+        fs::write(root.join("accounts.json"), "{}").unwrap();
+        fs::write(root.join("data/accounts.json"), "{}").unwrap();
+
+        assert!(resolve_tracker_file(&root, "tasks.json").is_ok());
+        assert!(resolve_tracker_file(&root, "notes.json").is_ok());
+        assert_eq!(resolve_tracker_file(&root, "email.json").unwrap_err(), "missing");
+        for name in ["todos.json", "accounts.json", "../tasks.json", "data/tasks.json", "/etc/passwd", ""] {
+            assert_eq!(resolve_tracker_file(&root, name).unwrap_err(), "not an allowed tracker file", "{}", name);
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rejects_symlinks_that_escape() {
+        let root = temp_root("symlink");
+        let outside = temp_root("symlink-outside");
+        fs::write(outside.join("secret.json"), r#"{"token":"x"}"#).unwrap();
+        std::os::unix::fs::symlink(outside.join("secret.json"), root.join("data/email.json")).unwrap();
+        // A data file pointing at the root-level copy is outside data/ too.
+        fs::write(root.join("scan.json"), "{}").unwrap();
+        std::os::unix::fs::symlink(root.join("scan.json"), root.join("data/scan.json")).unwrap();
+
+        assert_eq!(resolve_tracker_file(&root, "email.json").unwrap_err(), "path is outside ~/project-tracker");
+        assert_eq!(resolve_tracker_file(&root, "scan.json").unwrap_err(), "path is outside ~/project-tracker");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn drops_closed_tasks_and_email_bodies() {
+        let tasks = json!({"tasks": {
+            "a": {"id": "a", "title": "Decide: price", "status": "open", "urgency": "now", "evidence": {"type": "manual"}},
+            "b": {"id": "b", "title": "Old", "status": "done"},
+            "c": {"id": "c", "title": "Later", "status": "scheduled", "show_from": "2026-11-06"},
+            "d": {"id": "d", "title": "Gone", "status": "stale"}
+        }});
+        let out = serde_json::to_value(tracker_tasks(&tasks)).unwrap();
+        let ids: Vec<&str> = out.as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["a", "c"]);
+        assert!(out[0].get("evidence").is_none());
+
+        let email = json!({"stale": false, "replied_to": ["x@y.z"], "accounts": {"v": {"label": "Acme", "ok": false}},
+            "needs_reply": [{"subject": "Hi", "sender": "a@b.c", "snippet": "private body", "message_id": "m"}]});
+        let out = serde_json::to_value(tracker_email(&email)).unwrap();
+        assert_eq!(out["needs_reply"][0]["subject"], "Hi");
+        assert!(out["needs_reply"][0].get("snippet").is_none());
+        assert!(out["needs_reply"][0].get("message_id").is_none());
+        assert_eq!(out["replied_count"], 1);
+        assert_eq!(out["accounts_not_fetching"][0], "Acme");
+    }
+
+    // Same fixture as `python3 money.py --test`, so both report identical totals.
+    #[test]
+    fn money_matches_python_fixture() {
+        use chrono::TimeZone;
+        let now = chrono::Local.with_ymd_and_hms(2026, 10, 25, 15, 0, 0).unwrap().timestamp() as f64;
+        let t = |days_ago: f64| now - days_ago * DAY_SECS;
+        let stripe = json!({"ok": true, "collected_at": now, "accounts": {"northwind": {"ok": true}},
+            "charges": [
+                {"id": "ch_a", "amount": 120.0, "fee": 3.78, "net": 116.22, "created": t(6.0), "project": "northwind", "payer": "Ana", "currency": "usd"},
+                {"id": "ch_b", "amount": 1000.0, "fee": null, "net": null, "created": t(0.0), "project": "northwind", "payer": "Ben", "currency": "usd"}],
+            "payouts": [{"id": "po_a", "amount": 116.22, "status": "paid", "created": t(6.0), "arrival": t(4.0), "project": "northwind"}],
+            "failed": [{"id": "ch_f", "amount": 50.0, "created": t(2.0), "project": "northwind"}],
+            "refunds": [{"id": "re_1", "amount": 20.0, "created": t(1.0), "project": "northwind"}],
+            "subscriptions": {"northwind": {"active": 3, "mrr": 40.0}}});
+        let mail = json!({"ok": true, "collected_at": now, "items": [
+            {"id": "m1", "source": "stripe", "kind": "payout", "amount": 116.22, "created": t(5.0), "payer": "", "project": "northwind"},
+            {"id": "m2", "source": "zelle", "kind": "payment", "amount": 350.0, "created": t(3.0), "payer": "CARLA", "project": null},
+            {"id": "m3", "source": "venmo", "kind": "payment", "amount": 25.0, "created": t(10.0), "payer": "Dee", "project": null},
+            {"id": "m2b", "source": "zelle", "kind": "payment", "amount": 350.0, "created": t(3.0) + 60.0, "payer": "CARLA", "project": null},
+            {"id": "m4", "source": "paypal", "kind": "payment", "amount": 200.0, "created": t(8.0), "payer": "Eve", "project": "acme"},
+            {"id": "m5", "source": "stripe", "kind": "deposit", "amount": 116.22, "created": t(3.0) + 300.0, "payer": "", "project": "northwind"}]});
+        let bank = json!({"ok": true, "collected_at": now, "inflows": [
+            {"id": "b1", "amount": 116.22, "rail": "stripe", "created": t(3.0), "project": "northwind"},
+            {"id": "b2", "amount": 350.0, "rail": "zelle", "created": t(2.0)},
+            {"id": "b3", "amount": 500.0, "rail": "transfer", "created": t(1.0)},
+            {"id": "b4", "amount": 80.0, "rail": "check", "created": t(1.0)},
+            {"id": "b5", "amount": 25.0, "rail": "venmo", "created": t(9.0)},
+            {"id": "b6", "amount": 193.90, "rail": "paypal", "created": t(7.0)}]});
+
+        let m = build_money(&stripe, &mail, &bank, now);
+        assert_eq!(m.totals, MoneyTotals { today: 1000.0, d7: 1550.0, d30: 1775.0 });
+        assert!(m.by_project_d30.contains(&("northwind".to_string(), 1120.0)));
+        assert_eq!((m.failed_30d, m.refunds_30d, m.mrr_total), (1, 20.0, 40.0));
+
+        let off = json!({"ok": false, "reason": "not configured"});
+        let no_api = build_money(&off, &json!({"ok": true, "items": [mail["items"][0]]}), &json!({"ok": false}), now);
+        assert_eq!(no_api.totals.d30, 116.22);
+
+        let empty = build_money(&off, &json!({}), &off, now);
+        assert!(!empty.configured);
+        assert_eq!(empty.totals.d30, 0.0);
     }
 }
