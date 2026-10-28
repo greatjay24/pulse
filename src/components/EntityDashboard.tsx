@@ -1,7 +1,9 @@
-import { ReactNode } from 'react';
+import { ReactNode, useState } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { orderedLanes, titleCase } from '../utils/portfolio';
+import { EntityTracker, formatUsd } from '../utils/tracker';
 import { AgeLabel, BoardEntity, HealthDot, SectionLabel, StageBadge } from './OrgBoard';
+import { RepoRow, ReplyRow, RowList, TaskRow } from './TrackerRows';
 
 const TREND_ARROW: Record<string, string> = { up: '↑', down: '↓', flat: '→' };
 
@@ -28,14 +30,100 @@ function Empty({ children }: { children: ReactNode }) {
   return <div style={{ fontSize: '13px', color: tokens.colors.textDim }}>{children}</div>;
 }
 
+const TASKS_SHOWN = 12;
+
+// The tracker's view of this entity: tasks, replies, repos and money. Read-only.
+function TrackerSections({ tracker, moneyConnected }: { tracker: EntityTracker; moneyConnected: boolean }) {
+  const { tokens } = useTheme();
+  const [showAll, setShowAll] = useState(false);
+  const now = Date.now();
+  const { tasks, scheduled, replies, repos, money } = tracker;
+  const shown = showAll ? tasks : tasks.slice(0, TASKS_SHOWN);
+
+  return (
+    <>
+      <div>
+        <SectionLabel>Your tasks ({tasks.length})</SectionLabel>
+        {tasks.length === 0 ? (
+          <Empty>No open tasks in the tracker.</Empty>
+        ) : (
+          <RowList>
+            {shown.map((t) => <TaskRow key={t.id} task={t} now={now} />)}
+            {tasks.length > TASKS_SHOWN && (
+              <button
+                className="btn btn-secondary"
+                onClick={() => setShowAll(!showAll)}
+                style={{ alignSelf: 'flex-start', margin: '6px 10px 8px' }}
+              >
+                {showAll ? 'Show fewer' : `Show all ${tasks.length}`}
+              </button>
+            )}
+          </RowList>
+        )}
+        {scheduled.length > 0 && (
+          <div style={{ marginTop: '12px' }}>
+            <div style={{ fontSize: '12px', color: tokens.colors.textDim, margin: '0 0 6px 2px' }}>Scheduled ({scheduled.length})</div>
+            <RowList>
+              {scheduled.map((t) => <TaskRow key={t.id} task={t} now={now} />)}
+            </RowList>
+          </div>
+        )}
+      </div>
+
+      <div>
+        <SectionLabel>Needs a reply ({replies.length})</SectionLabel>
+        {replies.length === 0 ? (
+          <Empty>Nobody waiting on a reply.</Empty>
+        ) : (
+          <RowList>
+            {replies.map((e, idx) => <ReplyRow key={idx} email={e} />)}
+          </RowList>
+        )}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(220px, 1fr)', gap: '24px', alignItems: 'start' }}>
+        <div style={{ minWidth: 0 }}>
+          <SectionLabel>Repos ({repos.length})</SectionLabel>
+          {repos.length === 0 ? (
+            <Empty>No repos tracked for this entity.</Empty>
+          ) : (
+            <RowList>
+              {repos.map(({ repo, note }) => <RepoRow key={repo.id} repo={repo} note={note} />)}
+            </RowList>
+          )}
+        </div>
+        <div>
+          <SectionLabel>Money in</SectionLabel>
+          {money ? (
+            <Panel>
+              <div style={{ display: 'flex', gap: '24px' }}>
+                {([['7 days', money.d7], ['30 days', money.d30]] as const).map(([label, v]) => (
+                  <div key={label}>
+                    <div style={{ fontFamily: tokens.fonts.mono, fontSize: '20px', fontWeight: 600 }}>{formatUsd(v)}</div>
+                    <div style={{ fontSize: '12px', color: tokens.colors.textMuted, marginTop: '4px' }}>{label}</div>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          ) : (
+            <Empty>{moneyConnected ? 'No money attributed here in the last 30 days.' : 'Money is not connected in the tracker.'}</Empty>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
 interface EntityDashboardProps {
   item: BoardEntity;
+  moneyConnected: boolean;
   onBack: () => void;
 }
 
-export function EntityDashboard({ item, onBack }: EntityDashboardProps) {
+export function EntityDashboard({ item, moneyConnected, onBack }: EntityDashboardProps) {
   const { tokens } = useTheme();
-  const { entity, status, error } = item;
+  const { entity, status, error, tracker } = item;
+  const trackerSections = tracker && <TrackerSections tracker={tracker} moneyConnected={moneyConnected} />;
   const now = Date.now();
   const severityColor = (s: string | undefined) =>
     s === 'high' ? tokens.colors.danger : s === 'medium' ? tokens.colors.warning : tokens.colors.textDim;
@@ -48,18 +136,21 @@ export function EntityDashboard({ item, onBack }: EntityDashboardProps) {
 
   if (!status) {
     return (
-      <div>
-        {backButton}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
-          <HealthDot health={undefined} size={12} />
-          <h1 style={{ fontSize: '28px', fontWeight: 600, letterSpacing: '-0.02em' }}>{entity.name}</h1>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
+        <div>
+          {backButton}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+            <HealthDot health={undefined} size={12} />
+            <h1 style={{ fontSize: '28px', fontWeight: 600, letterSpacing: '-0.02em' }}>{entity.name}</h1>
+          </div>
+          <p style={{ fontSize: '15px', color: tokens.colors.textMuted }}>No report yet.</p>
+          <p style={{ fontSize: '13px', color: tokens.colors.textDim, marginTop: '8px' }}>
+            Pulse looks for ~/portfolio/{entity.path}/status.json
+            {error && error !== 'missing' ? ` (${error})` : ''}.
+            {entity.lead ? ` ${entity.lead} writes it at the end of each session.` : ''}
+          </p>
         </div>
-        <p style={{ fontSize: '15px', color: tokens.colors.textMuted }}>No report yet.</p>
-        <p style={{ fontSize: '13px', color: tokens.colors.textDim, marginTop: '8px' }}>
-          Pulse looks for ~/portfolio/{entity.path}/status.json
-          {error && error !== 'missing' ? ` (${error})` : ''}.
-          {entity.lead ? ` ${entity.lead} writes it at the end of each session.` : ''}
-        </p>
+        {trackerSections}
       </div>
     );
   }
@@ -167,6 +258,8 @@ export function EntityDashboard({ item, onBack }: EntityDashboardProps) {
           </div>
         )}
       </div>
+
+      {trackerSections}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '24px', alignItems: 'start' }}>
         <div>

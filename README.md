@@ -45,6 +45,23 @@ and `WEEK.md` through a read-only Rust command scoped to `~/portfolio`. No netwo
 
 The SaaS metrics views (Overview, Analytics, Calendar, Projects) are still in the sidebar.
 
+### Tracker
+
+The board also reads the owner's project tracker (`~/project-tracker`) through a second
+read-only command, `read_tracker`. It can open only a fixed list of files:
+`data/tasks.json`, `email.json`, `scan.json`, `stripe.json`, `bank.json`,
+`payments_email.json`, plus `projects.json` and `notes.json`. Tracker projects roll up
+into entities through `tracker_projects` in `~/portfolio/portfolio.json`.
+
+- **Today** (sidebar, or click the Today card): tasks due now, every open gate item
+  ("Decide: …"), report decisions and emails needing a reply, grouped by entity.
+- **Cards** show open task and needs-reply counts.
+- **Entity dashboard** adds Your tasks (gate items first), Needs a reply (subject and
+  sender only), Repos (branch, uncommitted, days idle) and Money in.
+- Money totals use the same de-duplication as the tracker's `money.py`; only totals
+  reach the UI. Email bodies, payer names and account details never leave Rust.
+- Tasks are read-only. Links open in the default browser.
+
 ## Installation
 
 ### Download

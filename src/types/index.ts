@@ -599,6 +599,7 @@ export interface PortfolioEntity {
   path: string;
   lead?: string;
   schedule?: string;
+  tracker_projects?: string[]; // ~/project-tracker project ids that roll up into this entity
 }
 
 export interface PortfolioRegistry {
@@ -655,5 +656,90 @@ export interface PortfolioSnapshot {
   registry_error: string | null;
   entities: PortfolioEntityReport[];
   week: string | null;
+  read_at: string;
+}
+
+// ==========================================
+// Tracker (~/project-tracker): what the Rust `read_tracker` command passes through
+// ==========================================
+
+export type Urgency = 'now' | 'soon' | 'whenever';
+
+export interface TrackerTask {
+  id: string;
+  title: string;
+  detail: string | null;
+  url: string | null;
+  project: string | null;
+  kind: string | null;
+  urgency: Urgency | null;
+  status: 'open' | 'scheduled';
+  source: string | null; // manual | email | github | git
+  first_seen: number | null; // unix seconds
+  show_from: string | null;
+}
+
+export interface TrackerEmail {
+  account_label: string | null;
+  sender: string | null;
+  name: string | null;
+  subject: string | null;
+  date: string | null;
+  age_days: number | null;
+  project: string | null;
+  urgency: Urgency | null;
+  url: string | null;
+}
+
+export interface TrackerEmailSummary {
+  collected_at: number | null;
+  stale: boolean;
+  age_hours: number | null;
+  needs_reply: TrackerEmail[];
+  replied_count: number;
+  accounts_not_fetching: string[];
+}
+
+export interface TrackerRepo {
+  id: string;
+  name: string;
+  exists: boolean;
+  is_git: boolean;
+  branch: string | null;
+  dirty_count: number | null;
+  days_idle: number | null;
+  last_commit_ts: number | null;
+}
+
+export interface TrackerMoney {
+  configured: boolean;
+  sources: Record<'stripe' | 'email' | 'bank', { ok: boolean }>;
+  totals: { today: number; d7: number; d30: number };
+  counts: { today: number; d7: number; d30: number };
+  by_project_d7: [string, number][];
+  by_project_d30: [string, number][];
+  failed_30d: number;
+  refunds_30d: number;
+  mrr_total: number;
+}
+
+export interface TrackerNote {
+  status: string | null;
+  goal: string | null;
+  next: string | null;
+  blocked_on: string | null;
+}
+
+export interface TrackerSnapshot {
+  error: string | null; // ~/project-tracker missing
+  file_errors: Record<string, string>;
+  tasks: TrackerTask[];
+  tasks_updated_at: number | null;
+  email: TrackerEmailSummary | null;
+  repos: TrackerRepo[];
+  scanned_at: number | null;
+  money: TrackerMoney;
+  projects: { id: string; name: string | null; area: string | null }[];
+  notes: Record<string, TrackerNote>;
   read_at: string;
 }

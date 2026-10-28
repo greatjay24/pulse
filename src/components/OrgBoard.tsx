@@ -1,6 +1,6 @@
 import { CSSProperties, ReactNode } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
-import { EntityStatus, Health, PortfolioEntity, PortfolioSnapshot } from '../types';
+import { EntityStatus, Health, PortfolioEntity, PortfolioSnapshot, TrackerSnapshot } from '../types';
 import {
   decisionCount,
   firstWeekSection,
@@ -10,23 +10,27 @@ import {
   isStale,
   plainMarkdownLine,
 } from '../utils/portfolio';
+import { EntityTracker, dueNow, entityTracker, formatUsd, openTaskList, projectOwners } from '../utils/tracker';
 import { Icon } from './Icons';
 
 export interface BoardEntity {
   entity: PortfolioEntity;
   status: EntityStatus | null;
   error: string | null;
+  tracker: EntityTracker | null; // null until ~/project-tracker has been read
 }
 
-// Joins the registry with each entity's report, keeping registry order.
-export function boardEntities(snapshot: PortfolioSnapshot | null): BoardEntity[] {
+// Joins the registry with each entity's report and its slice of the tracker, keeping registry order.
+export function boardEntities(snapshot: PortfolioSnapshot | null, tracker: TrackerSnapshot | null): BoardEntity[] {
   if (!snapshot?.registry) return [];
+  const owners = projectOwners(snapshot.registry.entities);
   return snapshot.registry.entities.map((entity) => {
     const report = snapshot.entities.find((r) => r.id === entity.id);
     return {
       entity,
       status: report?.status ?? null,
       error: report ? report.error : 'missing',
+      tracker: tracker && !tracker.error ? entityTracker(entity.id, tracker, owners) : null,
     };
   });
 }
@@ -101,9 +105,34 @@ export function AgeLabel({ updated, now }: { updated: string | undefined; now: n
   );
 }
 
+// Open tasks and replies for a card, from the tracker. Quiet when there is nothing.
+function TrackerCounts({ tracker }: { tracker: EntityTracker }) {
+  const { tokens } = useTheme();
+  const now = dueNow(tracker.tasks).length;
+  const replies = tracker.replies.length;
+  if (tracker.tasks.length === 0 && replies === 0) return null;
+  return (
+    <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', fontSize: '12px', color: tokens.colors.textMuted }}>
+      {tracker.tasks.length > 0 && (
+        <span>
+          <span style={{ fontFamily: tokens.fonts.mono, fontWeight: 600, color: tokens.colors.text }}>{tracker.tasks.length}</span>{' '}
+          open {tracker.tasks.length === 1 ? 'task' : 'tasks'}
+          {now > 0 && <span style={{ color: tokens.colors.danger }}> · {now} now</span>}
+        </span>
+      )}
+      {replies > 0 && (
+        <span>
+          <span style={{ fontFamily: tokens.fonts.mono, fontWeight: 600, color: tokens.colors.text }}>{replies}</span>{' '}
+          {replies === 1 ? 'needs a reply' : 'need a reply'}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function EntityCard({ item, now, onOpen }: { item: BoardEntity; now: number; onOpen: () => void }) {
   const { tokens } = useTheme();
-  const { entity, status, error } = item;
+  const { entity, status, error, tracker } = item;
   const decisions = decisionCount(status);
   const metrics = (status?.metrics ?? []).slice(0, 3);
 
@@ -190,21 +219,84 @@ function EntityCard({ item, now, onOpen }: { item: BoardEntity; now: number; onO
             </div>
           )}
 
+          {tracker && <TrackerCounts tracker={tracker} />}
           <AgeLabel updated={status.updated} now={now} />
         </>
       ) : (
-        <div style={{ fontSize: '13px', color: tokens.colors.textDim }}>
-          No report yet
-          {error && error !== 'missing' && (
-            <span style={{ color: tokens.colors.warning }}> · status.json could not be read</span>
-          )}
-        </div>
+        <>
+          <div style={{ fontSize: '13px', color: tokens.colors.textDim }}>
+            No report yet
+            {error && error !== 'missing' && (
+              <span style={{ color: tokens.colors.warning }}> · status.json could not be read</span>
+            )}
+          </div>
+          {tracker && <TrackerCounts tracker={tracker} />}
+        </>
       )}
     </button>
   );
 }
 
-function TopStrip({ items, week }: { items: BoardEntity[]; week: string | null }) {
+// Board summary of the tracker: what is due now, who is waiting on a reply, money in.
+function TodayCard({ tracker, onOpen }: { tracker: TrackerSnapshot; onOpen: () => void }) {
+  const { tokens } = useTheme();
+  const now = dueNow(openTaskList(tracker)).length;
+  const replies = tracker.email?.needs_reply ?? [];
+  const urgentReplies = replies.filter((e) => e.urgency === 'now').length;
+  const money = tracker.money;
+  const stat = (value: number, label: string, sub?: string) => (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
+        <span style={{ fontFamily: tokens.fonts.mono, fontSize: '40px', fontWeight: 600, letterSpacing: '-0.02em' }}>{value}</span>
+        <span style={{ fontSize: '14px', color: tokens.colors.textMuted }}>{label}</span>
+      </div>
+      {sub && <div style={{ fontSize: '12px', color: tokens.colors.textDim, marginTop: '2px' }}>{sub}</div>}
+    </div>
+  );
+  return (
+    <button
+      onClick={onOpen}
+      title="Open the Today view"
+      onMouseEnter={(e) => (e.currentTarget.style.borderColor = tokens.colors.borderHover)}
+      onMouseLeave={(e) => (e.currentTarget.style.borderColor = tokens.colors.border)}
+      style={{
+        padding: '20px 24px',
+        background: tokens.colors.bgCard,
+        border: `1px solid ${tokens.colors.border}`,
+        borderRadius: tokens.radius.lg,
+        textAlign: 'left',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        color: tokens.colors.text,
+        transition: 'border-color 0.15s ease',
+      }}
+    >
+      <SectionLabel>Today</SectionLabel>
+      <div style={{ display: 'flex', gap: '28px', flexWrap: 'wrap' }}>
+        {stat(now, 'due now')}
+        {stat(replies.length, replies.length === 1 ? 'reply' : 'replies', urgentReplies ? `${urgentReplies} urgent` : undefined)}
+      </div>
+      <div style={{ fontSize: '12px', color: tokens.colors.textMuted, marginTop: '12px' }}>
+        {money.configured ? (
+          <>
+            Money in{' '}
+            <span style={{ fontFamily: tokens.fonts.mono, color: tokens.colors.text }}>{formatUsd(money.totals.d7)}</span> 7d ·{' '}
+            <span style={{ fontFamily: tokens.fonts.mono, color: tokens.colors.text }}>{formatUsd(money.totals.d30)}</span> 30d
+          </>
+        ) : (
+          <span style={{ color: tokens.colors.textDim }}>Money not connected</span>
+        )}
+      </div>
+    </button>
+  );
+}
+
+function TopStrip({ items, week, tracker, onOpenToday }: {
+  items: BoardEntity[];
+  week: string | null;
+  tracker: TrackerSnapshot | null;
+  onOpenToday: () => void;
+}) {
   const { tokens } = useTheme();
   const total = items.reduce((sum, i) => sum + decisionCount(i.status), 0);
   const byGate = new Map<string, number>();
@@ -248,6 +340,8 @@ function TopStrip({ items, week }: { items: BoardEntity[]; week: string | null }
           </div>
         )}
       </div>
+
+      {tracker && !tracker.error && <TodayCard tracker={tracker} onOpen={onOpenToday} />}
 
       <div
         style={{
@@ -299,17 +393,21 @@ function TopStrip({ items, week }: { items: BoardEntity[]; week: string | null }
 
 interface OrgBoardProps {
   snapshot: PortfolioSnapshot | null;
+  tracker: TrackerSnapshot | null;
   error: string | null;
+  trackerError: string | null;
+  onOpenToday: () => void;
   onOpenEntity: (id: string) => void;
   onRefresh: () => void;
   tvMode: boolean;
   onToggleTv: () => void;
 }
 
-export function OrgBoard({ snapshot, error, onOpenEntity, onRefresh, tvMode, onToggleTv }: OrgBoardProps) {
+export function OrgBoard({ snapshot, tracker, error, trackerError, onOpenToday, onOpenEntity, onRefresh, tvMode, onToggleTv }: OrgBoardProps) {
   const { tokens } = useTheme();
   const now = Date.now();
-  const items = boardEntities(snapshot);
+  const items = boardEntities(snapshot, tracker);
+  const trackerProblem = trackerError ?? tracker?.error ?? null;
   const groups = snapshot?.registry?.groups ?? [];
   const readAt = snapshot ? new Date(snapshot.read_at) : null;
 
@@ -357,10 +455,15 @@ export function OrgBoard({ snapshot, error, onOpenEntity, onRefresh, tvMode, onT
           Could not read ~/portfolio/portfolio.json ({snapshot.registry_error}).
         </div>
       )}
+      {trackerProblem && (
+        <div style={{ padding: '16px 20px', borderRadius: tokens.radius.md, background: tokens.colors.warningMuted, color: tokens.colors.warning, fontSize: '13px', marginBottom: '24px' }}>
+          Tracker not shown: {trackerProblem}
+        </div>
+      )}
 
       {snapshot?.registry && (
         <>
-          <TopStrip items={items} week={snapshot.week} />
+          <TopStrip items={items} week={snapshot.week} tracker={tracker} onOpenToday={onOpenToday} />
 
           <div
             style={{
