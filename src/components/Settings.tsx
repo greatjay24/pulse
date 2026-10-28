@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { useTheme, fontOptions, ThemeMode, FontChoice } from '../contexts/ThemeContext';
+import { useTheme, fontOptions, presets, PresetId, ThemeMode, FontChoice } from '../contexts/ThemeContext';
 import { App, IntegrationType, PROJECT_COLORS, GoogleCalendarConfig } from '../types';
 import { Icon } from './Icons';
 
@@ -54,7 +54,7 @@ const INTEGRATION_LABELS: Partial<Record<IntegrationType, string>> = {
 };
 
 export function Settings({ apps, onSave, onClose, inline = false }: SettingsProps) {
-  const { tokens, themeMode, setThemeMode, fontChoice, setFontChoice } = useTheme();
+  const { tokens, themeMode, setThemeMode, fontChoice, setFontChoice, preset, setPreset, customAccent, setCustomAccent, resolvedTheme } = useTheme();
   const [editedApps, setEditedApps] = useState<App[]>(apps);
   const [activeAppId, setActiveAppId] = useState<string | null>(apps[0]?.id || null);
   const [activeTab, setActiveTab] = useState<'appearance' | 'apps'>('appearance');
@@ -373,7 +373,7 @@ export function Settings({ apps, onSave, onClose, inline = false }: SettingsProp
         <div style={{ flex: 1, padding: '24px 32px' }}>
           {/* Appearance Tab */}
           {activeTab === 'appearance' && (
-            <div style={{ maxWidth: '600px' }}>
+            <div style={{ maxWidth: '760px' }}>
               <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '24px', color: tokens.colors.text }}>
                 Appearance
               </h3>
@@ -397,7 +397,7 @@ export function Settings({ apps, onSave, onClose, inline = false }: SettingsProp
                     fontWeight: 500,
                   }}
                 >
-                  Theme
+                  Light or dark
                 </label>
                 <div style={{ display: 'flex', gap: '8px' }}>
                   {[
@@ -431,6 +431,82 @@ export function Settings({ apps, onSave, onClose, inline = false }: SettingsProp
                 </div>
               </div>
 
+              {/* Color theme presets */}
+              <div
+                style={{
+                  background: tokens.colors.bgCard,
+                  border: `1px solid ${tokens.colors.border}`,
+                  borderRadius: tokens.radius.lg,
+                  padding: '24px',
+                  marginBottom: '24px',
+                }}
+              >
+                <label style={{ display: 'block', color: tokens.colors.textMuted, fontSize: '13px', marginBottom: '4px', fontWeight: 500 }}>
+                  Color theme
+                </label>
+                <p style={{ color: tokens.colors.textDim, fontSize: '12px', marginBottom: '16px' }}>
+                  After the films in your taste guide. Each has a light and a dark version.
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: '10px' }}>
+                  {(Object.entries(presets) as [PresetId, (typeof presets)[string]][]).map(([id, p]) => {
+                    const pal = p[resolvedTheme];
+                    const selected = preset === id;
+                    return (
+                      <button
+                        key={id}
+                        onClick={() => setPreset(id)}
+                        aria-pressed={selected}
+                        style={{
+                          textAlign: 'left',
+                          padding: 0,
+                          overflow: 'hidden',
+                          borderRadius: tokens.radius.md,
+                          border: `2px solid ${selected ? tokens.colors.accent : tokens.colors.border}`,
+                          background: pal.bg,
+                          cursor: 'pointer',
+                          fontFamily: 'inherit',
+                        }}
+                      >
+                        <div style={{ padding: '14px 14px 12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                          <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-end', height: '28px' }}>
+                            <span style={{ width: '22px', height: '28px', borderRadius: '4px', background: pal.accent }} />
+                            <span style={{ width: '10px', height: '18px', borderRadius: '3px 3px 0 0', background: pal.chart }} />
+                            <span style={{ width: '10px', height: '26px', borderRadius: '3px 3px 0 0', background: pal.chart }} />
+                            <span style={{ width: '10px', height: '12px', borderRadius: '3px 3px 0 0', background: pal.chart }} />
+                            <span style={{ flex: 1, height: '28px', borderRadius: '4px', background: pal.bgCard, border: `1px solid ${pal.border}` }} />
+                          </div>
+                          <div>
+                            <div style={{ color: pal.text, fontSize: '13px', fontWeight: 600 }}>{p.label}</div>
+                            <div style={{ color: pal.textMuted, fontSize: '11px', marginTop: '2px' }}>{p.note}</div>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '20px', flexWrap: 'wrap' }}>
+                  <label htmlFor="pulse-accent" style={{ color: tokens.colors.textMuted, fontSize: '13px', fontWeight: 500 }}>
+                    Custom accent
+                  </label>
+                  <input
+                    id="pulse-accent"
+                    type="color"
+                    value={customAccent ?? presets[preset][resolvedTheme].accent}
+                    onChange={(e) => setCustomAccent(e.target.value)}
+                    style={{ width: '44px', height: '32px', padding: '2px', cursor: 'pointer' }}
+                  />
+                  <span style={{ color: tokens.colors.textDim, fontSize: '12px', fontFamily: tokens.fonts.mono }}>
+                    {customAccent ?? 'from the theme'}
+                  </span>
+                  {customAccent && (
+                    <button className="btn btn-secondary" onClick={() => setCustomAccent(null)} style={{ padding: '6px 12px', fontSize: '12px' }}>
+                      Use the theme's accent
+                    </button>
+                  )}
+                </div>
+              </div>
+
               {/* Font Toggle */}
               <div
                 style={{
@@ -451,8 +527,8 @@ export function Settings({ apps, onSave, onClose, inline = false }: SettingsProp
                 >
                   Font
                 </label>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  {(Object.entries(fontOptions) as [FontChoice, typeof fontOptions.inter][]).map(([id, font]) => (
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  {(Object.entries(fontOptions) as [FontChoice, typeof fontOptions.editorial][]).map(([id, font]) => (
                     <button
                       key={id}
                       onClick={() => setFontChoice(id)}
@@ -465,7 +541,7 @@ export function Settings({ apps, onSave, onClose, inline = false }: SettingsProp
                         fontSize: '13px',
                         fontWeight: 500,
                         cursor: 'pointer',
-                        fontFamily: font.sans,
+                        fontFamily: font.display,
                         transition: 'all 0.15s ease',
                       }}
                     >
