@@ -29,6 +29,7 @@ import { TodayView } from './components/TodayView';
 import { MoneyView } from './components/MoneyView';
 import { decisionQueue, urgentSignals } from './utils/today';
 import { useDesktopSignals } from './hooks/useDesktopSignals';
+import { ActivityPage } from './components/ActivityPage';
 import { migrateApps } from './utils/platforms';
 import './index.css';
 
@@ -885,6 +886,7 @@ function DashboardContent() {
             error={portfolio.error}
             trackerError={portfolio.trackerError}
             onOpenEntity={openEntity}
+            onOpenActivity={() => handleNavChange('activity')}
             onRefresh={portfolio.refresh}
           />
         )}
@@ -897,6 +899,9 @@ function DashboardContent() {
             onOpenFinance={(id) => openEntity(id, 'finance')}
           />
         )}
+
+        {/* Activity: what the organization did (read-only) */}
+        {page === 'activity' && !selectedEntity && <ActivityPage snapshot={portfolio.snapshot} />}
 
         {/* SaaS metrics pages: kept behind the Settings toggle */}
         {/* Overview Page */}

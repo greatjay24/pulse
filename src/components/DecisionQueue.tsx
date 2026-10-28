@@ -3,16 +3,19 @@ import { useTheme } from '../contexts/ThemeContext';
 import { QueuedDecision, decisionKey } from '../utils/today';
 import { EntityMark, HealthBadge } from './BoardUI';
 import { Icon } from './Icons';
+import { DecisionControls } from './DecisionCard';
 
 const SHOWN = 6;
 
 // One ask in the queue: whose it is, the ask (two lines at most) and the lead's
-// recommendation. The full decision, with its reasoning, is on the entity's Overview.
+// recommendation, then Approve / Reject / Discuss. The full decision, with its reasoning,
+// is on the entity's Overview (click the ask).
 function QueueRow({ q, onOpen }: { q: QueuedDecision; onOpen: () => void }) {
   const { tokens } = useTheme();
   const c = tokens.colors;
   const { item, decision: d } = q;
   return (
+    <div>
     <button
       onClick={onOpen}
       title={`Open ${item.entity.name}`}
@@ -78,6 +81,10 @@ function QueueRow({ q, onOpen }: { q: QueuedDecision; onOpen: () => void }) {
         <Icon name="arrow-right" size={14} color={c.textDim} />
       </span>
     </button>
+    <div style={{ padding: '0 16px 14px 58px' }}>
+      <DecisionControls entity={item.entity} decision={d} />
+    </div>
+    </div>
   );
 }
 

@@ -671,6 +671,59 @@ export interface PortfolioSnapshot {
 }
 
 // ==========================================
+// Decisions and activity: what the Rust `act_on_decision` / `read_activity` commands pass
+// ==========================================
+
+// approve | reject | discuss are the owner's (via act.py); done | reply are the lead's.
+export type DecisionAction = 'approve' | 'reject' | 'discuss' | 'done' | 'reply';
+
+export interface DecisionRow {
+  id: string;
+  action: DecisionAction;
+  note?: string;
+  at: string;
+  ask?: string; // act.py copies these so an answer still reads after the decision leaves status.json
+  recommend?: string;
+}
+
+// One agent run: an item of a nightly log (an array) or a whole act log (one object).
+export interface AgentRun {
+  agent: string;
+  ok?: boolean;
+  result?: string;
+  cost_usd?: number | null;
+  secs?: number;
+  models?: string[];
+  // act runs only
+  kind?: 'act';
+  entity?: string;
+  decision?: string;
+  action?: 'approve' | 'reject' | 'discuss';
+  running?: boolean;
+  started?: string;
+  finished?: string;
+}
+
+export interface DraftRow {
+  date: string;
+  entity: string;
+  prospect?: string;
+  vertical?: string;
+  subject?: string;
+  variant?: string;
+  source?: string;
+}
+
+export interface ActivitySnapshot {
+  runs: { file: string; data: AgentRun[] | AgentRun }[];
+  decisions: { entity: string; rows: DecisionRow[] }[];
+  drafts: DraftRow[];
+  commits: { hash: string; at: string; subject: string }[];
+  errors: string[];
+  read_at: string;
+}
+
+// ==========================================
 // Tracker (~/project-tracker): what the Rust `read_tracker` command passes through
 // ==========================================
 

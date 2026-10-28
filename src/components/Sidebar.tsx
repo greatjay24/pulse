@@ -22,7 +22,7 @@ interface SidebarProps {
 const MAIN_NAV: { id: string; label: string; icon: string }[] = [
   { id: 'today', label: 'Today', icon: 'today' },
   { id: 'board', label: 'Board', icon: 'board' },
-  // Activity (decision outcomes and agent runs) goes here once it lands: { id: 'activity', label: 'Activity', icon: 'activity' }
+  { id: 'activity', label: 'Activity', icon: 'activity' }, // decision outcomes, agent runs, cost
   { id: 'money', label: 'Money', icon: 'wallet' },
 ];
 
