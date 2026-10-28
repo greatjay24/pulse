@@ -1,4 +1,4 @@
-import { ActivitySnapshot, AgentRun, DecisionRow, EntityDecision } from '../types';
+import { ActivitySnapshot, AgentRun, DecisionRow, EntityDecision, PortfolioSnapshot, TrackerSnapshot } from '../types';
 
 // Same rule as act.py's slug(): decisions written before ids existed are keyed by their ask.
 export function slugify(text: string | undefined): string {
@@ -103,4 +103,34 @@ export function firstUrl(text: string | undefined): string | null {
 // Gates where approving touches someone else or money: confirm first.
 export function needsConfirm(d: EntityDecision): boolean {
   return d.gate === 'money' || d.gate === 'relationship';
+}
+
+// A status.json decision and its "Decide: …" tracker task are the same item. The decision
+// (with its buttons) wins; the task is hidden when it belongs to the same entity and its
+// title, minus "Decide:", matches the ask exactly or by word overlap. Same rule as act.py's
+// tracker_match, so the task Pulse hides is the one an approval closes.
+const DECIDE_STOP = new Set(['decide', 'the', 'a', 'an', 'and', 'or', 'to', 'of', 'for', 'on', 'in', 'your', 'with', 'then', 'what', 'goes', 'under']);
+const words = (s: string) => new Set((s.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((w) => w.length > 1 && !DECIDE_STOP.has(w)));
+const normalize = (s: string) => s.toLowerCase().replace(/^\s*decide\b\s*:?\s*/, '').replace(/[^a-z0-9]+/g, ' ').trim();
+
+export function matchesDecision(taskTitle: string, ask: string): boolean {
+  if (!/^\s*decide\b/i.test(taskTitle)) return false;
+  if (normalize(taskTitle) === normalize(ask)) return true;
+  const a = words(ask);
+  const t = words(taskTitle);
+  if (!a.size || !t.size) return false;
+  let shared = 0;
+  for (const w of a) if (t.has(w)) shared++;
+  return shared / Math.min(a.size, t.size) >= 0.6;
+}
+
+export function withoutDecisionDuplicates(tracker: TrackerSnapshot, snapshot: PortfolioSnapshot | null): TrackerSnapshot {
+  const entities = snapshot?.registry?.entities ?? [];
+  const asks = new Map<string, string[]>(); // tracker project → open asks of the entity that owns it
+  for (const e of entities) {
+    const open = (snapshot?.entities.find((r) => r.id === e.id)?.status?.decisions ?? []).map((d) => d.ask);
+    for (const p of e.tracker_projects ?? []) asks.set(p, open);
+  }
+  const tasks = tracker.tasks.filter((t) => !(asks.get(t.project ?? '') ?? []).some((ask) => matchesDecision(t.title, ask)));
+  return tasks.length === tracker.tasks.length ? tracker : { ...tracker, tasks };
 }
