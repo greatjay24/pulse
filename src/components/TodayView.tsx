@@ -1,30 +1,26 @@
 import { ReactNode } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
-import { EntityDecision, PortfolioSnapshot, TrackerEmail, TrackerSnapshot, TrackerTask } from '../types';
-import { UNASSIGNED, dueNow, formatUsd, isGate, openTaskList, ownerOf, projectOwners, sortReplies, sortTasks } from '../utils/tracker';
+import { PortfolioSnapshot, TrackerEmail, TrackerSnapshot, TrackerTask } from '../types';
+import { UNASSIGNED, dueNow, formatUsd, isDueToday, isGate, openTaskList, ownerOf, projectOwners, sortReplies, sortTasks } from '../utils/tracker';
 import { Icon } from './Icons';
 import { BoardEntity, HealthDot, SectionLabel, boardEntities } from './OrgBoard';
 import { ReplyRow, RowList, TaskRow } from './TrackerRows';
 
-// What is due now for one entity: its open decisions, gate items and "now" tasks, and replies.
+// What is due now for one entity: "now" tasks, gate items marked now or soon, and replies.
+// Report decisions stay on the board and entity dashboards so Today stays short.
 interface TodayGroup {
   id: string;
   name: string;
   item: BoardEntity | null; // null for the unassigned group
-  decisions: EntityDecision[];
   tasks: TrackerTask[];
   replies: TrackerEmail[];
 }
-
-// Tasks due now plus every open gate item, whatever its urgency: those are decisions too.
-const isDueToday = (t: TrackerTask) => t.urgency === 'now' || isGate(t);
 
 function todayGroups(items: BoardEntity[], tracker: TrackerSnapshot, snapshot: PortfolioSnapshot): TodayGroup[] {
   const groups: TodayGroup[] = items.map((item) => ({
     id: item.entity.id,
     name: item.entity.name,
     item,
-    decisions: item.status?.decisions ?? [],
     tasks: (item.tracker?.tasks ?? []).filter(isDueToday),
     replies: item.tracker?.replies ?? [],
   }));
@@ -35,7 +31,6 @@ function todayGroups(items: BoardEntity[], tracker: TrackerSnapshot, snapshot: P
     id: UNASSIGNED,
     name: 'Unassigned',
     item: null,
-    decisions: [],
     tasks: sortTasks(openTaskList(tracker).filter((t) => isDueToday(t) && loose(t.project))),
     replies: sortReplies((tracker.email?.needs_reply ?? []).filter((e) => loose(e.project))),
   });
@@ -103,12 +98,11 @@ export function TodayView({ snapshot, tracker, error, trackerError, onOpenEntity
 
   const items = boardEntities(snapshot, tracker);
   const groups = todayGroups(items, tracker, snapshot);
-  const busy = groups.filter((g) => g.decisions.length + g.tasks.length + g.replies.length > 0);
+  const busy = groups.filter((g) => g.tasks.length + g.replies.length > 0);
   const quiet = groups.filter((g) => g.item && !busy.includes(g));
   const email = tracker.email;
   const replies = email?.needs_reply ?? [];
-  const decisions = groups.reduce((n, g) => n + g.decisions.length, 0);
-  const gates = openTaskList(tracker).filter(isGate).length;
+  const gates = openTaskList(tracker).filter((t) => isGate(t) && isDueToday(t)).length;
   const money = tracker.money;
 
   return (
@@ -117,7 +111,7 @@ export function TodayView({ snapshot, tracker, error, trackerError, onOpenEntity
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '16px' }}>
         <Stat value={dueNow(openTaskList(tracker)).length} label="Tasks due now" />
-        <Stat value={decisions + gates} label="Decisions" sub={`${decisions} from reports · ${gates} gate items`} />
+        <Stat value={gates} label="Gate items" sub="Decide: items marked now or soon" />
         <Stat value={replies.length} label="Need a reply" sub={`${replies.filter((e) => e.urgency === 'now').length} urgent`} />
         <Stat
           value={money.configured ? formatUsd(money.totals.d7) : '—'}
@@ -146,26 +140,6 @@ export function TodayView({ snapshot, tracker, error, trackerError, onOpenEntity
               )}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {g.decisions.length > 0 && (
-                <RowList>
-                  {g.decisions.map((d, idx) => (
-                    <div key={idx} style={{ padding: '10px 14px', display: 'flex', gap: '12px', alignItems: 'baseline' }}>
-                      <span style={{ fontSize: '10px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: tokens.colors.accent, flexShrink: 0 }}>
-                        Decide
-                      </span>
-                      <span style={{ flex: 1, minWidth: 0 }}>
-                        <span style={{ fontSize: '14px', fontWeight: 600, lineHeight: 1.45 }}>{d.ask}</span>
-                        {d.recommend && (
-                          <span style={{ display: 'block', fontSize: '12px', color: tokens.colors.textMuted, marginTop: '2px' }}>
-                            Recommend {d.recommend}
-                          </span>
-                        )}
-                      </span>
-                      {d.due && <span style={{ fontSize: '11px', color: tokens.colors.warning, whiteSpace: 'nowrap' }}>due {d.due}</span>}
-                    </div>
-                  ))}
-                </RowList>
-              )}
               {g.tasks.length > 0 && (
                 <RowList>
                   {g.tasks.map((t) => <TaskRow key={t.id} task={t} now={now} />)}

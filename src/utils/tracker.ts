@@ -35,16 +35,11 @@ export function sortReplies(replies: TrackerEmail[]): TrackerEmail[] {
   );
 }
 
-// Maps each tracker project id to the entity that owns it. An entity's tracker_projects
-// list wins; an entity id that is also a tracker project (e.g. "personal") maps to itself
-// unless another entity claims it.
+// Maps each tracker project id to the entity that lists it in tracker_projects.
 export function projectOwners(entities: PortfolioEntity[]): Map<string, string> {
   const owners = new Map<string, string>();
   for (const e of entities) {
     for (const p of e.tracker_projects ?? []) owners.set(p, e.id);
-  }
-  for (const e of entities) {
-    if (!owners.has(e.id)) owners.set(e.id, e.id);
   }
   return owners;
 }
@@ -91,6 +86,12 @@ export function entityTracker(entityId: string, tracker: TrackerSnapshot, owners
 
 export function dueNow(tasks: TrackerTask[]): TrackerTask[] {
   return tasks.filter((t) => t.status === 'open' && t.urgency === 'now');
+}
+
+// What Today shows: tasks due now, plus gate items marked "soon". Gate items marked
+// "whenever" stay on their entity's dashboard so Today doesn't list every open decision.
+export function isDueToday(t: TrackerTask): boolean {
+  return t.status === 'open' && (t.urgency === 'now' || (isGate(t) && t.urgency === 'soon'));
 }
 
 export function openTaskList(tracker: TrackerSnapshot): TrackerTask[] {

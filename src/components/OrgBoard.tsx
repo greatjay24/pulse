@@ -10,7 +10,7 @@ import {
   isStale,
   plainMarkdownLine,
 } from '../utils/portfolio';
-import { EntityTracker, dueNow, entityTracker, formatUsd, openTaskList, projectOwners } from '../utils/tracker';
+import { EntityTracker, dueNow, entityTracker, formatUsd, isDueToday, isGate, openTaskList, projectOwners } from '../utils/tracker';
 import { Icon } from './Icons';
 
 export interface BoardEntity {
@@ -237,22 +237,26 @@ function EntityCard({ item, now, onOpen }: { item: BoardEntity; now: number; onO
   );
 }
 
-// Board summary of the tracker: what is due now, who is waiting on a reply, money in.
+// Board summary of the tracker, same scope as the Today view: tasks due now and gate items
+// marked now or soon, who is waiting on a reply, money in.
 function TodayCard({ tracker, onOpen }: { tracker: TrackerSnapshot; onOpen: () => void }) {
   const { tokens } = useTheme();
-  const now = dueNow(openTaskList(tracker)).length;
+  const today = openTaskList(tracker).filter(isDueToday);
+  const gates = today.filter(isGate).length;
   const replies = tracker.email?.needs_reply ?? [];
   const urgentReplies = replies.filter((e) => e.urgency === 'now').length;
   const money = tracker.money;
-  const stat = (value: number, label: string, sub?: string) => (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
-        <span style={{ fontFamily: tokens.fonts.mono, fontSize: '40px', fontWeight: 600, letterSpacing: '-0.02em' }}>{value}</span>
-        <span style={{ fontSize: '14px', color: tokens.colors.textMuted }}>{label}</span>
-      </div>
-      {sub && <div style={{ fontSize: '12px', color: tokens.colors.textDim, marginTop: '2px' }}>{sub}</div>}
+  const stat = (value: number, label: string) => (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
+      <span style={{ fontFamily: tokens.fonts.mono, fontSize: '40px', fontWeight: 600, letterSpacing: '-0.02em' }}>{value}</span>
+      <span style={{ fontSize: '14px', color: tokens.colors.textMuted }}>{label}</span>
     </div>
   );
+  // One shared detail line, so the two numbers stay side by side in a narrow card.
+  const detail = [
+    gates ? `${gates} gate ${gates === 1 ? 'item' : 'items'}` : null,
+    urgentReplies ? `${urgentReplies} urgent ${urgentReplies === 1 ? 'reply' : 'replies'}` : null,
+  ].filter(Boolean).join(' · ');
   return (
     <button
       onClick={onOpen}
@@ -273,9 +277,10 @@ function TodayCard({ tracker, onOpen }: { tracker: TrackerSnapshot; onOpen: () =
     >
       <SectionLabel>Today</SectionLabel>
       <div style={{ display: 'flex', gap: '28px', flexWrap: 'wrap' }}>
-        {stat(now, 'due now')}
-        {stat(replies.length, replies.length === 1 ? 'reply' : 'replies', urgentReplies ? `${urgentReplies} urgent` : undefined)}
+        {stat(today.length, 'today')}
+        {stat(replies.length, replies.length === 1 ? 'reply' : 'replies')}
       </div>
+      {detail && <div style={{ fontSize: '12px', color: tokens.colors.textDim, marginTop: '4px' }}>{detail}</div>}
       <div style={{ fontSize: '12px', color: tokens.colors.textMuted, marginTop: '12px' }}>
         {money.configured ? (
           <>

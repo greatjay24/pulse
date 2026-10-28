@@ -51,10 +51,12 @@ The board also reads the owner's project tracker (`~/project-tracker`) through a
 read-only command, `read_tracker`. It can open only a fixed list of files:
 `data/tasks.json`, `email.json`, `scan.json`, `stripe.json`, `bank.json`,
 `payments_email.json`, plus `projects.json` and `notes.json`. Tracker projects roll up
-into entities through `tracker_projects` in `~/portfolio/portfolio.json`.
+into entities through `tracker_projects` in `~/portfolio/portfolio.json`; a project no
+entity lists shows under Unassigned in Today.
 
-- **Today** (sidebar, or click the Today card): tasks due now, every open gate item
-  ("Decide: …"), report decisions and emails needing a reply, grouped by entity.
+- **Today** (sidebar, or click the Today card): tasks due now, gate items ("Decide: …")
+  marked now or soon, and emails needing a reply, grouped by entity. Gate items marked
+  "whenever" and report decisions stay on the board and entity dashboards.
 - **Cards** show open task and needs-reply counts.
 - **Entity dashboard** adds Your tasks (gate items first), Needs a reply (subject and
   sender only), Repos (branch, uncommitted, days idle) and Money in.
