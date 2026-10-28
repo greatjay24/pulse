@@ -1899,6 +1899,62 @@ struct PortfolioEntityReport {
     id: String,
     status: Option<serde_json::Value>,
     error: Option<String>,
+    logo: Option<String>,      // data: URL of the registry's `logo`
+    logo_dark: Option<String>, // data: URL of `logo_dark`, for dark themes
+    logo_error: Option<String>,
+}
+
+// Logos live in ~/portfolio/assets/ so the board's reads never leave ~/portfolio.
+const LOGO_DIR: &str = "assets";
+const LOGO_TYPES: &[(&str, &str)] = &[
+    ("svg", "image/svg+xml"),
+    ("png", "image/png"),
+    ("jpg", "image/jpeg"),
+    ("jpeg", "image/jpeg"),
+    ("webp", "image/webp"),
+];
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = (chunk[0] as u32) << 16 | (*chunk.get(1).unwrap_or(&0) as u32) << 8 | *chunk.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ABC[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+// Reads a registry logo path (relative to ~/portfolio, inside assets/) as a data: URL.
+// Same guard as status files: no absolute paths, no `..`, no symlinks out of the root.
+fn read_portfolio_logo(root: &Path, rel: &str) -> Result<String, String> {
+    let rel_path = Path::new(rel);
+    let (Some(dir), Some(name)) = (rel_path.parent(), rel_path.file_name().and_then(|n| n.to_str())) else {
+        return Err(format!("{}: not a file path", rel));
+    };
+    if !rel_path.starts_with(LOGO_DIR) {
+        return Err(format!("{}: logos must live in ~/portfolio/{}/", rel, LOGO_DIR));
+    }
+    let ext = Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    let Some((_, mime)) = LOGO_TYPES.iter().find(|(e, _)| *e == ext) else {
+        return Err(format!("{}: not an svg, png, jpg or webp", rel));
+    };
+    let dir = dir.to_str().ok_or_else(|| format!("{}: not a file path", rel))?;
+    let path = resolve_portfolio_file(root, dir, name).map_err(|e| format!("{}: {}", rel, e))?;
+    if !path.starts_with(root.join(LOGO_DIR)) {
+        return Err(format!("{}: logos must live in ~/portfolio/{}/", rel, LOGO_DIR));
+    }
+    let meta = fs::metadata(&path).map_err(|_| format!("{}: missing", rel))?;
+    if meta.len() > PORTFOLIO_MAX_FILE_BYTES {
+        return Err(format!("{}: file too large (1 MB max)", rel));
+    }
+    let bytes = fs::read(&path).map_err(|e| format!("{}: unreadable: {}", rel, e))?;
+    Ok(format!("data:{};base64,{}", mime, base64_encode(&bytes)))
 }
 
 #[derive(Serialize)]
@@ -1985,20 +2041,29 @@ fn read_portfolio() -> Result<String, String> {
     if let Some(list) = registry.as_ref().and_then(|r| r.get("entities")).and_then(|e| e.as_array()) {
         for entity in list {
             let Some(id) = entity.get("id").and_then(|v| v.as_str()) else { continue };
-            let report = match entity.get("path").and_then(|v| v.as_str()) {
+            let (status, error) = match entity.get("path").and_then(|v| v.as_str()) {
                 Some(rel) => match resolve_portfolio_file(&root, rel, "status.json")
                     .and_then(|p| read_portfolio_json(&p))
                 {
-                    Ok(status) => PortfolioEntityReport { id: id.to_string(), status: Some(status), error: None },
-                    Err(e) => PortfolioEntityReport { id: id.to_string(), status: None, error: Some(e) },
+                    Ok(status) => (Some(status), None),
+                    Err(e) => (None, Some(e)),
                 },
-                None => PortfolioEntityReport {
-                    id: id.to_string(),
-                    status: None,
-                    error: Some("no path in portfolio.json".to_string()),
-                },
+                None => (None, Some("no path in portfolio.json".to_string())),
             };
-            entities.push(report);
+            let mut logo_errors = Vec::new();
+            let mut logo = |key: &str| {
+                let rel = entity.get(key).and_then(|v| v.as_str())?;
+                read_portfolio_logo(&root, rel).map_err(|e| logo_errors.push(e)).ok()
+            };
+            let (logo, logo_dark) = (logo("logo"), logo("logo_dark"));
+            entities.push(PortfolioEntityReport {
+                id: id.to_string(),
+                status,
+                error,
+                logo,
+                logo_dark,
+                logo_error: (!logo_errors.is_empty()).then(|| logo_errors.join("; ")),
+            });
         }
     }
 
@@ -2295,7 +2360,8 @@ fn read_tracker() -> Result<String, String> {
 // ------------------------------------------
 // Money: a port of ~/project-tracker/money.py so Pulse shows the same totals as the brief.
 // The same dollars often arrive three ways (Stripe charge, its payout, the bank deposit), so
-// sightings are matched and only one is counted. Only totals leave this module.
+// sightings are matched and only one is counted. Totals and per-project breakdowns (with
+// payer names, for the owner's own screen) leave this module; raw events and descriptions do not.
 // ------------------------------------------
 
 const DAY_SECS: f64 = 86400.0;
@@ -2343,12 +2409,182 @@ struct MoneySummary {
     sources: HashMap<String, MoneySource>,
     totals: MoneyTotals,
     counts: HashMap<String, usize>,
-    // [tracker project or "unsorted", total] over the window, largest first
-    by_project_d7: Vec<(String, f64)>,
-    by_project_d30: Vec<(String, f64)>,
     failed_30d: usize,
     refunds_30d: f64,
     mrr_total: f64,
+    finance: MoneyFinance,
+}
+
+// Breakdowns for Pulse's finance views, built from the same counted events as the totals,
+// so every breakdown adds up to the brief's numbers. Pulse sums tracker projects per entity.
+#[derive(Serialize, Default)]
+struct MoneyFinance {
+    coverage: Vec<MoneyCoverage>,
+    projects: Vec<ProjectFinance>,
+    stripe_accounts: Vec<StripeAccount>,
+    bank_accounts: Vec<BankAccount>,
+}
+
+// How far back a source's file reaches: each collector keeps `window_days` before `collected_at`.
+#[derive(Serialize)]
+struct MoneyCoverage {
+    source: String,
+    ok: bool,
+    reason: Option<String>,
+    collected_at: Option<f64>,
+    window_days: Option<f64>,
+}
+
+#[derive(Serialize, Default)]
+struct ProjectFinance {
+    project: String, // tracker project id, or "unsorted"
+    d30: f64,
+    d90: f64,
+    months: Vec<(String, f64)>,      // [YYYY-MM local, total], oldest first, every month on file
+    by_channel: Vec<(String, f64)>,  // 90 days: stripe | bank | email, largest first
+    by_rail: Vec<(String, String, f64)>, // 90 days: [channel, rail (zelle, venmo...), total], largest first
+    payers: Vec<PayerTotal>,         // 90 days, largest first
+    no_payer_90d: f64,               // counted with no payer name (payouts, bank deposits)
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+struct PayerTotal {
+    name: String,
+    total: f64,
+    payments: usize,
+}
+
+#[derive(Serialize)]
+struct StripeAccount {
+    project: String,
+    ok: bool,
+    error: Option<String>,
+    active: u64,
+    mrr: f64,
+}
+
+#[derive(Serialize)]
+struct BankAccount {
+    name: String,
+    org: String,
+    project: Option<String>,
+    balance: Option<f64>,
+    currency: String,
+}
+
+fn sorted_desc(m: HashMap<String, f64>) -> Vec<(String, f64)> {
+    let mut v: Vec<(String, f64)> = m.into_iter().map(|(k, a)| (k, round_cents(a))).collect();
+    v.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    v
+}
+
+fn local_month(ts: f64) -> String {
+    chrono::DateTime::from_timestamp(ts as i64, 0)
+        .map(|t| t.with_timezone(&chrono::Local).format("%Y-%m").to_string())
+        .unwrap_or_default()
+}
+
+fn money_finance(counted: &[&MoneyEvent], stripe: &serde_json::Value, mail: &serde_json::Value, bank: &serde_json::Value, now: f64) -> MoneyFinance {
+    let (d30, d90) = (now - 30.0 * DAY_SECS, now - 90.0 * DAY_SECS);
+    let mut by_project: HashMap<String, Vec<&MoneyEvent>> = HashMap::new();
+    for e in counted {
+        by_project.entry(e.project.clone().unwrap_or_else(|| "unsorted".into())).or_default().push(e);
+    }
+    let mut projects: Vec<ProjectFinance> = by_project
+        .into_iter()
+        .map(|(project, events)| {
+            let recent: Vec<&&MoneyEvent> = events.iter().filter(|e| e.created >= d90).collect();
+            let mut months: HashMap<String, f64> = HashMap::new();
+            for e in &events {
+                *months.entry(local_month(e.created)).or_default() += e.amount;
+            }
+            let mut months: Vec<(String, f64)> = months.into_iter().map(|(k, a)| (k, round_cents(a))).collect();
+            months.sort_by(|a, b| a.0.cmp(&b.0));
+            let mut channel = HashMap::new();
+            let mut rail: HashMap<(String, String), f64> = HashMap::new();
+            // Payers match case-insensitively; the first spelling seen is the one shown.
+            let mut payers: Vec<PayerTotal> = Vec::new();
+            let mut no_payer = 0.0;
+            for e in &recent {
+                *channel.entry(e.channel.to_string()).or_default() += e.amount;
+                *rail.entry((e.channel.to_string(), e.source.clone())).or_default() += e.amount;
+                let name = e.payer.trim();
+                if name.is_empty() {
+                    no_payer += e.amount;
+                } else if let Some(p) = payers.iter_mut().find(|p| p.name.to_lowercase() == name.to_lowercase()) {
+                    p.total += e.amount;
+                    p.payments += 1;
+                } else {
+                    payers.push(PayerTotal { name: name.to_string(), total: e.amount, payments: 1 });
+                }
+            }
+            for p in &mut payers {
+                p.total = round_cents(p.total);
+            }
+            payers.sort_by(|a, b| b.total.total_cmp(&a.total).then_with(|| a.name.cmp(&b.name)));
+            ProjectFinance {
+                project,
+                d30: round_cents(events.iter().filter(|e| e.created >= d30).map(|e| e.amount).sum()),
+                d90: round_cents(recent.iter().map(|e| e.amount).sum()),
+                months,
+                by_channel: sorted_desc(channel),
+                by_rail: {
+                    let mut v: Vec<(String, String, f64)> = rail.into_iter().map(|((c, r), a)| (c, r, round_cents(a))).collect();
+                    v.sort_by(|a, b| b.2.total_cmp(&a.2).then_with(|| a.1.cmp(&b.1)));
+                    v
+                },
+                payers,
+                no_payer_90d: round_cents(no_payer),
+            }
+        })
+        .collect();
+    projects.sort_by(|a, b| b.d90.total_cmp(&a.d90).then_with(|| a.project.cmp(&b.project)));
+
+    let coverage = [("stripe", stripe), ("email", mail), ("bank", bank)]
+        .into_iter()
+        .map(|(source, d)| MoneyCoverage {
+            source: source.to_string(),
+            ok: is_ok(d),
+            reason: d.get("reason").and_then(|v| v.as_str()).map(String::from),
+            collected_at: jf64(d, "collected_at"),
+            window_days: jf64(d, "window_days"),
+        })
+        .collect();
+
+    let mut stripe_accounts = Vec::new();
+    if is_ok(stripe) {
+        if let Some(accounts) = stripe.get("accounts").and_then(|a| a.as_object()) {
+            for (pid, a) in accounts {
+                let sub = stripe.get("subscriptions").and_then(|s| s.get(pid));
+                stripe_accounts.push(StripeAccount {
+                    project: pid.clone(),
+                    ok: is_ok(a),
+                    error: a.get("error").and_then(|v| v.as_str()).map(String::from),
+                    active: sub.and_then(|s| s.get("active")).and_then(|v| v.as_u64()).unwrap_or(0),
+                    mrr: round_cents(sub.and_then(|s| jf64(s, "mrr")).unwrap_or(0.0)),
+                });
+            }
+        }
+    }
+
+    let bank_accounts = if is_ok(bank) {
+        jlist(bank, "accounts")
+            .map(|a| BankAccount {
+                name: jstr(a, "name"),
+                org: jstr(a, "org"),
+                project: jproject(a),
+                balance: jf64(a, "balance"),
+                currency: {
+                    let c = jstr(a, "currency");
+                    if c.is_empty() { "usd".to_string() } else { c }
+                },
+            })
+            .collect()
+    } else {
+        vec![]
+    };
+
+    MoneyFinance { coverage, projects, stripe_accounts, bank_accounts }
 }
 
 fn jstr(v: &serde_json::Value, k: &str) -> String {
@@ -2577,15 +2813,6 @@ fn build_money(stripe: &serde_json::Value, mail: &serde_json::Value, bank: &serd
     let counted: Vec<&MoneyEvent> = events.iter().filter(|e| e.counted).collect();
     let sum_since = |s: f64| round_cents(counted.iter().filter(|e| e.created >= s).map(|e| e.amount).sum());
     let count_since = |s: f64| counted.iter().filter(|e| e.created >= s).count();
-    let by_project = |s: f64| {
-        let mut m: HashMap<String, f64> = HashMap::new();
-        for e in counted.iter().filter(|e| e.created >= s) {
-            *m.entry(e.project.clone().unwrap_or_else(|| "unsorted".into())).or_default() += e.amount;
-        }
-        let mut v: Vec<(String, f64)> = m.into_iter().map(|(k, a)| (k, round_cents(a))).collect();
-        v.sort_by(|a, b| b.1.total_cmp(&a.1));
-        v
-    };
     let recent_flags: Vec<&MoneyFlag> = flags.iter().filter(|f| f.created >= d30).collect();
     let mrr_total = if is_ok(stripe) {
         stripe.get("subscriptions").and_then(|s| s.as_object()).map_or(0.0, |subs| {
@@ -2608,11 +2835,10 @@ fn build_money(stripe: &serde_json::Value, mail: &serde_json::Value, bank: &serd
         totals: MoneyTotals { today: sum_since(midnight), d7: sum_since(d7), d30: sum_since(d30) },
         counts: [("today", count_since(midnight)), ("d7", count_since(d7)), ("d30", count_since(d30))]
             .into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
-        by_project_d7: by_project(d7),
-        by_project_d30: by_project(d30),
         failed_30d: recent_flags.iter().filter(|f| f.kind == "failed").count(),
         refunds_30d: round_cents(recent_flags.iter().filter(|f| f.kind == "refund").map(|f| f.amount).sum()),
         mrr_total: round_cents(mrr_total),
+        finance: money_finance(&counted, stripe, mail, bank, now),
     }
 }
 
@@ -2796,6 +3022,34 @@ mod portfolio_tests {
         assert_eq!(read_portfolio_json(&resolved).unwrap()["health"], "green");
         let _ = fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn encodes_base64() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn reads_logos_only_from_assets() {
+        let root = temp_root("logos");
+        fs::create_dir_all(root.join("assets/logos")).unwrap();
+        fs::write(root.join("assets/logos/acme.svg"), "<svg/>").unwrap();
+        fs::write(root.join("companies/acme/logo.svg"), "<svg/>").unwrap();
+        fs::write(root.join("assets/logos/notes.txt"), "x").unwrap();
+        assert_eq!(read_portfolio_logo(&root, "assets/logos/acme.svg").unwrap(), "data:image/svg+xml;base64,PHN2Zy8+");
+        assert!(read_portfolio_logo(&root, "companies/acme/logo.svg").is_err());
+        assert!(read_portfolio_logo(&root, "assets/logos/notes.txt").is_err());
+        assert!(read_portfolio_logo(&root, "assets/../companies/acme/logo.svg").is_err());
+        assert!(read_portfolio_logo(&root, "/etc/hosts.svg").is_err());
+        assert!(read_portfolio_logo(&root, "assets/logos/missing.png").unwrap_err().ends_with("missing"));
+        // A symlink inside assets/ that points elsewhere in the root is refused too.
+        std::os::unix::fs::symlink(root.join("companies/acme/logo.svg"), root.join("assets/logos/link.svg")).unwrap();
+        assert!(read_portfolio_logo(&root, "assets/logos/link.svg").is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
 }
 
 #[cfg(test)]
@@ -2898,14 +3152,32 @@ mod tracker_tests {
 
         let m = build_money(&stripe, &mail, &bank, now);
         assert_eq!(m.totals, MoneyTotals { today: 1000.0, d7: 1550.0, d30: 1775.0 });
-        assert!(m.by_project_d30.contains(&("northwind".to_string(), 1120.0)));
         assert_eq!((m.failed_30d, m.refunds_30d, m.mrr_total), (1, 20.0, 40.0));
 
         let off = json!({"ok": false, "reason": "not configured"});
         let no_api = build_money(&off, &json!({"ok": true, "items": [mail["items"][0]]}), &json!({"ok": false}), now);
         assert_eq!(no_api.totals.d30, 116.22);
 
+        // Breakdowns add up to the totals and keep payers per project.
+        let f = &m.finance;
+        let northwind = f.projects.iter().find(|p| p.project == "northwind").unwrap();
+        assert_eq!((northwind.d30, northwind.d90), (1120.0, 1120.0));
+        assert_eq!(northwind.by_channel, vec![("stripe".to_string(), 1120.0)]);
+        assert_eq!(northwind.payers[0], PayerTotal { name: "Ben".into(), total: 1000.0, payments: 1 });
+        let d30: f64 = f.projects.iter().map(|p| p.d30).sum();
+        assert!((d30 - m.totals.d30).abs() < 0.001);
+        let months: f64 = f.projects.iter().flat_map(|p| p.months.iter().map(|(_, v)| v)).sum();
+        assert!((months - 1775.0).abs() < 0.001);
+        let unsorted = f.projects.iter().find(|p| p.project == "unsorted").unwrap();
+        // CARLA's two Zelle alerts are one payment; the check deposit has no payer.
+        assert_eq!(unsorted.payers.iter().find(|p| p.name == "CARLA").unwrap().payments, 1);
+        assert_eq!(unsorted.no_payer_90d, 80.0);
+        assert_eq!((f.stripe_accounts[0].project.as_str(), f.stripe_accounts[0].active, f.stripe_accounts[0].mrr), ("northwind", 3, 40.0));
+        assert!(f.coverage.iter().all(|c| c.ok));
+
         let empty = build_money(&off, &json!({}), &off, now);
+        assert!(empty.finance.projects.is_empty() && empty.finance.stripe_accounts.is_empty());
+        assert_eq!(empty.finance.coverage[0].reason.as_deref(), Some("not configured"));
         assert!(!empty.configured);
         assert_eq!(empty.totals.d30, 0.0);
     }
