@@ -32,8 +32,10 @@
 The sidebar is Today, Board, Money and Settings, in that order of importance. Pulse opens
 on **Today**: one headline line (`Today: N moves · N decisions need you · $X in this month`),
 then the decision queue (every report decision, riskiest business first), then each
-business with its health, `health_why` and what is due today. A *move* is tracker work due
-today: tasks marked now, "Decide:" gate items marked now or soon, and replies marked now.
+business with its health, `health_why` and what is due today. *Moves* are the chief of
+staff's moves for the week (the list in the first section of `WEEK.md`, normally three).
+Without a `WEEK.md` the line reads `N due today`: tasks marked now, leaving out "Decide:"
+items, which are decisions and already counted.
 Each page header carries a "Data as of" stamp per source (reports, tasks, email, money),
 flagged when a source is old.
 

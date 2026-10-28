@@ -1,22 +1,15 @@
-import { EntityDecision, PortfolioSnapshot, TrackerEmail, TrackerSnapshot, TrackerTask } from '../types';
+import { EntityDecision, PortfolioSnapshot, TrackerEmail, TrackerSnapshot } from '../types';
 import type { BoardEntity } from '../components/OrgBoard';
-import { healthRank } from './portfolio';
-import { isDueToday, isGate, openTaskList } from './tracker';
+import { firstWeekSection, healthRank, plainMarkdownLine } from './portfolio';
+import { isGate, openTaskList } from './tracker';
 import { sumFinance, trailingMonths } from './finance';
 
 // The one line Pulse leads with, and the decision queue under it. Today, the board, the
 // menu bar count and notifications all read these, so every surface counts the same way.
 
-// A move is tracker work due today: tasks marked now, "Decide:" gate items marked now or
-// soon, and replies marked now. Report decisions are counted separately, as the queue.
+// What each business has due today on the Today page: tasks marked now, "Decide:" gate
+// items marked now or soon, and replies marked now.
 export const isUrgentReply = (e: TrackerEmail) => e.urgency === 'now';
-
-export function todayMoves(tracker: TrackerSnapshot): { tasks: TrackerTask[]; replies: TrackerEmail[] } {
-  return {
-    tasks: openTaskList(tracker).filter(isDueToday),
-    replies: (tracker.email?.needs_reply ?? []).filter(isUrgentReply),
-  };
-}
 
 export interface QueuedDecision {
   item: BoardEntity;
@@ -53,8 +46,26 @@ export function cashThisMonth(tracker: TrackerSnapshot | null, now = new Date())
   return sumFinance(tracker.money.finance.projects).months.get(month) ?? 0;
 }
 
+// "Moves" are the chief of staff's moves for the week: the list items in the first section
+// of WEEK.md (normally three). Null when there is no WEEK.md or that section has no list.
+export function weekMoveCount(week: string | null): number | null {
+  const section = firstWeekSection(week);
+  if (!section) return null;
+  const n = section.lines.filter((l) => {
+    const { numbered, bullet } = plainMarkdownLine(l);
+    return numbered || bullet;
+  }).length;
+  return n > 0 ? n : null;
+}
+
+// Without WEEK.md the line falls back to tasks marked now. "Decide:" gate items are left
+// out: they are decisions, already counted in the queue beside it.
+export function dueNowCount(tracker: TrackerSnapshot): number {
+  return openTaskList(tracker).filter((t) => t.urgency === 'now' && !isGate(t)).length;
+}
+
 export interface Headline {
-  moves: number | null; // null until the tracker has been read
+  lead: { kind: 'moves' | 'due'; n: number } | null; // null until something can be counted
   decisions: number;
   cash: number | null;
 }
@@ -62,9 +73,9 @@ export interface Headline {
 export function headline(items: BoardEntity[], snapshot: PortfolioSnapshot | null, tracker: TrackerSnapshot | null): Headline | null {
   if (!snapshot?.registry) return null;
   const ok = tracker && !tracker.error ? tracker : null;
-  const moves = ok ? todayMoves(ok) : null;
+  const moves = weekMoveCount(snapshot.week);
   return {
-    moves: moves ? moves.tasks.length + moves.replies.length : null,
+    lead: moves !== null ? { kind: 'moves', n: moves } : ok ? { kind: 'due', n: dueNowCount(ok) } : null,
     decisions: items.reduce((n, i) => n + (i.status?.decisions?.length ?? 0), 0),
     cash: cashThisMonth(ok),
   };

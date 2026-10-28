@@ -3,14 +3,18 @@ import { useTheme } from '../contexts/ThemeContext';
 import { Headline as HeadlineData } from '../utils/today';
 import { formatUsd } from '../utils/tracker';
 
-// "Today: 4 moves · 22 decisions need you · $1,240 in this month", the one line every view
+// "Today: 3 moves · 22 decisions need you · $1,240 in this month", the one line every view
 // leads with. The numbers carry the weight; the words around them stay quiet.
 export function HeadlineLine({ data, size = 'clamp(22px, 2.3vw, 30px)' }: { data: HeadlineData; size?: string }) {
   const { tokens } = useTheme();
   const c = tokens.colors;
   const n = (v: number) => <span style={{ color: c.text, fontVariantNumeric: 'tabular-nums' }}>{v.toLocaleString()}</span>;
   const parts: ReactNode[] = [];
-  if (data.moves !== null) parts.push(<>{n(data.moves)} {data.moves === 1 ? 'move' : 'moves'}</>);
+  // The week's moves from WEEK.md, or without it, what is marked due now.
+  if (data.lead) {
+    const { kind, n: count } = data.lead;
+    parts.push(<>{n(count)} {kind === 'moves' ? (count === 1 ? 'move' : 'moves') : 'due today'}</>);
+  }
   parts.push(
     <>
       {n(data.decisions)} {data.decisions === 1 ? 'decision needs' : 'decisions need'} you

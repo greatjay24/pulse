@@ -13,7 +13,7 @@ import { DecisionQueue } from './DecisionQueue';
 import { HeadlineLine } from './Headline';
 import { ReplyRow, RowList, TaskRow } from './TrackerRows';
 
-// One business on Today: its health and why, then its moves (tasks due now, gate items
+// One business on Today: its health and why, then what is due (tasks due now, gate items
 // marked now or soon, replies marked now). Other replies wait on the entity's dashboard.
 interface TodayBusiness {
   id: string;
@@ -75,7 +75,7 @@ function BusinessBlock({ b, onOpenEntity }: { b: TodayBusiness; onOpenEntity: (i
             </h3>
             {b.item && <HealthBadge health={status?.health} why={status?.health_why} />}
             <span style={{ fontSize: tokens.type.small, color: moves ? c.textMuted : c.textDim }}>
-              {moves ? `${moves} ${moves === 1 ? 'move' : 'moves'} today` : 'Nothing due today'}
+              {moves ? `${moves} due today` : 'Nothing due today'}
             </span>
           </div>
           <HealthWhy why={status?.health_why} clamp={1} style={{ marginTop: '4px' }} />
