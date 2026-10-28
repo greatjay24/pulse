@@ -18,11 +18,11 @@ interface SidebarProps {
   compact: boolean; // narrow window: an icon rail
 }
 
-// The main nav, in order of importance. Activity (decision outcomes and agent runs) slots in
-// after Money once it lands.
+// The main nav, in order of importance.
 const MAIN_NAV: { id: string; label: string; icon: string }[] = [
   { id: 'today', label: 'Today', icon: 'today' },
   { id: 'board', label: 'Board', icon: 'board' },
+  // Activity (decision outcomes and agent runs) goes here once it lands: { id: 'activity', label: 'Activity', icon: 'activity' }
   { id: 'money', label: 'Money', icon: 'wallet' },
 ];
 
