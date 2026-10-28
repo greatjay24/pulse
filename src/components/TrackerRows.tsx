@@ -25,7 +25,7 @@ function Row({ url, children }: { url: string | null; children: ReactNode }) {
     gap: '12px',
     alignItems: 'flex-start',
     width: '100%',
-    padding: '10px 14px',
+    padding: '12px 16px',
     textAlign: 'left' as const,
     fontFamily: 'inherit',
     color: tokens.colors.text,
@@ -58,7 +58,7 @@ export function RowList({ children }: { children: ReactNode }) {
       style={{
         display: 'flex',
         flexDirection: 'column',
-        padding: '4px',
+        padding: '6px',
         background: tokens.colors.bgCard,
         border: `1px solid ${tokens.colors.border}`,
         borderRadius: tokens.radius.md,
@@ -82,7 +82,7 @@ export function TaskRow({ task, now }: { task: TrackerTask; now: number }) {
           {gate && (
             <span
               style={{
-                fontSize: '10px',
+                fontSize: '11px',
                 fontWeight: 600,
                 textTransform: 'uppercase',
                 letterSpacing: '0.06em',
@@ -95,7 +95,7 @@ export function TaskRow({ task, now }: { task: TrackerTask; now: number }) {
               Gate
             </span>
           )}
-          <span style={{ fontSize: '14px', fontWeight: gate ? 600 : 500, lineHeight: 1.45 }}>{task.title}</span>
+          <span style={{ fontSize: '15px', fontWeight: gate ? 600 : 500, lineHeight: 1.45 }}>{task.title}</span>
         </span>
         {task.detail && (
           <span
@@ -105,10 +105,11 @@ export function TaskRow({ task, now }: { task: TrackerTask; now: number }) {
               WebkitLineClamp: 2,
               WebkitBoxOrient: 'vertical',
               overflow: 'hidden',
-              fontSize: '12px',
-              lineHeight: 1.5,
+              fontSize: '13px',
+              lineHeight: 1.55,
               color: tokens.colors.textMuted,
-              marginTop: '2px',
+              marginTop: '3px',
+              maxWidth: '90ch',
             }}
           >
             {task.detail}
@@ -116,7 +117,7 @@ export function TaskRow({ task, now }: { task: TrackerTask; now: number }) {
         )}
       </span>
       {waiting && (
-        <span style={{ fontSize: '11px', color: tokens.colors.textDim, whiteSpace: 'nowrap', marginTop: '3px' }}>{waiting}</span>
+        <span style={{ fontSize: '12px', color: tokens.colors.textDim, whiteSpace: 'nowrap', marginTop: '3px' }}>{waiting}</span>
       )}
     </Row>
   );
@@ -130,13 +131,13 @@ export function ReplyRow({ email }: { email: TrackerEmail }) {
     <Row url={email.url}>
       <UrgencyDot urgency={email.urgency} />
       <span style={{ flex: 1, minWidth: 0 }}>
-        <span style={{ display: 'block', fontSize: '14px', fontWeight: 500, lineHeight: 1.45 }}>{email.subject || '(no subject)'}</span>
-        <span style={{ display: 'block', fontSize: '12px', color: tokens.colors.textMuted, marginTop: '2px' }}>
+        <span style={{ display: 'block', fontSize: '15px', fontWeight: 500, lineHeight: 1.45 }}>{email.subject || '(no subject)'}</span>
+        <span style={{ display: 'block', fontSize: '13px', color: tokens.colors.textMuted, marginTop: '3px' }}>
           {from}
           {email.account_label && <span style={{ color: tokens.colors.textDim }}> · {email.account_label}</span>}
         </span>
       </span>
-      {age && <span style={{ fontSize: '11px', color: tokens.colors.textDim, whiteSpace: 'nowrap', marginTop: '3px' }}>{age}</span>}
+      {age && <span style={{ fontSize: '12px', color: tokens.colors.textDim, whiteSpace: 'nowrap', marginTop: '3px' }}>{age}</span>}
     </Row>
   );
 }
@@ -145,9 +146,9 @@ export function RepoRow({ repo, note }: { repo: TrackerRepo; note: TrackerNote |
   const { tokens } = useTheme();
   const dirty = repo.dirty_count ?? 0;
   return (
-    <div style={{ display: 'flex', gap: '16px', alignItems: 'baseline', padding: '10px 14px', flexWrap: 'wrap' }}>
+    <div style={{ display: 'flex', gap: '16px', alignItems: 'baseline', padding: '12px 16px', flexWrap: 'wrap' }}>
       <span style={{ flex: '1 1 220px', minWidth: 0 }}>
-        <span style={{ fontSize: '14px', fontWeight: 500 }}>{repo.name}</span>
+        <span style={{ fontSize: '15px', fontWeight: 500 }}>{repo.name}</span>
         {note?.next && (
           <span style={{ display: 'block', fontSize: '12px', color: tokens.colors.textMuted, marginTop: '2px', lineHeight: 1.5 }}>
             <span style={{ color: tokens.colors.textDim }}>Next </span>

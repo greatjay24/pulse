@@ -3,7 +3,8 @@ import { useTheme } from '../contexts/ThemeContext';
 import { PortfolioSnapshot, TrackerEmail, TrackerSnapshot, TrackerTask } from '../types';
 import { UNASSIGNED, dueNow, formatUsd, isDueToday, isGate, openTaskList, ownerOf, projectOwners, sortReplies, sortTasks } from '../utils/tracker';
 import { Icon } from './Icons';
-import { BoardEntity, HealthDot, SectionLabel, boardEntities } from './OrgBoard';
+import { BoardEntity, boardEntities } from './OrgBoard';
+import { Card, EntityMark, HealthBadge, Notice, PageHeader, SectionLabel } from './BoardUI';
 import { ReplyRow, RowList, TaskRow } from './TrackerRows';
 
 // What is due now for one entity: "now" tasks, gate items marked now or soon, and replies.
@@ -40,18 +41,11 @@ function todayGroups(items: BoardEntity[], tracker: TrackerSnapshot, snapshot: P
 function Stat({ value, label, sub }: { value: ReactNode; label: string; sub?: string }) {
   const { tokens } = useTheme();
   return (
-    <div
-      style={{
-        padding: '18px 22px',
-        background: tokens.colors.bgCard,
-        border: `1px solid ${tokens.colors.border}`,
-        borderRadius: tokens.radius.lg,
-      }}
-    >
-      <SectionLabel style={{ marginBottom: '8px' }}>{label}</SectionLabel>
-      <div style={{ fontFamily: tokens.fonts.mono, fontSize: '32px', fontWeight: 600, letterSpacing: '-0.02em' }}>{value}</div>
-      {sub && <div style={{ fontSize: '12px', color: tokens.colors.textDim, marginTop: '4px' }}>{sub}</div>}
-    </div>
+    <Card padding="22px 24px">
+      <SectionLabel style={{ marginBottom: '10px' }}>{label}</SectionLabel>
+      <div style={{ fontSize: '40px', fontWeight: 600, letterSpacing: '-0.03em', lineHeight: 1.05 }}>{value}</div>
+      {sub && <div style={{ fontSize: tokens.type.small, color: tokens.colors.textDim, marginTop: '8px' }}>{sub}</div>}
+    </Card>
   );
 }
 
@@ -70,28 +64,28 @@ export function TodayView({ snapshot, tracker, error, trackerError, onOpenEntity
   const problem = error ?? trackerError ?? tracker?.error ?? null;
 
   const header = (
-    <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px' }}>
-      <div>
-        <h1 style={{ fontSize: '24px', fontWeight: 600, letterSpacing: '-0.02em' }}>Today</h1>
-        <p style={{ fontSize: '13px', color: tokens.colors.textMuted, marginTop: '4px' }}>
+    <PageHeader
+      title="Today"
+      subtitle={
+        <>
           {new Date(now).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}
           {tracker && ` · read ${new Date(tracker.read_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`}
-          {' · refreshes every minute'}
-        </p>
-      </div>
-      <button className="btn btn-secondary" onClick={onRefresh} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-        <Icon name="refresh" size={14} color="currentColor" /> Refresh
-      </button>
-    </header>
+          {', refreshes every minute'}
+        </>
+      }
+      right={
+        <button className="btn btn-secondary" onClick={onRefresh} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <Icon name="refresh" size={14} color="currentColor" /> Refresh
+        </button>
+      }
+    />
   );
 
   if (problem || !snapshot || !tracker) {
     return (
-      <div>
+      <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
         {header}
-        <div style={{ padding: '16px 20px', borderRadius: tokens.radius.md, background: tokens.colors.warningMuted, color: tokens.colors.warning, fontSize: '13px' }}>
-          {problem ?? 'Reading ~/portfolio and ~/project-tracker…'}
-        </div>
+        <Notice>{problem ?? 'Reading ~/portfolio and ~/project-tracker…'}</Notice>
       </div>
     );
   }
@@ -106,33 +100,35 @@ export function TodayView({ snapshot, tracker, error, trackerError, onOpenEntity
   const money = tracker.money;
 
   return (
-    <div>
+    <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
       {header}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '16px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '16px', marginBottom: '20px' }}>
         <Stat value={dueNow(openTaskList(tracker)).length} label="Tasks due now" />
         <Stat value={gates} label="Gate items" sub="Decide: items marked now or soon" />
         <Stat value={replies.length} label="Need a reply" sub={`${replies.filter((e) => e.urgency === 'now').length} urgent`} />
         <Stat
           value={money.configured ? formatUsd(money.totals.d7) : '—'}
-          label="Money in · 7 days"
-          sub={money.configured ? `${formatUsd(money.totals.d30)} over 30 days` : 'not connected in the tracker'}
+          label="Cash in · 7 days"
+          sub={money.configured ? `${formatUsd(money.totals.d30)} over 30 days` : 'No money source connected'}
         />
       </div>
 
       {(email?.stale || (email?.accounts_not_fetching.length ?? 0) > 0) && (
-        <div style={{ fontSize: '12px', color: tokens.colors.warning, marginBottom: '16px' }}>
+        <Notice>
           {email?.stale && `Email last fetched ${email.age_hours ?? '?'}h ago. `}
           {(email?.accounts_not_fetching.length ?? 0) > 0 && `Not fetching: ${email?.accounts_not_fetching.join(', ')}.`}
-        </div>
+        </Notice>
       )}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '28px', marginTop: '28px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '40px', marginTop: '40px' }}>
         {busy.map((g) => (
           <section key={g.id}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
-              {g.item && <HealthDot health={g.item.status?.health} />}
-              <h2 style={{ fontSize: '17px', fontWeight: 600, flex: 1 }}>{g.name}</h2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '16px' }}>
+              {g.item && <EntityMark entity={g.item.entity} logos={g.item.logos} size={32} />}
+              <h2 style={{ fontFamily: tokens.fonts.display, fontSize: tokens.type.heading, fontWeight: 500, letterSpacing: '-0.01em' }}>{g.name}</h2>
+              {g.item && <HealthBadge health={g.item.status?.health} />}
+              <span style={{ flex: 1 }} />
               {g.item && (
                 <button className="btn btn-secondary" onClick={() => onOpenEntity(g.id)}>
                   Open dashboard →
@@ -153,9 +149,9 @@ export function TodayView({ snapshot, tracker, error, trackerError, onOpenEntity
             </div>
           </section>
         ))}
-        {busy.length === 0 && <div style={{ fontSize: '14px', color: tokens.colors.textMuted }}>Nothing due now.</div>}
+        {busy.length === 0 && <div style={{ fontSize: tokens.type.body, color: tokens.colors.textMuted }}>Nothing due now.</div>}
         {quiet.length > 0 && (
-          <div style={{ fontSize: '13px', color: tokens.colors.textDim }}>
+          <div style={{ fontSize: tokens.type.small, color: tokens.colors.textDim }}>
             Nothing due: {quiet.map((g) => g.name).join(', ')}
           </div>
         )}
