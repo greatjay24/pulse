@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { Sidebar } from './components/Sidebar';
@@ -746,6 +746,13 @@ function DashboardContent() {
   }, []);
   const selectedEntity = boardItems.find((i) => i.entity.id === selectedEntityId) ?? null;
 
+  // <main> is the scroll container, so a new page or entity would otherwise open at the
+  // previous page's scroll position.
+  const mainRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    mainRef.current?.scrollTo(0, 0);
+  }, [activeNav, selectedEntityId, entityTab]);
+
   return (
     <div
       style={{
@@ -773,7 +780,7 @@ function DashboardContent() {
       />}
 
       {/* Main Content */}
-      <main style={{ flex: 1, padding: tvMode ? '40px 56px' : '32px 40px', overflow: 'auto' }}>
+      <main ref={mainRef} style={{ flex: 1, padding: tvMode ? '40px 56px' : '32px 40px', overflow: 'auto' }}>
         {/* Org board: the home view (zoomed up for the office TV) */}
         {activeNav === 'board' && (
           <div style={{ zoom: tvMode ? 1.45 : 1 }}>

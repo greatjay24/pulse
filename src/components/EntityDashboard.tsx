@@ -282,7 +282,7 @@ export function EntityDashboard({ item, entities, money, initialTab, onBack }: E
       </button>
 
       <header style={{ display: 'flex', gap: '22px', alignItems: 'center', marginBottom: '20px' }}>
-        <EntityMark entity={entity} logos={logos} size={68} />
+        <EntityMark entity={entity} logos={logos} size={68} header />
         <div style={{ minWidth: 0 }}>
           <h1 style={{ fontFamily: tokens.fonts.display, fontSize: '42px', fontWeight: 500, letterSpacing: '-0.02em', lineHeight: 1.05 }}>
             {entity.name}

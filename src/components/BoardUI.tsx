@@ -133,19 +133,40 @@ export interface EntityLogos {
   logo_dark: string | null;
 }
 
-// The entity's logo for the current theme, or its initial on its own color. A light-mode
-// logo is never put on a dark theme (or the reverse), since a black mark on near-black vanishes.
-export function EntityMark({ entity, logos, size = 40 }: { entity: PortfolioEntity; logos: EntityLogos | null; size?: number }) {
+// Wider than this, a logo is a wordmark: it fits a header but shrinks to nothing in a square.
+const WORDMARK_RATIO = 2;
+
+// The entity's logo for the active theme's background (dark palette -> `logo_dark`, light ->
+// `logo`), or its initial on its own color. A light-background logo is never put on a dark
+// theme (or the reverse), since a black mark on near-black vanishes. In compact spots a
+// wordmark `logo_dark` gives way to the `logo` mark; the header shows the wordmark itself.
+export function EntityMark({ entity, logos, size = 40, header = false }: {
+  entity: PortfolioEntity;
+  logos: EntityLogos | null;
+  size?: number;
+  header?: boolean;
+}) {
   const { tokens, resolvedTheme } = useTheme();
   const [broken, setBroken] = useState<string | null>(null);
-  const src = resolvedTheme === 'dark' ? logos?.logo_dark : logos?.logo;
+  const [wide, setWide] = useState<string | null>(null);
+  const dark = resolvedTheme === 'dark';
+  const preferred = dark ? logos?.logo_dark : logos?.logo;
+  const src = !header && dark && preferred && preferred === wide && logos?.logo ? logos.logo : preferred;
   if (src && src !== broken) {
     return (
       <img
         src={src}
         alt={`${entity.name} logo`}
         onError={() => setBroken(src)}
-        style={{ width: size, height: size, objectFit: 'contain', flexShrink: 0, display: 'block' }}
+        onLoad={(e) => {
+          const img = e.currentTarget;
+          if (img.naturalHeight && img.naturalWidth / img.naturalHeight > WORDMARK_RATIO) setWide(src);
+        }}
+        style={
+          header && src === wide
+            ? { height: size, width: 'auto', maxWidth: size * 4, objectFit: 'contain', flexShrink: 0, display: 'block' }
+            : { width: size, height: size, objectFit: 'contain', flexShrink: 0, display: 'block' }
+        }
       />
     );
   }
