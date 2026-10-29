@@ -30,3 +30,6 @@ src-tauri/target/
 *.njsproj
 *.sln
 *.sw?
+
+# Local screenshots of the org board show private portfolio data; never commit them
+docs/screenshots/

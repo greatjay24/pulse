@@ -2,7 +2,7 @@ use chrono::{Datelike, Timelike};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -1888,6 +1888,130 @@ async fn fetch_github_metrics(token: String, username: String, repos: Vec<String
 }
 
 // ==========================================
+// Portfolio (org board): read-only, local files under ~/portfolio only
+// ==========================================
+
+// Status reports are small; anything bigger is treated as malformed.
+const PORTFOLIO_MAX_FILE_BYTES: u64 = 1024 * 1024;
+
+#[derive(Serialize)]
+struct PortfolioEntityReport {
+    id: String,
+    status: Option<serde_json::Value>,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PortfolioSnapshot {
+    registry: Option<serde_json::Value>,
+    registry_error: Option<String>,
+    entities: Vec<PortfolioEntityReport>,
+    week: Option<String>,
+    read_at: String,
+}
+
+fn get_portfolio_dir() -> Result<PathBuf, String> {
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    home.join("portfolio")
+        .canonicalize()
+        .map_err(|_| "~/portfolio not found".to_string())
+}
+
+// Resolves a registry-relative path to a file inside ~/portfolio. Rejects absolute
+// paths, `..`, and symlinks that escape the root, so the board can never read elsewhere.
+fn resolve_portfolio_file(root: &Path, rel_dir: &str, file_name: &str) -> Result<PathBuf, String> {
+    let rel = Path::new(rel_dir);
+    if rel.is_absolute() || rel.components().any(|c| !matches!(c, Component::Normal(_) | Component::CurDir)) {
+        return Err("path is outside ~/portfolio".to_string());
+    }
+    let candidate = root.join(rel).join(file_name);
+    let resolved = candidate.canonicalize().map_err(|_| "missing".to_string())?;
+    if !resolved.starts_with(root) {
+        return Err("path is outside ~/portfolio".to_string());
+    }
+    Ok(resolved)
+}
+
+fn read_portfolio_text(path: &Path) -> Result<String, String> {
+    let meta = fs::metadata(path).map_err(|_| "missing".to_string())?;
+    if !meta.is_file() {
+        return Err("missing".to_string());
+    }
+    if meta.len() > PORTFOLIO_MAX_FILE_BYTES {
+        return Err("file too large".to_string());
+    }
+    fs::read_to_string(path).map_err(|e| format!("unreadable: {}", e))
+}
+
+fn read_portfolio_json(path: &Path) -> Result<serde_json::Value, String> {
+    let text = read_portfolio_text(path)?;
+    let value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("malformed: {}", e))?;
+    if !value.is_object() {
+        return Err("malformed: not a JSON object".to_string());
+    }
+    Ok(value)
+}
+
+#[tauri::command]
+fn read_portfolio() -> Result<String, String> {
+    let read_at = chrono::Local::now().to_rfc3339();
+    let root = match get_portfolio_dir() {
+        Ok(root) => root,
+        Err(e) => {
+            let snapshot = PortfolioSnapshot {
+                registry: None,
+                registry_error: Some(e),
+                entities: vec![],
+                week: None,
+                read_at,
+            };
+            return serde_json::to_string(&snapshot).map_err(|e| e.to_string());
+        }
+    };
+
+    let (registry, registry_error) = match resolve_portfolio_file(&root, ".", "portfolio.json")
+        .and_then(|p| read_portfolio_json(&p))
+    {
+        Ok(v) => (Some(v), None),
+        Err(e) => (None, Some(e)),
+    };
+
+    let mut entities = Vec::new();
+    if let Some(list) = registry.as_ref().and_then(|r| r.get("entities")).and_then(|e| e.as_array()) {
+        for entity in list {
+            let Some(id) = entity.get("id").and_then(|v| v.as_str()) else { continue };
+            let report = match entity.get("path").and_then(|v| v.as_str()) {
+                Some(rel) => match resolve_portfolio_file(&root, rel, "status.json")
+                    .and_then(|p| read_portfolio_json(&p))
+                {
+                    Ok(status) => PortfolioEntityReport { id: id.to_string(), status: Some(status), error: None },
+                    Err(e) => PortfolioEntityReport { id: id.to_string(), status: None, error: Some(e) },
+                },
+                None => PortfolioEntityReport {
+                    id: id.to_string(),
+                    status: None,
+                    error: Some("no path in portfolio.json".to_string()),
+                },
+            };
+            entities.push(report);
+        }
+    }
+
+    let week = resolve_portfolio_file(&root, ".", "WEEK.md")
+        .and_then(|p| read_portfolio_text(&p))
+        .ok();
+
+    let snapshot = PortfolioSnapshot { registry, registry_error, entities, week, read_at };
+    serde_json::to_string(&snapshot).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_tv_fullscreen(window: tauri::WebviewWindow, enabled: bool) -> Result<(), String> {
+    window.set_fullscreen(enabled).map_err(|e| e.to_string())
+}
+
+// ==========================================
 // Auto-Launch Management (macOS)
 // ==========================================
 
@@ -2024,8 +2148,46 @@ pub fn run() {
             fetch_gmail,
             fetch_github_metrics,
             get_auto_launch_enabled,
-            set_auto_launch_enabled
+            set_auto_launch_enabled,
+            read_portfolio,
+            set_tv_fullscreen
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod portfolio_tests {
+    use super::*;
+
+    fn temp_root(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("pulse-portfolio-test-{}-{}", name, std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("companies/acme")).unwrap();
+        dir.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn rejects_paths_outside_root() {
+        let root = temp_root("escape");
+        assert!(resolve_portfolio_file(&root, "../", "status.json").is_err());
+        assert!(resolve_portfolio_file(&root, "/etc", "passwd").is_err());
+        assert!(resolve_portfolio_file(&root, "companies/../../", "status.json").is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reports_missing_and_malformed_status() {
+        let root = temp_root("malformed");
+        assert_eq!(resolve_portfolio_file(&root, "companies/acme", "status.json").unwrap_err(), "missing");
+
+        let path = root.join("companies/acme/status.json");
+        fs::write(&path, "{ not json").unwrap();
+        let resolved = resolve_portfolio_file(&root, "companies/acme", "status.json").unwrap();
+        assert!(read_portfolio_json(&resolved).unwrap_err().starts_with("malformed"));
+
+        fs::write(&path, r#"{"entity":"acme","health":"green"}"#).unwrap();
+        assert_eq!(read_portfolio_json(&resolved).unwrap()["health"], "green");
+        let _ = fs::remove_dir_all(&root);
+    }
 }

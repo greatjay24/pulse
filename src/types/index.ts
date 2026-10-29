@@ -578,3 +578,82 @@ export interface DashboardGridLayout {
   cols: number;
   rowHeight: number;
 }
+
+// ==========================================
+// Portfolio (org board): mirrors ~/portfolio/STATUS_SCHEMA.md
+// ==========================================
+
+export type Health = 'green' | 'yellow' | 'red';
+export type Gate = 'decision' | 'money' | 'relationship' | 'taste';
+
+export interface PortfolioGroup {
+  id: string;
+  name: string;
+}
+
+export interface PortfolioEntity {
+  id: string;
+  name: string;
+  group: string;
+  parent: string | null;
+  path: string;
+  lead?: string;
+  schedule?: string;
+}
+
+export interface PortfolioRegistry {
+  groups: PortfolioGroup[];
+  entities: PortfolioEntity[];
+}
+
+export interface EntityMetric {
+  label: string;
+  value: string;
+  trend?: 'up' | 'down' | 'flat';
+  source?: string;
+}
+
+export interface EntityLane {
+  status: string;
+  next: string;
+}
+
+export interface EntityDecision {
+  ask: string;
+  recommend?: string;
+  why?: string;
+  gate?: Gate;
+  due?: string | null;
+}
+
+export interface EntityStatus {
+  entity: string;
+  name: string;
+  group: string;
+  parent: string | null;
+  stage?: string;
+  updated?: string;
+  health?: Health;
+  headline?: string;
+  metrics?: EntityMetric[];
+  lanes?: Record<string, EntityLane>;
+  decisions?: EntityDecision[];
+  waiting_on?: { who: string; what: string; since?: string | null }[];
+  risks?: { what: string; date?: string | null; severity?: 'high' | 'medium' | 'low' }[];
+  next?: string[];
+  done?: { what: string; link?: string | null; date?: string | null }[];
+}
+
+export interface PortfolioEntityReport {
+  id: string;
+  status: EntityStatus | null;
+  error: string | null; // "missing", "malformed: …", etc. Either way the UI shows "no report yet".
+}
+
+export interface PortfolioSnapshot {
+  registry: PortfolioRegistry | null;
+  registry_error: string | null;
+  entities: PortfolioEntityReport[];
+  week: string | null;
+  read_at: string;
+}

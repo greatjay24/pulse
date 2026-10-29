@@ -338,6 +338,15 @@ export function Sidebar({
       {/* Main Nav */}
       <nav style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
         <NavButton
+          icon="pulse"
+          label="Board"
+          isActive={activeNav === 'board'}
+          onClick={() => onNavChange('board')}
+        />
+
+        <NavDivider label="SaaS metrics" />
+
+        <NavButton
           icon="home"
           label="Overview"
           isActive={activeNav === 'overview'}
