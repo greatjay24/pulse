@@ -1,4 +1,4 @@
-import { EntityLane, EntityStatus, Health } from '../types';
+import { EntityLane, EntityStatus } from '../types';
 
 export const STANDARD_LANES = ['sales', 'marketing', 'delivery', 'finance', 'admin'] as const;
 
@@ -21,15 +21,6 @@ export function formatAge(hours: number | null): string {
 
 export function isStale(hours: number | null): boolean {
   return hours === null || hours > STALE_AFTER_HOURS;
-}
-
-export function healthColor(health: Health | undefined, colors: { success: string; warning: string; danger: string; textDim: string }): string {
-  switch (health) {
-    case 'green': return colors.success;
-    case 'yellow': return colors.warning;
-    case 'red': return colors.danger;
-    default: return colors.textDim;
-  }
 }
 
 // Directors use the five standard lanes; some (Personal) report their own. Show the

@@ -37,8 +37,13 @@ and `WEEK.md` through a read-only Rust command scoped to `~/portfolio`. No netwo
   nested under Personal). Each card shows health, headline, open decisions, top metrics
   and report age (flagged as stale after 36h). The top strip totals decisions waiting on
   you and shows the first section of `WEEK.md`.
-- **Entity dashboard**: click a card for metrics, lanes, decisions with recommendations
-  and gates, waiting on, risks, next moves and done this week.
+- **Entity dashboard**: click a card. Three tabs: Overview (metrics, lanes, decisions with
+  recommendations and gates, next moves, waiting on, risks, done this week), Finance and
+  Tasks and inbox.
+- **Logos**: optional `logo` (for light themes) and `logo_dark` (for dark themes) per
+  entity in `portfolio.json`, as paths under `~/portfolio/assets/` (svg, png, jpg or webp,
+  1 MB max). Swapping a logo is a one-line change to that path. Without one, the card shows
+  the entity's initial on its `color` (optional hex in `portfolio.json`).
 - **TV mode**: press `T` (or the TV mode button) for fullscreen with larger type and no
   sidebar; `Esc` exits. `Backspace` returns from an entity to the board.
 - Data re-reads every 60 seconds and whenever the window regains focus.
@@ -57,12 +62,38 @@ entity lists shows under Unassigned in Today.
 - **Today** (sidebar, or click the Today card): tasks due now, gate items ("Decide: …")
   marked now or soon, and emails needing a reply, grouped by entity. Gate items marked
   "whenever" and report decisions stay on the board and entity dashboards.
-- **Cards** show open task and needs-reply counts.
-- **Entity dashboard** adds Your tasks (gate items first), Needs a reply (subject and
-  sender only), Repos (branch, uncommitted, days idle) and Money in.
-- Money totals use the same de-duplication as the tracker's `money.py`; only totals
-  reach the UI. Email bodies, payer names and account details never leave Rust.
+- **Cards** show open task and needs-reply counts and cash in over 30 days.
+- **Tasks and inbox** tab: Your tasks (gate items first), Needs a reply (subject and
+  sender only) and Repos (branch, uncommitted, days idle).
 - Tasks are read-only. Links open in the default browser.
+
+### Money
+
+Money comes from the tracker's collectors (`stripe.json`, `bank.json`,
+`payments_email.json`) through a Rust port of `money.py`, so every total matches the
+brief: the same payment seen as a Stripe charge, its payout and the bank deposit counts once.
+
+- **Board**: a Money band with cash in over 30 and 90 days, a split by entity (click one
+  to open its Finance tab), and the last 12 months.
+- **Finance tab** per entity: 30 and 90 days, monthly cash in, by source (Stripe, bank,
+  payment emails, with the rail behind each), top payers, repeat vs one-off payers, Stripe
+  MRR and subscriptions per project, and mapped bank balances.
+- A source that is not connected says so and shows the command:
+  `python3 ~/project-tracker/connect_money.py stripe <project>` or
+  `python3 ~/project-tracker/connect_money.py simplefin`. Nothing is estimated.
+- The collectors keep 30 days, so 90-day and 12-month views say how far back data reaches;
+  older months show as not on file, not as zero. Money out is not shown: the bank
+  collector keeps deposits only.
+- Payer names reach the UI for the top payers list (this is the owner's own machine). Email
+  bodies, transaction descriptions and account numbers never leave Rust.
+
+### Appearance
+
+Settings > Appearance has six color themes after the films in the owner's taste guide (Paris,
+Texas; Wings of Desire; Moonlight; Days of Heaven; Chungking Express; In the Mood for
+Love), each with light and dark versions, an optional custom accent, and a type choice
+(Editorial, the default: serif titles and a system sans; or Inter, Space Grotesk,
+JetBrains Mono). Choices are saved in the app's local storage.
 
 ## Installation
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { Sidebar } from './components/Sidebar';
@@ -23,7 +23,7 @@ import { CardRect } from './components/StatCard';
 import { useHistory } from './hooks/useHistory';
 import { usePortfolio } from './hooks/usePortfolio';
 import { OrgBoard, boardEntities } from './components/OrgBoard';
-import { EntityDashboard } from './components/EntityDashboard';
+import { EntityDashboard, EntityTab } from './components/EntityDashboard';
 import { TodayView } from './components/TodayView';
 import { migrateApps } from './utils/platforms';
 import './index.css';
@@ -46,6 +46,7 @@ function DashboardContent() {
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
   const [activeNav, setActiveNav] = useState('board');
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const [entityTab, setEntityTab] = useState<EntityTab>('overview');
   const [tvMode, setTvMode] = useState(false);
   const portfolio = usePortfolio();
   const [detailPanel, setDetailPanel] = useState<{ isOpen: boolean; type: DetailPanelType; originRect: CardRect | null }>({
@@ -737,12 +738,20 @@ function DashboardContent() {
 
   const boardItems = boardEntities(portfolio.snapshot, portfolio.tracker);
 
-  // From the Today view, an entity opens on the board so Backspace returns to the board.
-  const openEntity = useCallback((id: string) => {
+  // An entity opens on the board (so Backspace returns there), on the tab asked for.
+  const openEntity = useCallback((id: string, tab: EntityTab = 'overview') => {
+    setEntityTab(tab);
     setSelectedEntityId(id);
     setActiveNav('board');
   }, []);
   const selectedEntity = boardItems.find((i) => i.entity.id === selectedEntityId) ?? null;
+
+  // <main> is the scroll container, so a new page or entity would otherwise open at the
+  // previous page's scroll position.
+  const mainRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    mainRef.current?.scrollTo(0, 0);
+  }, [activeNav, selectedEntityId, entityTab]);
 
   return (
     <div
@@ -771,14 +780,17 @@ function DashboardContent() {
       />}
 
       {/* Main Content */}
-      <main style={{ flex: 1, padding: tvMode ? '40px 56px' : '32px 40px', overflow: 'auto' }}>
+      <main ref={mainRef} style={{ flex: 1, padding: tvMode ? '40px 56px' : '32px 40px', overflow: 'auto' }}>
         {/* Org board: the home view (zoomed up for the office TV) */}
         {activeNav === 'board' && (
-          <div style={{ zoom: tvMode ? 1.4 : 1 }}>
+          <div style={{ zoom: tvMode ? 1.45 : 1 }}>
             {selectedEntity ? (
               <EntityDashboard
+                key={`${selectedEntity.entity.id}-${entityTab}`}
                 item={selectedEntity}
-                moneyConnected={!!portfolio.tracker?.money.configured}
+                entities={portfolio.snapshot?.registry?.entities ?? []}
+                money={portfolio.tracker && !portfolio.tracker.error ? portfolio.tracker.money : null}
+                initialTab={entityTab}
                 onBack={() => setSelectedEntityId(null)}
               />
             ) : (
@@ -788,7 +800,7 @@ function DashboardContent() {
                 error={portfolio.error}
                 trackerError={portfolio.trackerError}
                 onOpenToday={() => handleNavChange('today')}
-                onOpenEntity={setSelectedEntityId}
+                onOpenEntity={openEntity}
                 onRefresh={portfolio.refresh}
                 tvMode={tvMode}
                 onToggleTv={() => setTv(!tvMode)}

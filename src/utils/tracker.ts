@@ -55,7 +55,6 @@ export interface EntityTracker {
   scheduled: TrackerTask[];
   replies: TrackerEmail[];
   repos: { repo: TrackerRepo; note: TrackerNote | null }[];
-  money: { d7: number; d30: number } | null; // null when the tracker attributes no money here
 }
 
 // Email replies also appear in tasks.json (source "email"); email.json is the fresher
@@ -65,9 +64,6 @@ const isTaskListItem = (t: TrackerTask) => t.source !== 'email';
 export function entityTracker(entityId: string, tracker: TrackerSnapshot, owners: Map<string, string>): EntityTracker {
   const mine = (project: string | null) => ownerOf(project, owners) === entityId;
   const tasks = tracker.tasks.filter((t) => isTaskListItem(t) && mine(t.project));
-  const moneyFor = (rows: [string, number][]) =>
-    rows.filter(([p]) => p !== 'unsorted' && mine(p)).reduce((sum, [, v]) => sum + v, 0);
-  const hasMoney = tracker.money.by_project_d30.some(([p]) => p !== 'unsorted' && mine(p));
   return {
     tasks: sortTasks(tasks.filter((t) => t.status === 'open')),
     scheduled: tasks
@@ -78,9 +74,6 @@ export function entityTracker(entityId: string, tracker: TrackerSnapshot, owners
       .filter((r) => mine(r.id))
       .sort((a, b) => (a.days_idle ?? Infinity) - (b.days_idle ?? Infinity))
       .map((repo) => ({ repo, note: tracker.notes[repo.id] ?? null })),
-    money: hasMoney
-      ? { d7: moneyFor(tracker.money.by_project_d7), d30: moneyFor(tracker.money.by_project_d30) }
-      : null,
   };
 }
 
