@@ -1,3 +1,5 @@
+mod ops;
+
 use chrono::{Datelike, Timelike};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -3637,7 +3639,15 @@ pub fn run() {
             read_live,
             read_transcript,
             list_transcripts,
-            setup_check
+            setup_check,
+            ops::read_outbox,
+            ops::outbox_edit,
+            ops::outbox_skip,
+            ops::outbox_send,
+            ops::read_goals,
+            ops::save_goal,
+            ops::read_connections,
+            ops::check_connections
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

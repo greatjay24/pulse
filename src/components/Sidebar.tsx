@@ -26,6 +26,9 @@ const MAIN_NAV: { id: string; label: string; icon: string }[] = [
   { id: 'activity', label: 'Activity', icon: 'activity' }, // decision outcomes, agent runs, cost
   { id: 'conversations', label: 'Conversations', icon: 'chat' }, // what the owner and the leads said, run by run
   { id: 'money', label: 'Money', icon: 'wallet' },
+  { id: 'outbox', label: 'Outbox', icon: 'mail' }, // messages agents wrote, sent on the owner's click
+  { id: 'goals', label: 'Goals', icon: 'target' },
+  { id: 'connections', label: 'Connections', icon: 'globe' },
 ];
 
 // Helper to get favicon URL from domain

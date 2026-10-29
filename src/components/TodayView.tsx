@@ -14,6 +14,7 @@ import { HeadlineLine } from './Headline';
 import { ReplyRow, RowList, TaskRow } from './TrackerRows';
 import { LastNightCard } from './LastNightCard';
 import { WorkingNow } from './WorkingNow';
+import { OutboxCard } from './OutboxPage';
 
 // One business on Today: its health and why, then what is due (tasks due now, gate items
 // marked now or soon, replies marked now). Other replies wait on the entity's dashboard.
@@ -139,13 +140,14 @@ interface TodayViewProps {
   trackerError: string | null;
   onOpenEntity: (id: string, tab?: EntityTab) => void;
   onOpenActivity?: () => void;
+  onOpenOutbox?: () => void;
   onOpenRun: (runId: string) => void;
   onRefresh: () => void;
 }
 
 // The home view, in order of importance: one headline line, the decisions waiting on the owner,
 // then each business with its health and what is due today.
-export function TodayView({ snapshot, tracker, error, trackerError, onOpenEntity, onOpenActivity, onOpenRun, onRefresh }: TodayViewProps) {
+export function TodayView({ snapshot, tracker, error, trackerError, onOpenEntity, onOpenActivity, onOpenOutbox, onOpenRun, onRefresh }: TodayViewProps) {
   const now = Date.now();
   const trackerProblem = trackerError ?? tracker?.error ?? null;
   const trackerOk = tracker && !tracker.error ? tracker : null;
@@ -199,6 +201,12 @@ export function TodayView({ snapshot, tracker, error, trackerError, onOpenEntity
           <section style={{ marginBottom: '56px' }}>
             <LastNightCard snapshot={snapshot} onOpen={onOpenActivity} />
           </section>
+
+          {onOpenOutbox && (
+            <section style={{ marginBottom: '56px' }}>
+              <OutboxCard snapshot={snapshot} onOpen={onOpenOutbox} />
+            </section>
+          )}
 
           <section style={{ marginBottom: '56px' }}>
             <SectionHeading note={queue.length ? 'riskiest business first' : undefined}>Decisions</SectionHeading>
