@@ -32,15 +32,16 @@
 New here? Read **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** (one page, no
 engineering needed). In short:
 
-1. Install Claude Code and sign in; make sure `python3` works.
+1. Install one agent CLI and sign in: Codex (with a ChatGPT plan), Claude Code, or opencode
+   (any provider). Make sure `python3` works.
 2. Download Pulse from [Releases](https://github.com/greatjay24/pulse/releases) and open it
    (right-click → Open the first time; the build isn't signed yet).
 3. Pulse opens on a welcome screen with the setup command, or **Try the demo** to click
    through a fictional org (Acme Studio, Northwind Supply, Globex Rentals) first. The demo is
    bundled in the app, read-only, and its action buttons only show a message.
 4. Run setup: `git clone https://github.com/greatjay24/pulse.git ~/pulse && python3 ~/pulse/kit/setup.py`.
-   It builds your org in `~/portfolio` and installs a lead agent per business in
-   `~/.claude/agents`. See [kit/README.md](kit/README.md) for what the starter kit contains.
+   It builds your org in `~/portfolio` with a lead agent per business, on the runner you pick
+   (`"runner"` in `portfolio.json`; switch any time). See [kit/README.md](kit/README.md) for what the starter kit contains.
 
 ## Today, Board, Money
 
@@ -219,8 +220,8 @@ MIT
 ## First run and demo mode
 
 When `~/portfolio/portfolio.json` doesn't exist, Pulse shows a welcome screen instead of an
-empty board: what Pulse is, a check for Claude Code and python3 (`setup_check`, existence
-checks at fixed paths only), the setup command with a copy button, and **Try the demo**.
+empty board: what Pulse is, a check for an agent CLI (Claude Code, Codex or opencode) and
+python3 (`setup_check`, existence checks at fixed paths only), the setup command with a copy button, and **Try the demo**.
 
 Demo mode serves a fictional org bundled in the frontend (`src/demo/demoOrg.ts`): status
 reports, decisions, a `WEEK.md`, finished runs with transcripts, an interactive session and
