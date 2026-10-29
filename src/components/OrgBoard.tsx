@@ -1,12 +1,15 @@
 import { ReactNode } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { EntityStatus, PortfolioEntity, PortfolioSnapshot, TrackerSnapshot } from '../types';
-import { decisionCount, firstWeekSection, plainMarkdownLine } from '../utils/portfolio';
-import { EntityTracker, dueNow, entityTracker, formatUsd, isDueToday, isGate, openTaskList, projectOwners } from '../utils/tracker';
+import { decisionCount, firstWeekSection, healthRank, plainMarkdownLine } from '../utils/portfolio';
+import { EntityTracker, dueNow, entityTracker, formatUsd, projectOwners } from '../utils/tracker';
 import { projectsOf, sumFinance } from '../utils/finance';
+import { headline } from '../utils/today';
+import { dataSources } from '../utils/sources';
 import { Icon } from './Icons';
-import { AgeLabel, Card, EntityLogos, EntityMark, HealthBadge, Notice, PageHeader, SectionLabel, StageBadge } from './BoardUI';
-import { MoneyBand } from './MoneyBand';
+import { AgeLabel, Card, DataStamps, EntityMark, HealthBadge, HealthWhy, Notice, PageHeader, SectionLabel, StageBadge } from './BoardUI';
+import type { EntityLogos } from './BoardUI';
+import { HeadlineLine } from './Headline';
 
 export interface BoardEntity {
   entity: PortfolioEntity;
@@ -40,6 +43,14 @@ export function boardEntities(snapshot: PortfolioSnapshot | null, tracker: Track
   });
 }
 
+// Within a group, red first, then yellow, then green; registry order breaks ties.
+export function byHealth(items: BoardEntity[]): BoardEntity[] {
+  return items
+    .map((item, order) => ({ item, order }))
+    .sort((a, b) => healthRank(a.item.status?.health) - healthRank(b.item.status?.health) || a.order - b.order)
+    .map(({ item }) => item);
+}
+
 function Count({ n, children, tone }: { n: number; children: ReactNode; tone?: string }) {
   const { tokens } = useTheme();
   return (
@@ -47,6 +58,10 @@ function Count({ n, children, tone }: { n: number; children: ReactNode; tone?: s
       <span style={{ fontWeight: 600, color: tone ?? tokens.colors.text }}>{n}</span> {children}
     </span>
   );
+}
+
+function healthTone(health: string | undefined, c: { danger: string; warning: string; success: string; textMuted: string }): string {
+  return health === 'red' ? c.danger : health === 'yellow' ? c.warning : health === 'green' ? c.success : c.textMuted;
 }
 
 function EntityCard({ item, now, onOpen }: { item: BoardEntity; now: number; onOpen: () => void }) {
@@ -101,8 +116,14 @@ function EntityCard({ item, now, onOpen }: { item: BoardEntity; now: number; onO
             </div>
           ) : null}
         </div>
-        <HealthBadge health={status?.health} />
+        <HealthBadge health={status?.health} why={status?.health_why} />
       </div>
+
+      {status?.health_why && (
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'baseline', marginTop: '-6px', width: '100%' }}>
+          <HealthWhy why={status.health_why} clamp={2} style={{ color: healthTone(status.health, c) }} />
+        </div>
+      )}
 
       {status ? (
         <div
@@ -112,7 +133,7 @@ function EntityCard({ item, now, onOpen }: { item: BoardEntity; now: number; onO
             lineHeight: 1.55,
             color: c.textMuted,
             display: '-webkit-box',
-            WebkitLineClamp: 3,
+            WebkitLineClamp: 2,
             WebkitBoxOrient: 'vertical',
             overflow: 'hidden',
           }}
@@ -130,22 +151,29 @@ function EntityCard({ item, now, onOpen }: { item: BoardEntity; now: number; onO
         <div style={{ display: 'grid', gridTemplateColumns: `repeat(${metrics.length}, minmax(0, 1fr))`, gap: '16px', width: '100%' }}>
           {metrics.map((m) => (
             <div key={m.label} style={{ minWidth: 0 }}>
+              {/* One line of value and two of label in every card, so the rows line up. */}
               <div
                 title={m.value}
+                style={{ fontSize: '16px', fontWeight: 600, lineHeight: 1.35, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              >
+                {m.value}
+              </div>
+              <div
+                title={m.label}
                 style={{
-                  fontSize: '16px',
-                  fontWeight: 600,
+                  fontSize: tokens.type.micro,
+                  color: c.textDim,
+                  marginTop: '4px',
                   lineHeight: 1.35,
+                  minHeight: '2.7em',
                   overflow: 'hidden',
                   display: '-webkit-box',
                   WebkitLineClamp: 2,
                   WebkitBoxOrient: 'vertical',
-                  wordBreak: 'break-word',
                 }}
               >
-                {m.value}
+                {m.label}
               </div>
-              <div style={{ fontSize: tokens.type.micro, color: c.textDim, marginTop: '4px', lineHeight: 1.35 }}>{m.label}</div>
             </div>
           ))}
         </div>
@@ -183,134 +211,46 @@ function EntityCard({ item, now, onOpen }: { item: BoardEntity; now: number; onO
   );
 }
 
-function BigNumber({ value, label }: { value: number; label: string }) {
+// The chief of staff's three moves for the week (the first "## " section of WEEK.md).
+function WeekMoves({ week }: { week: string | null }) {
   const { tokens } = useTheme();
-  return (
-    <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
-      <span style={{ fontSize: '48px', fontWeight: 600, letterSpacing: '-0.03em', lineHeight: 1 }}>{value}</span>
-      <span style={{ fontSize: tokens.type.body, color: tokens.colors.textMuted }}>{label}</span>
-    </div>
-  );
-}
-
-// Board summary of the tracker, same scope as the Today view: tasks due now and gate items
-// marked now or soon, and who is waiting on a reply.
-function TodayCard({ tracker, onOpen }: { tracker: TrackerSnapshot; onOpen: () => void }) {
-  const { tokens } = useTheme();
-  const today = openTaskList(tracker).filter(isDueToday);
-  const gates = today.filter(isGate).length;
-  const replies = tracker.email?.needs_reply ?? [];
-  const urgentReplies = replies.filter((e) => e.urgency === 'now').length;
-  // One shared detail line, so the two numbers stay side by side in a narrow card.
-  const detail = [
-    gates ? `${gates} gate ${gates === 1 ? 'item' : 'items'}` : null,
-    urgentReplies ? `${urgentReplies} urgent ${urgentReplies === 1 ? 'reply' : 'replies'}` : null,
-  ].filter(Boolean).join(' · ');
-  return (
-    <button
-      onClick={onOpen}
-      title="Open the Today view"
-      onMouseEnter={(e) => (e.currentTarget.style.borderColor = tokens.colors.borderHover)}
-      onMouseLeave={(e) => (e.currentTarget.style.borderColor = tokens.colors.border)}
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'flex-start',
-        padding: '24px 26px',
-        background: tokens.colors.bgCard,
-        border: `1px solid ${tokens.colors.border}`,
-        borderRadius: tokens.radius.lg,
-        textAlign: 'left',
-        cursor: 'pointer',
-        fontFamily: 'inherit',
-        color: tokens.colors.text,
-        transition: 'border-color 0.15s ease',
-      }}
-    >
-      <SectionLabel>Today</SectionLabel>
-      <div style={{ display: 'flex', gap: '32px', flexWrap: 'wrap' }}>
-        <BigNumber value={today.length} label="due" />
-        <BigNumber value={replies.length} label={replies.length === 1 ? 'reply' : 'replies'} />
-      </div>
-      {detail && <div style={{ fontSize: tokens.type.small, color: tokens.colors.textDim, marginTop: '10px' }}>{detail}</div>}
-    </button>
-  );
-}
-
-function TopStrip({ items, week, tracker, onOpenToday }: {
-  items: BoardEntity[];
-  week: string | null;
-  tracker: TrackerSnapshot | null;
-  onOpenToday: () => void;
-}) {
-  const { tokens } = useTheme();
-  const total = items.reduce((sum, i) => sum + decisionCount(i.status), 0);
-  const byGate = new Map<string, number>();
-  for (const i of items) {
-    for (const d of i.status?.decisions ?? []) {
-      const gate = d.gate ?? 'decision';
-      byGate.set(gate, (byGate.get(gate) ?? 0) + 1);
-    }
-  }
   const moves = firstWeekSection(week);
-
   return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-        gap: '20px',
-        marginBottom: '24px',
-      }}
-    >
-      <Card>
-        <SectionLabel>Waiting on you</SectionLabel>
-        <BigNumber value={total} label={total === 1 ? 'decision' : 'decisions'} />
-        {byGate.size > 0 && (
-          <div style={{ fontSize: tokens.type.small, color: tokens.colors.textDim, marginTop: '10px', lineHeight: 1.5 }}>
-            {[...byGate.entries()].map(([gate, n]) => `${n} ${gate}`).join(' · ')}
-          </div>
-        )}
-      </Card>
-
-      {tracker && !tracker.error && <TodayCard tracker={tracker} onOpen={onOpenToday} />}
-
-      <Card style={{ gridColumn: 'span 2' }}>
-        <SectionLabel>{moves?.title ?? "This week's three moves"}</SectionLabel>
-        {moves && moves.lines.length > 0 ? (
-          <ol style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '72ch' }}>
-            {moves.lines.map((line, idx) => {
-              const { text, numbered, bullet } = plainMarkdownLine(line);
-              const isItem = numbered || bullet;
-              return (
-                <li
-                  key={idx}
-                  style={{
-                    display: 'flex',
-                    gap: '12px',
-                    fontSize: isItem ? '16px' : tokens.type.small,
-                    lineHeight: 1.5,
-                    color: isItem ? tokens.colors.text : tokens.colors.textMuted,
-                    paddingLeft: isItem ? 0 : '30px',
-                  }}
-                >
-                  {isItem && (
-                    <span style={{ fontFamily: tokens.fonts.display, color: tokens.colors.accent, width: '18px', flexShrink: 0 }}>
-                      {numbered ? line.match(/^\d+/)?.[0] : '·'}
-                    </span>
-                  )}
-                  <span>{text}</span>
-                </li>
-              );
-            })}
-          </ol>
-        ) : (
-          <div style={{ fontSize: tokens.type.body, color: tokens.colors.textDim, lineHeight: 1.55 }}>
-            No WEEK.md yet. The chief of staff writes it on Mondays at 6:30am.
-          </div>
-        )}
-      </Card>
-    </div>
+    <Card style={{ marginBottom: '40px' }}>
+      <SectionLabel>{moves?.title ?? "This week's three moves"}</SectionLabel>
+      {moves && moves.lines.length > 0 ? (
+        <ol style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '80ch' }}>
+          {moves.lines.map((line, idx) => {
+            const { text, numbered, bullet } = plainMarkdownLine(line);
+            const isItem = numbered || bullet;
+            return (
+              <li
+                key={idx}
+                style={{
+                  display: 'flex',
+                  gap: '12px',
+                  fontSize: isItem ? tokens.type.lead : tokens.type.small,
+                  lineHeight: 1.5,
+                  color: isItem ? tokens.colors.text : tokens.colors.textMuted,
+                  paddingLeft: isItem ? 0 : '30px',
+                }}
+              >
+                {isItem && (
+                  <span style={{ fontFamily: tokens.fonts.display, color: tokens.colors.accent, width: '18px', flexShrink: 0 }}>
+                    {numbered ? line.match(/^\d+/)?.[0] : '·'}
+                  </span>
+                )}
+                <span>{text}</span>
+              </li>
+            );
+          })}
+        </ol>
+      ) : (
+        <div style={{ fontSize: tokens.type.body, color: tokens.colors.textDim, lineHeight: 1.55 }}>
+          No WEEK.md yet. The chief of staff writes it on Mondays at 6:30am.
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -319,34 +259,30 @@ interface OrgBoardProps {
   tracker: TrackerSnapshot | null;
   error: string | null;
   trackerError: string | null;
-  onOpenToday: () => void;
-  onOpenEntity: (id: string, tab?: 'finance') => void;
+  onOpenEntity: (id: string) => void;
   onRefresh: () => void;
   tvMode: boolean;
   onToggleTv: () => void;
 }
 
-export function OrgBoard({ snapshot, tracker, error, trackerError, onOpenToday, onOpenEntity, onRefresh, tvMode, onToggleTv }: OrgBoardProps) {
+// The whole portfolio: every business by group, riskiest first. On the office TV it leads
+// with the same headline line as Today and drops the buttons.
+export function OrgBoard({ snapshot, tracker, error, trackerError, onOpenEntity, onRefresh, tvMode, onToggleTv }: OrgBoardProps) {
   const { tokens } = useTheme();
   const now = Date.now();
   const items = boardEntities(snapshot, tracker);
   const trackerProblem = trackerError ?? tracker?.error ?? null;
   const groups = snapshot?.registry?.groups ?? [];
-  const readAt = snapshot ? new Date(snapshot.read_at) : null;
-  const logos = new Map(items.filter((i) => i.logos).map((i) => [i.entity.id, i.logos as EntityLogos]));
+  const line = headline(items, snapshot, tracker);
 
   return (
     <div style={{ maxWidth: '1680px', margin: '0 auto' }}>
       <PageHeader
         title="Board"
-        subtitle={
-          readAt
-            ? `${new Date(now).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })} · read ${readAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}, refreshes every minute`
-            : 'Reading ~/portfolio…'
-        }
+        subtitle={<DataStamps sources={dataSources(snapshot, tracker)} now={now} />}
         right={
           tvMode ? (
-            <span style={{ fontSize: '28px', fontWeight: 500, color: tokens.colors.textMuted }}>
+            <span style={{ fontFamily: tokens.fonts.display, fontSize: '34px', color: tokens.colors.textMuted, fontVariantNumeric: 'tabular-nums' }}>
               {new Date(now).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
             </span>
           ) : (
@@ -354,8 +290,8 @@ export function OrgBoard({ snapshot, tracker, error, trackerError, onOpenToday, 
               <button className="btn btn-secondary" onClick={onRefresh} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <Icon name="refresh" size={14} color="currentColor" /> Refresh
               </button>
-              <button className="btn btn-secondary" onClick={onToggleTv} title="TV mode (press T, Esc to exit)">
-                TV mode <span style={{ color: tokens.colors.textDim, marginLeft: '4px' }}>T</span>
+              <button className="btn btn-secondary" onClick={onToggleTv} title="TV mode (press T, Esc to exit)" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Icon name="tv" size={14} color="currentColor" /> TV mode <span style={{ color: tokens.colors.textDim, marginLeft: '2px' }}>T</span>
               </button>
             </div>
           )
@@ -370,16 +306,13 @@ export function OrgBoard({ snapshot, tracker, error, trackerError, onOpenToday, 
 
       {snapshot?.registry && (
         <>
-          <TopStrip items={items} week={snapshot.week} tracker={tracker} onOpenToday={onOpenToday} />
-
-          {tracker && !tracker.error && (
-            <MoneyBand
-              money={tracker.money}
-              entities={snapshot.registry.entities}
-              logos={logos}
-              onOpenEntity={(id) => onOpenEntity(id, 'finance')}
-            />
+          {tvMode && line && (
+            <div style={{ marginBottom: '36px' }}>
+              <HeadlineLine data={line} size="34px" />
+            </div>
           )}
+
+          {!tvMode && <WeekMoves week={snapshot.week} />}
 
           <div
             style={{
@@ -390,14 +323,14 @@ export function OrgBoard({ snapshot, tracker, error, trackerError, onOpenToday, 
             }}
           >
             {groups.map((group) => {
-              const top = items.filter((i) => i.entity.group === group.id && !i.entity.parent);
+              const top = byHealth(items.filter((i) => i.entity.group === group.id && !i.entity.parent));
               return (
                 <section key={group.id} style={{ display: 'flex', flexDirection: 'column', gap: '16px', minWidth: 0 }}>
                   <h2 style={{ fontFamily: tokens.fonts.display, fontSize: tokens.type.heading, fontWeight: 500, letterSpacing: '-0.01em' }}>
                     {group.name}
                   </h2>
                   {top.map((item) => {
-                    const children = items.filter((i) => i.entity.parent === item.entity.id);
+                    const children = byHealth(items.filter((i) => i.entity.parent === item.entity.id));
                     return (
                       <div key={item.entity.id} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                         <EntityCard item={item} now={now} onOpen={() => onOpenEntity(item.entity.id)} />

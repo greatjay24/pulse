@@ -482,6 +482,8 @@ export interface Settings {
   googleCalendar?: GoogleCalendarConfig;
   historyRetentionDays?: number;
   dashboardLayout?: GridLayoutItem[]; // User's custom grid layout
+  saasMetrics?: boolean; // show the original SaaS-metrics pages (Overview, Analytics, Calendar); off by default
+  notifications?: boolean; // native alerts for new urgent items; on unless turned off
 }
 
 // ==========================================
@@ -623,11 +625,13 @@ export interface EntityLane {
 }
 
 export interface EntityDecision {
+  id?: string; // stable slug, same decision = same id every run (older reports omit it)
   ask: string;
   recommend?: string;
   why?: string;
   gate?: Gate;
   due?: string | null;
+  on_approve?: string; // what the lead does the moment the owner approves
 }
 
 export interface EntityStatus {
@@ -638,6 +642,7 @@ export interface EntityStatus {
   stage?: string;
   updated?: string;
   health?: Health;
+  health_why?: string; // one line: which health rule set the color
   headline?: string;
   metrics?: EntityMetric[];
   lanes?: Record<string, EntityLane>;
@@ -662,6 +667,59 @@ export interface PortfolioSnapshot {
   registry_error: string | null;
   entities: PortfolioEntityReport[];
   week: string | null;
+  read_at: string;
+}
+
+// ==========================================
+// Decisions and activity: what the Rust `act_on_decision` / `read_activity` commands pass
+// ==========================================
+
+// approve | reject | discuss are the owner's (via act.py); done | reply are the lead's.
+export type DecisionAction = 'approve' | 'reject' | 'discuss' | 'done' | 'reply';
+
+export interface DecisionRow {
+  id: string;
+  action: DecisionAction;
+  note?: string;
+  at: string;
+  ask?: string; // act.py copies these so an answer still reads after the decision leaves status.json
+  recommend?: string;
+}
+
+// One agent run: an item of a nightly log (an array) or a whole act log (one object).
+export interface AgentRun {
+  agent: string;
+  ok?: boolean;
+  result?: string;
+  cost_usd?: number | null;
+  secs?: number;
+  models?: string[];
+  // act runs only
+  kind?: 'act';
+  entity?: string;
+  decision?: string;
+  action?: 'approve' | 'reject' | 'discuss';
+  running?: boolean;
+  started?: string;
+  finished?: string;
+}
+
+export interface DraftRow {
+  date: string;
+  entity: string;
+  prospect?: string;
+  vertical?: string;
+  subject?: string;
+  variant?: string;
+  source?: string;
+}
+
+export interface ActivitySnapshot {
+  runs: { file: string; data: AgentRun[] | AgentRun }[];
+  decisions: { entity: string; rows: DecisionRow[] }[];
+  drafts: DraftRow[];
+  commits: { hash: string; at: string; subject: string }[];
+  errors: string[];
   read_at: string;
 }
 

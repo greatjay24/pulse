@@ -4,11 +4,13 @@ import { PortfolioEntity, TrackerMoney } from '../types';
 import { orderedLanes, titleCase } from '../utils/portfolio';
 import { EntityTracker } from '../utils/tracker';
 import { BoardEntity } from './OrgBoard';
-import { AgeLabel, Card, EntityMark, HealthBadge, Notice, SectionHeading, StageBadge } from './BoardUI';
+import { AgeLabel, Card, EntityMark, HealthBadge, HealthWhy, Notice, SectionHeading, StageBadge } from './BoardUI';
+import { Icon } from './Icons';
+import { EntityDecisions } from './DecisionCard';
 import { EntityFinance } from './EntityFinance';
 import { RepoRow, ReplyRow, RowList, TaskRow } from './TrackerRows';
 
-const TREND_ARROW: Record<string, string> = { up: '↑', down: '↓', flat: '→' };
+const TREND_ICON: Record<string, string> = { up: 'arrow-up', down: 'arrow-down', flat: 'trend-flat' };
 
 export type EntityTab = 'overview' | 'finance' | 'work';
 
@@ -121,7 +123,11 @@ function OverviewTab({ item }: { item: BoardEntity }) {
               </div>
               <div style={{ fontSize: tokens.type.small, color: c.textMuted, marginTop: '8px' }}>
                 {m.label}
-                {m.trend && <span style={{ color: c.textDim }}> {TREND_ARROW[m.trend] ?? ''}</span>}
+                {m.trend && TREND_ICON[m.trend] && (
+                  <span title={`Trend: ${m.trend}`} style={{ marginLeft: '6px', verticalAlign: '-1px', display: 'inline-flex' }}>
+                    <Icon name={TREND_ICON[m.trend]} size={12} color={c.textDim} />
+                  </span>
+                )}
               </div>
               {m.source && <div style={{ fontSize: tokens.type.micro, color: c.textDim, marginTop: '4px' }}>{m.source}</div>}
             </Card>
@@ -129,35 +135,7 @@ function OverviewTab({ item }: { item: BoardEntity }) {
         </div>
       )}
 
-      <section>
-        <SectionHeading note={`${decisions.length} waiting on you`}>Decisions</SectionHeading>
-        {decisions.length === 0 ? (
-          <Empty>Nothing waiting on you.</Empty>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {decisions.map((d, idx) => (
-              <Card key={idx} padding="20px 24px">
-                <div style={{ display: 'flex', gap: '12px', alignItems: 'baseline', flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: '17px', fontWeight: 600, flex: 1, minWidth: '240px', lineHeight: 1.4 }}>{d.ask}</span>
-                  {d.due && <span style={{ fontSize: tokens.type.small, color: c.warning }}>due {d.due}</span>}
-                  {d.gate && (
-                    <span style={{ fontSize: tokens.type.micro, padding: '3px 10px', borderRadius: '999px', border: `1px solid ${c.border}`, color: c.textMuted }}>
-                      {d.gate}
-                    </span>
-                  )}
-                </div>
-                {d.recommend && (
-                  <div style={{ fontSize: tokens.type.body, lineHeight: 1.55, marginTop: '10px', maxWidth: '80ch' }}>
-                    <span style={{ color: c.accent, fontWeight: 600 }}>Recommend </span>
-                    {d.recommend}
-                  </div>
-                )}
-                {d.why && <div style={{ fontSize: tokens.type.small, lineHeight: 1.55, color: c.textMuted, marginTop: '6px', maxWidth: '80ch' }}>{d.why}</div>}
-              </Card>
-            ))}
-          </div>
-        )}
-      </section>
+      <EntityDecisions entity={entity} decisions={decisions} />
 
       {lanes.length > 0 && (
         <section>
@@ -242,7 +220,9 @@ function OverviewTab({ item }: { item: BoardEntity }) {
           <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {done.map((d, idx) => (
               <li key={idx} style={{ fontSize: tokens.type.body, lineHeight: 1.55, color: c.textMuted }}>
-                <span style={{ color: c.success, marginRight: '10px' }}>✓</span>
+                <span style={{ marginRight: '10px', verticalAlign: '-2px', display: 'inline-flex' }}>
+                  <Icon name="check" size={14} color={c.success} />
+                </span>
                 {d.what}
                 {d.date && <span style={{ fontSize: tokens.type.micro, color: c.textDim }}> · {d.date}</span>}
               </li>
@@ -260,9 +240,10 @@ interface EntityDashboardProps {
   money: TrackerMoney | null; // null until the tracker has been read
   initialTab: EntityTab;
   onBack: () => void;
+  backLabel: string; // the page it was opened from
 }
 
-export function EntityDashboard({ item, entities, money, initialTab, onBack }: EntityDashboardProps) {
+export function EntityDashboard({ item, entities, money, initialTab, onBack, backLabel }: EntityDashboardProps) {
   const { tokens } = useTheme();
   const c = tokens.colors;
   const { entity, status, tracker, logos, logoError } = item;
@@ -277,8 +258,8 @@ export function EntityDashboard({ item, entities, money, initialTab, onBack }: E
 
   return (
     <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
-      <button className="btn btn-secondary" onClick={onBack} style={{ marginBottom: '28px' }}>
-        ← Board
+      <button className="btn btn-secondary" onClick={onBack} style={{ marginBottom: '28px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+        <Icon name="arrow-left" size={14} color="currentColor" /> {backLabel}
       </button>
 
       <header style={{ display: 'flex', gap: '22px', alignItems: 'center', marginBottom: '20px' }}>
@@ -288,10 +269,11 @@ export function EntityDashboard({ item, entities, money, initialTab, onBack }: E
             {entity.name}
           </h1>
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', marginTop: '10px' }}>
-            <HealthBadge health={status?.health} large />
+            <HealthBadge health={status?.health} why={status?.health_why} large />
             <StageBadge stage={status?.stage} />
             {status && <AgeLabel updated={status.updated} now={now} />}
           </div>
+          <HealthWhy why={status?.health_why} clamp={3} style={{ marginTop: '10px', fontSize: tokens.type.body, maxWidth: '72ch' }} />
         </div>
       </header>
       {status?.headline && (

@@ -27,16 +27,29 @@
 - **Privacy First** - All data stored locally on your machine
 - **Cross-Platform** - Available for macOS, Windows, and Linux
 
+## Today, Board, Money
+
+The sidebar is Today, Board, Money and Settings, in that order of importance. Pulse opens
+on **Today**: one headline line (`Today: N moves · N decisions need you · $X in this month`),
+then the decision queue (every report decision, riskiest business first), then each
+business with its health, `health_why` and what is due today. *Moves* are the chief of
+staff's moves for the week (the list in the first section of `WEEK.md`, normally three).
+Without a `WEEK.md` the line reads `N due today`: tasks marked now, leaving out "Decide:"
+items, which are decisions and already counted.
+Each page header carries a "Data as of" stamp per source (reports, tasks, email, money),
+flagged when a source is old.
+
 ## Org board
 
-Pulse's home view is a board for every entity in `~/portfolio`. It reads
+The Board is a card for every entity in `~/portfolio`. It reads
 `portfolio.json`, each entity's `status.json` (schema in `~/portfolio/STATUS_SCHEMA.md`)
 and `WEEK.md` through a read-only Rust command scoped to `~/portfolio`. No network.
 
 - **Board**: one column per group (operating companies, family, personal, with ventures
-  nested under Personal). Each card shows health, headline, open decisions, top metrics
-  and report age (flagged as stale after 36h). The top strip totals decisions waiting on
-  you and shows the first section of `WEEK.md`.
+  nested under Personal), red first, then yellow, then green. Each card shows health and
+  its `health_why`, a two-line headline (the full text is on the entity page), open
+  decisions, top metrics and report age (flagged as stale after 36h). Above the groups:
+  the first section of `WEEK.md`.
 - **Entity dashboard**: click a card. Three tabs: Overview (metrics, lanes, decisions with
   recommendations and gates, next moves, waiting on, risks, done this week), Finance and
   Tasks and inbox.
@@ -44,11 +57,14 @@ and `WEEK.md` through a read-only Rust command scoped to `~/portfolio`. No netwo
   entity in `portfolio.json`, as paths under `~/portfolio/assets/` (svg, png, jpg or webp,
   1 MB max). Swapping a logo is a one-line change to that path. Without one, the card shows
   the entity's initial on its `color` (optional hex in `portfolio.json`).
-- **TV mode**: press `T` (or the TV mode button) for fullscreen with larger type and no
-  sidebar; `Esc` exits. `Backspace` returns from an entity to the board.
+- **TV mode**: press `T` (or the TV mode button) for fullscreen with larger type, the
+  headline line and no sidebar; `Esc` exits. `Backspace` returns from an entity to the
+  page it was opened from.
 - Data re-reads every 60 seconds and whenever the window regains focus.
 
-The SaaS metrics views (Overview, Analytics, Calendar, Projects) are still in the sidebar.
+The original SaaS metrics views (Overview, Analytics, Calendar, per-app projects and Total
+MRR) sit behind Settings > General > SaaS metrics, off by default. Their settings, data
+and calendar fetching are unchanged.
 
 ### Tracker
 
@@ -73,8 +89,8 @@ Money comes from the tracker's collectors (`stripe.json`, `bank.json`,
 `payments_email.json`) through a Rust port of `money.py`, so every total matches the
 brief: the same payment seen as a Stripe charge, its payout and the bank deposit counts once.
 
-- **Board**: a Money band with cash in over 30 and 90 days, a split by entity (click one
-  to open its Finance tab), and the last 12 months.
+- **Money page**: cash in over 30 and 90 days, a split by entity, the last 12 months,
+  and a card per business (click one to open its Finance tab).
 - **Finance tab** per entity: 30 and 90 days, monthly cash in, by source (Stripe, bank,
   payment emails, with the rail behind each), top payers, repeat vs one-off payers, Stripe
   MRR and subscriptions per project, and mapped bank balances.
@@ -87,9 +103,25 @@ brief: the same payment seen as a Stripe charge, its payout and the bank deposit
 - Payer names reach the UI for the top payers list (this is the owner's own machine). Email
   bodies, transaction descriptions and account numbers never leave Rust.
 
+### Mac app
+
+- **Menu bar**: a Pulse mark with the count of decisions waiting on you. Its menu: Open
+  Pulse, Today, Quit. Closing the window keeps Pulse in the menu bar; Quit (or Cmd+Q) exits.
+- **Notifications**: a native alert when a new urgent item appears (a "Decide:" item
+  marked now, or a business turning red). Alerts arriving together are batched, each item
+  is announced once, and the first read after launch only records what is already there.
+  Turn them off in Settings > General.
+- **Build**: `npm run tauri build` writes `src-tauri/target/release/bundle/macos/Pulse.app`.
+  Google sign-in (SaaS metrics only) needs `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`
+  in the environment at build time; without them the build still succeeds and sign-in
+  says it isn't configured.
+- **Icon**: `icon-concepts/concept6-signal.svg` (app) and `icon-concepts/tray-template.svg`
+  (menu bar). Swap either and run `node scripts/generate-icons.mjs`.
+
 ### Appearance
 
-Settings > Appearance has six color themes after the films in the owner's taste guide (Paris,
+Wings of Desire (rich black and white) is the default: with the chrome in black and white,
+the only color on screen is signal. Settings > Appearance has six color themes after the films in the owner's taste guide (Paris,
 Texas; Wings of Desire; Moonlight; Days of Heaven; Chungking Express; In the Mood for
 Love), each with light and dark versions, an optional custom accent, and a type choice
 (Editorial, the default: serif titles and a system sans; or Inter, Space Grotesk,

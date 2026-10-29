@@ -164,7 +164,11 @@ export const presets: Record<string, { label: string; note: string; dark: Palett
 };
 
 export type PresetId = keyof typeof presets;
-const DEFAULT_PRESET: PresetId = 'paris-texas';
+// The signature look. TASTE.md names Wings of Desire as the owner's single favorite group and the
+// reference for Acme: rich black and white. On a dashboard that has a second job: with the
+// chrome in black and white, the only color on screen is signal (health, money, the urgent),
+// so red reads as red from across the room. The six film presets stay one click away.
+const DEFAULT_PRESET: PresetId = 'wings-of-desire';
 
 function hexToRgb(hex: string): [number, number, number] | null {
   const m = hex.trim().match(/^#?([0-9a-f]{6})$/i);
@@ -338,7 +342,6 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
   // Persist preferences
   useEffect(() => store('pulse-theme', themeMode), [themeMode]);
   useEffect(() => store('pulse-type', fontChoice), [fontChoice]);
-  useEffect(() => store('pulse-preset', preset), [preset]);
   useEffect(() => store('pulse-accent', customAccent), [customAccent]);
 
   // Build tokens
@@ -365,7 +368,11 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
       fontChoice,
       setFontChoice,
       preset,
-      setPreset,
+      // Saved only when chosen, so a later change of default still reaches anyone who never picked.
+      setPreset: (p: PresetId) => {
+        setPreset(p);
+        store('pulse-preset', p);
+      },
       customAccent,
       setCustomAccent,
       resolvedTheme,

@@ -73,3 +73,9 @@ export function plainMarkdownLine(line: string): { text: string; numbered: boole
     .replace(/`(.+?)`/g, '$1');
   return { text, numbered, bullet };
 }
+
+// Red first, then yellow, then green; an entity with no report goes last.
+const HEALTH_RANK: Record<string, number> = { red: 0, yellow: 1, green: 2 };
+export function healthRank(health: string | undefined): number {
+  return health !== undefined && health in HEALTH_RANK ? HEALTH_RANK[health] : 3;
+}

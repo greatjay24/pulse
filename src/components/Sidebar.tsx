@@ -7,14 +7,24 @@ interface SidebarProps {
   apps: App[];
   selectedAppId: string | null;
   onSelectApp: (appId: string | null) => void;
-  onSettingsClick: () => void;
   activeNav: string;
   onNavChange: (nav: string) => void;
   totalMRR: number;
   mrrChange?: number; // Percentage change from last period
   onAddProject: () => void;
   onDeleteApp?: (appId: string) => void;
+  saasMetrics: boolean; // the original SaaS pages, behind a toggle in Settings
+  decisions: number | null; // decisions waiting on the owner, shown beside Today
+  compact: boolean; // narrow window: an icon rail
 }
+
+// The main nav, in order of importance.
+const MAIN_NAV: { id: string; label: string; icon: string }[] = [
+  { id: 'today', label: 'Today', icon: 'today' },
+  { id: 'board', label: 'Board', icon: 'board' },
+  { id: 'activity', label: 'Activity', icon: 'activity' }, // decision outcomes, agent runs, cost
+  { id: 'money', label: 'Money', icon: 'wallet' },
+];
 
 // Helper to get favicon URL from domain
 function getFaviconUrl(domain: string): string {
@@ -30,6 +40,8 @@ function NavButton({
   onClick,
   indent = false,
   domain,
+  badge,
+  compact = false,
 }: {
   icon: string;
   label: string;
@@ -37,17 +49,24 @@ function NavButton({
   onClick: () => void;
   indent?: boolean;
   domain?: string;
+  badge?: number | null;
+  compact?: boolean;
 }) {
   const { tokens } = useTheme();
 
   return (
     <button
       onClick={onClick}
+      title={compact ? label : undefined}
+      aria-label={label}
+      aria-current={isActive ? 'page' : undefined}
       style={{
+        position: 'relative',
         display: 'flex',
         alignItems: 'center',
+        justifyContent: compact ? 'center' : 'flex-start',
         gap: '10px',
-        padding: indent ? '8px 12px 8px 20px' : '10px 12px',
+        padding: compact ? '10px 0' : indent ? '8px 12px 8px 20px' : '10px 12px',
         border: 'none',
         borderRadius: tokens.radius.sm,
         background: isActive ? tokens.colors.bgCard : 'transparent',
@@ -89,7 +108,18 @@ function NavButton({
       >
         <Icon name={icon} size={16} color={isActive ? tokens.colors.text : tokens.colors.textMuted} />
       </span>
-      {label}
+      {!compact && <span style={{ flex: 1 }}>{label}</span>}
+      {badge ? (
+        <span
+          style={
+            compact
+              ? { position: 'absolute', top: '3px', right: '6px', minWidth: '16px', height: '16px', padding: '0 4px', borderRadius: '8px', background: tokens.colors.accent, color: tokens.colors.accentInk, fontSize: '10px', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }
+              : { fontSize: tokens.type.micro, fontWeight: 600, color: tokens.colors.textMuted, fontVariantNumeric: 'tabular-nums' }
+          }
+        >
+          {badge}
+        </span>
+      ) : null}
     </button>
   );
 }
@@ -277,31 +307,44 @@ function AddProjectButton({ onClick }: { onClick: () => void }) {
   );
 }
 
+// Pulse's mark: the app icon in miniature (icon-concepts/concept6-signal.svg).
+export function PulseMark({ size = 32 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="100 100 824 824" aria-hidden style={{ flexShrink: 0, display: 'block' }}>
+      <rect x="100" y="100" width="824" height="824" rx="185" fill="#171716" />
+      <path d="M218 548 H386 L438 392 L518 680 L582 468 L618 548 H728" fill="none" stroke="#ecebe4" strokeWidth="52" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="778" cy="548" r="42" fill="#e5503f" />
+    </svg>
+  );
+}
+
 export function Sidebar({
   apps,
   selectedAppId,
   onSelectApp,
-  onSettingsClick: _onSettingsClick,
   activeNav,
   onNavChange,
   totalMRR,
   mrrChange,
   onAddProject,
   onDeleteApp,
+  saasMetrics,
+  decisions,
+  compact,
 }: SidebarProps) {
-  void _onSettingsClick; // Keep for future use
   const { tokens } = useTheme();
 
   return (
     <aside
       style={{
-        width: '240px',
+        width: compact ? '68px' : '232px',
         borderRight: `1px solid ${tokens.colors.border}`,
-        padding: '24px 16px',
+        padding: compact ? '20px 10px' : '24px 16px',
         display: 'flex',
         flexDirection: 'column',
         background: tokens.colors.bgElevated,
         flexShrink: 0,
+        overflowY: 'auto',
         transition: 'background 0.2s ease',
       }}
     >
@@ -310,135 +353,94 @@ export function Sidebar({
         style={{
           display: 'flex',
           alignItems: 'center',
+          justifyContent: compact ? 'center' : 'flex-start',
           gap: '10px',
-          padding: '8px 12px',
-          marginBottom: '24px',
+          padding: compact ? '4px 0' : '4px 12px',
+          marginBottom: '28px',
         }}
       >
-        <div
-          style={{
-            width: '32px',
-            height: '32px',
-            borderRadius: '10px',
-            background: '#000000',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
-          }}
-        >
-          <svg width="20" height="20" viewBox="0 0 512 512" fill="none">
-            <path d="M80 280 L160 280 L192 160 L224 400 L256 200 L288 340 L320 256 L432 256"
-                  stroke="white" strokeWidth="24" strokeLinecap="square" strokeLinejoin="miter" fill="none"/>
-          </svg>
-        </div>
-        <span style={{ fontWeight: 600, fontSize: '15px', color: tokens.colors.text }}>Pulse</span>
+        <PulseMark size={28} />
+        {!compact && <span style={{ fontFamily: tokens.fonts.display, fontWeight: 500, fontSize: '20px', letterSpacing: '-0.01em', color: tokens.colors.text }}>Pulse</span>}
       </div>
 
       {/* Main Nav */}
       <nav style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-        <NavButton
-          icon="pulse"
-          label="Board"
-          isActive={activeNav === 'board'}
-          onClick={() => onNavChange('board')}
-        />
-        <NavButton
-          icon="check"
-          label="Today"
-          isActive={activeNav === 'today'}
-          onClick={() => onNavChange('today')}
-        />
-
-        <NavDivider label="SaaS metrics" />
-
-        <NavButton
-          icon="home"
-          label="Overview"
-          isActive={activeNav === 'overview'}
-          onClick={() => {
-            onNavChange('overview');
-            onSelectApp(null);
-          }}
-        />
-        <NavButton
-          icon="analytics"
-          label="Analytics"
-          isActive={activeNav === 'analytics'}
-          onClick={() => onNavChange('analytics')}
-        />
-        <NavButton
-          icon="calendar"
-          label="Calendar"
-          isActive={activeNav === 'calendar'}
-          onClick={() => onNavChange('calendar')}
-        />
-
-        <NavDivider label="Projects" />
-
-        {apps.map((app) => (
-          <ProjectNavButton
-            key={app.id}
-            icon="widget"
-            label={app.name}
-            isActive={selectedAppId === app.id}
-            onClick={() => {
-              onSelectApp(app.id);
-              onNavChange('project');
-            }}
-            domain={app.domain}
-            onDelete={onDeleteApp ? () => onDeleteApp(app.id) : undefined}
+        {MAIN_NAV.map((item) => (
+          <NavButton
+            key={item.id}
+            icon={item.icon}
+            label={item.label}
+            isActive={activeNav === item.id}
+            onClick={() => onNavChange(item.id)}
+            badge={item.id === 'today' ? decisions : undefined}
+            compact={compact}
           />
         ))}
 
-        <AddProjectButton onClick={onAddProject} />
+        {saasMetrics && !compact && (
+          <>
+            <NavDivider label="SaaS metrics" />
+            <NavButton
+              icon="home"
+              label="Overview"
+              isActive={activeNav === 'overview'}
+              onClick={() => {
+                onNavChange('overview');
+                onSelectApp(null);
+              }}
+            />
+            <NavButton icon="analytics" label="Analytics" isActive={activeNav === 'analytics'} onClick={() => onNavChange('analytics')} />
+            <NavButton icon="calendar" label="Calendar" isActive={activeNav === 'calendar'} onClick={() => onNavChange('calendar')} />
+            {apps.map((app) => (
+              <ProjectNavButton
+                key={app.id}
+                icon="widget"
+                label={app.name}
+                isActive={selectedAppId === app.id}
+                onClick={() => {
+                  onSelectApp(app.id);
+                  onNavChange('project');
+                }}
+                domain={app.domain}
+                onDelete={onDeleteApp ? () => onDeleteApp(app.id) : undefined}
+              />
+            ))}
+            <AddProjectButton onClick={onAddProject} />
+          </>
+        )}
       </nav>
 
       {/* Settings at Bottom */}
-      <div style={{ marginTop: 'auto' }}>
+      <div style={{ marginTop: 'auto', paddingTop: '16px' }}>
         <NavButton
           icon="settings"
           label="Settings"
           isActive={activeNav === 'settings'}
-          onClick={() => {
-            onNavChange('settings');
-          }}
+          onClick={() => onNavChange('settings')}
+          compact={compact}
         />
 
-        {/* Total MRR Card */}
-        <div
-          style={{
-            padding: '16px',
-            background: tokens.colors.bgCard,
-            borderRadius: tokens.radius.md,
-            border: `1px solid ${tokens.colors.border}`,
-            marginTop: '16px',
-          }}
-        >
-          <div style={{ fontSize: '12px', color: tokens.colors.textMuted, marginBottom: '8px' }}>
-            Total MRR
-          </div>
+        {saasMetrics && !compact && (
           <div
             style={{
-              fontSize: '24px',
-              fontWeight: 600,
-              fontFamily: tokens.fonts.mono,
-              letterSpacing: '-0.02em',
-              color: tokens.colors.text,
+              padding: '16px',
+              background: tokens.colors.bgCard,
+              borderRadius: tokens.radius.md,
+              border: `1px solid ${tokens.colors.border}`,
+              marginTop: '16px',
             }}
           >
-            ${totalMRR.toLocaleString()}
-          </div>
-          {mrrChange !== undefined && mrrChange !== 0 && (
-            <div style={{
-              fontSize: '12px',
-              color: mrrChange >= 0 ? tokens.colors.success : tokens.colors.danger,
-              marginTop: '4px'
-            }}>
-              {mrrChange >= 0 ? '↑' : '↓'} {Math.abs(mrrChange).toFixed(1)}% this month
+            <div style={{ fontSize: '12px', color: tokens.colors.textMuted, marginBottom: '8px' }}>Total MRR</div>
+            <div style={{ fontSize: '24px', fontWeight: 600, letterSpacing: '-0.02em', color: tokens.colors.text, fontVariantNumeric: 'tabular-nums' }}>
+              ${totalMRR.toLocaleString()}
             </div>
-          )}
-        </div>
+            {mrrChange !== undefined && mrrChange !== 0 && (
+              <div style={{ fontSize: '12px', color: mrrChange >= 0 ? tokens.colors.success : tokens.colors.danger, marginTop: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <Icon name={mrrChange >= 0 ? 'arrow-up' : 'arrow-down'} size={12} color="currentColor" /> {Math.abs(mrrChange).toFixed(1)}% this month
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </aside>
   );
