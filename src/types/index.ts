@@ -665,6 +665,7 @@ export interface PortfolioEntityReport {
 export interface PortfolioSnapshot {
   registry: PortfolioRegistry | null;
   registry_error: string | null;
+  setup_needed?: boolean; // no ~/portfolio/portfolio.json yet: Pulse shows the welcome screen
   entities: PortfolioEntityReport[];
   week: string | null;
   read_at: string;
@@ -801,6 +802,14 @@ export interface TranscriptSummary {
   modified: string;
 }
 
+// What the welcome screen checks (Rust `setup_check`): existence only, at fixed paths.
+export interface SetupCheck {
+  setup_needed: boolean;
+  claude: string | null; // where Claude Code was found
+  python3: string | null;
+  tracker: boolean;
+}
+
 // ==========================================
 // Tracker (~/project-tracker): what the Rust `read_tracker` command passes through
 // ==========================================
@@ -899,6 +908,7 @@ export interface TrackerNote {
 }
 
 export interface TrackerSnapshot {
+  installed?: boolean; // false when there is no ~/project-tracker: the tracker is optional
   error: string | null; // ~/project-tracker missing
   file_errors: Record<string, string>;
   tasks: TrackerTask[];

@@ -238,22 +238,27 @@ interface EntityDashboardProps {
   item: BoardEntity;
   entities: PortfolioEntity[];
   money: TrackerMoney | null; // null until the tracker has been read
+  trackerAbsent?: boolean; // no tracker installed: Finance and Tasks have no source, so they're hidden
   initialTab: EntityTab;
   onBack: () => void;
   backLabel: string; // the page it was opened from
 }
 
-export function EntityDashboard({ item, entities, money, initialTab, onBack, backLabel }: EntityDashboardProps) {
+export function EntityDashboard({ item, entities, money, trackerAbsent = false, initialTab, onBack, backLabel }: EntityDashboardProps) {
   const { tokens } = useTheme();
   const c = tokens.colors;
   const { entity, status, tracker, logos, logoError } = item;
-  const [tab, setTab] = useState<EntityTab>(initialTab);
+  const [tab, setTab] = useState<EntityTab>(trackerAbsent ? 'overview' : initialTab);
   const now = Date.now();
 
   const tabs: { id: EntityTab; label: string; count?: number }[] = [
     { id: 'overview', label: 'Overview', count: status?.decisions?.length || undefined },
-    { id: 'finance', label: 'Finance' },
-    { id: 'work', label: 'Tasks and inbox', count: tracker ? tracker.tasks.length + tracker.replies.length : undefined },
+    ...(trackerAbsent
+      ? []
+      : [
+          { id: 'finance' as const, label: 'Finance' },
+          { id: 'work' as const, label: 'Tasks and inbox', count: tracker ? tracker.tasks.length + tracker.replies.length : undefined },
+        ]),
   ];
 
   return (

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { CAN_READ_ORG, DEMO, orgRead } from '../utils/orgSource';
+import { showToast } from '../utils/toast';
 import { ActivitySnapshot, DecisionRow } from '../types';
 
-const IS_TAURI = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
 const POLL_MS = 60_000;
 const FAST_POLL_MS = 4_000; // while a lead is working on one of the owner's answers
 const RUNNING_WINDOW_MS = 30 * 60_000; // a run never lasts longer (act.py's timeout is 25 min)
@@ -53,12 +54,12 @@ function schedule() {
 }
 
 export function refresh(): Promise<void> {
-  if (!IS_TAURI) {
+  if (!CAN_READ_ORG) {
     set({ error: 'Activity reads ~/portfolio and only runs in the Pulse desktop app.' });
     return Promise.resolve();
   }
   if (inflight) return inflight;
-  inflight = invoke<string>('read_activity')
+  inflight = orgRead('read_activity')
     .then((json) => set({ activity: JSON.parse(json), error: null, optimistic: [] }))
     .catch((e) => set({ error: String(e) }))
     .finally(() => {
@@ -80,6 +81,12 @@ function subscribe(l: () => void) {
 // Sends the owner's answer through act.py (the Rust command validates it first). Throws act.py's
 // refusal so the caller can show it; on success the answer shows immediately.
 export async function answerDecision(entity: string, id: string, action: 'approve' | 'reject' | 'discuss', note?: string) {
+  // The demo org is read-only: say what would happen in a real org instead of doing it.
+  if (DEMO) {
+    const what = { approve: 'record your approval and run its lead to carry it out', reject: 'record the rejection so the lead drops it', discuss: 'send your note to the lead, who replies here' }[action];
+    showToast(`Demo only. In your org, this would ${what}.`);
+    return { ok: true, changed: false, launched: false, reason: 'demo' };
+  }
   const res = await invoke<string>('act_on_decision', { entityId: entity, decisionId: id, action, note: note ?? null });
   const row: DecisionRow = { id, action, note: note ?? '', at: new Date().toISOString() };
   set({ optimistic: [...state.optimistic, { entity, row }] });
