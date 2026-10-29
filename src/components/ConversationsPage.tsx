@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useTheme } from '../contexts/ThemeContext';
-import { PortfolioSnapshot, Transcript, TranscriptLine, TranscriptSummary } from '../types';
+import { PortfolioSnapshot, TeamMember, Transcript, TranscriptLine, TranscriptSummary } from '../types';
 import { useOrgActivity } from '../hooks/useOrgActivity';
 import { useLive } from '../hooks/useLive';
 import { ConvItem, ORG_THREAD, Thread, buildThreads, threadOfRun, verbOf } from '../utils/conversations';
-import { elapsed, kindLabel, ms, stateLabel } from '../utils/live';
+import { deployedLine, elapsed, kindLabel, ms, stateLabel, teamLine } from '../utils/live';
 import { formatCost, formatSecs } from '../utils/activity';
 import { firstUrl } from '../utils/decisions';
 import { openExternal } from '../utils/tracker';
 import { EntityMark, Notice, PageHeader } from './BoardUI';
-import { LiveDot } from './WorkingNow';
+import { LiveDot, memberTone } from './WorkingNow';
 import { Icon } from './Icons';
 
 const IS_TAURI = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
@@ -189,8 +189,63 @@ function Brief({ prompt }: { prompt: string }) {
   );
 }
 
-// A transcript as chat: the owner's turns right, the agent's words left, tool calls folded.
-function TranscriptView({ lines, agent }: { lines: TranscriptLine[]; agent: string }) {
+type Deployed = Extract<TranscriptLine, { t: 'deploy' }>['agents'][number];
+type AgentDone = Extract<TranscriptLine, { t: 'agent_done' }>;
+
+// A team the lead deployed: one line folded ("Deployed 3 agents: …"), each agent open.
+function TeamBlock({ agents, at, done, live }: { agents: Deployed[]; at: number; done: Map<string, AgentDone>; live: Map<string, TeamMember> }) {
+  const { tokens } = useTheme();
+  const c = tokens.colors;
+  const [open, setOpen] = useState(false);
+  const statusOf = (a: Deployed) => live.get(a.id)?.status ?? done.get(a.id)?.status ?? 'running';
+  const counts = agents.reduce<Record<string, number>>((m, a) => ((m[statusOf(a)] = (m[statusOf(a)] ?? 0) + 1), m), {});
+  const tally = Object.entries(counts).map(([k, n]) => `${n} ${k === 'running' ? 'working' : k}`).join(' · ');
+  return (
+    <div style={{ border: `1px solid ${c.border}`, borderRadius: tokens.radius.md, padding: '10px 12px', background: c.bgCard }}>
+      <button
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%', background: 'none', border: 'none', padding: 0, color: c.text, fontFamily: 'inherit', fontSize: tokens.type.small, cursor: 'pointer', textAlign: 'left' }}
+      >
+        <span style={{ display: 'inline-block', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', color: c.textDim }}>▸</span>
+        <span style={{ fontWeight: 600 }}>Deployed {teamLine(agents)}</span>
+        <span style={{ color: c.textDim, marginLeft: 'auto', whiteSpace: 'nowrap' }}>{tally} · {when(at)}</span>
+      </button>
+      {open && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '10px', paddingLeft: '18px' }}>
+          {agents.map((a) => {
+            const st = statusOf(a);
+            const end = done.get(a.id);
+            const summary = live.get(a.id)?.summary || end?.summary;
+            const secs = live.get(a.id)?.secs ?? end?.secs;
+            return (
+              <div key={a.id} style={{ fontSize: tokens.type.small }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <LiveDot color={memberTone(st, c)} pulsing={st === 'running'} />
+                  <span style={{ fontWeight: 600 }}>{a.type}</span>
+                  <span style={{ color: c.textMuted }}>{a.description}</span>
+                  <span style={{ marginLeft: 'auto', fontSize: tokens.type.micro, color: c.textDim, whiteSpace: 'nowrap' }}>
+                    {st === 'running' ? 'working' : st}
+                    {secs ? ` · ${formatSecs(secs)}` : ''}
+                    {a.background ? ' · background' : ''}
+                  </span>
+                </div>
+                {a.prompt && <div style={{ color: c.textDim, marginTop: '2px', paddingLeft: '16px' }}>Asked: {a.prompt}</div>}
+                {summary && <div style={{ color: c.textMuted, marginTop: '2px', paddingLeft: '16px', whiteSpace: 'pre-wrap' }}>{summary}</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// A transcript as chat: the owner's turns right, the agent's words left, tool calls folded,
+// teams the lead deployed as one block each.
+function TranscriptView({ lines, agent, team }: { lines: TranscriptLine[]; agent: string; team?: TeamMember[] }) {
+  const done = new Map(lines.filter((l): l is AgentDone => l.t === 'agent_done').map((l) => [l.id, l]));
+  const live = new Map((team ?? []).map((m) => [m.id, m]));
   const blocks: React.ReactNode[] = [];
   let steps: Extract<TranscriptLine, { t: 'tool' | 'error' }>[] = [];
   const flush = () => {
@@ -204,6 +259,7 @@ function TranscriptView({ lines, agent }: { lines: TranscriptLine[]; agent: stri
     }
     flush();
     if (l.t === 'start') blocks.push(<Brief key={`b${blocks.length}`} prompt={l.prompt} />);
+    else if (l.t === 'deploy') blocks.push(<TeamBlock key={`d${blocks.length}`} agents={l.agents} at={ms(l.at)} done={done} live={live} />);
     else if (l.t === 'user') blocks.push(<Bubble key={`u${blocks.length}`} mine label="You" at={ms(l.at)}>{l.text}</Bubble>);
     else if (l.t === 'text') blocks.push(<Bubble key={`t${blocks.length}`} mine={false} label={l.sub ? `${agent} · subagent` : agent} at={ms(l.at)}>{l.text}</Bubble>);
   }
@@ -229,6 +285,7 @@ function RunFooter({ item }: { item: RunItem }) {
     stopped ? 'Stopped unexpectedly' : item.ok === false ? 'Failed' : item.ok ? 'Finished' : null,
     item.secs ? formatSecs(item.secs) : null,
     item.cost ? formatCost(item.cost) : null,
+    deployedLine(item.agents),
   ].filter(Boolean);
   if (!parts.length) return null;
   return <div style={{ fontSize: tokens.type.micro, color: failed ? c.danger : c.textDim }}>{parts.join(' · ')}</div>;
@@ -281,7 +338,7 @@ function RunBlock({ item, open: initiallyOpen, focused }: { item: RunItem; open:
           {error && <div style={{ fontSize: tokens.type.small, color: c.textDim }}>Transcript not readable: {error}</div>}
           {!transcript && !error && <div style={{ fontSize: tokens.type.small, color: c.textDim }}>Reading the transcript…</div>}
           {transcript?.truncated && <div style={{ fontSize: tokens.type.micro, color: c.textDim }}>Long run: showing its latest part.</div>}
-          <TranscriptView lines={lines} agent={item.agent} />
+          <TranscriptView lines={lines} agent={item.agent} team={item.live?.team} />
         </>
       )}
       {/* Runs from before transcripts, or folded ones: the lead's closing summary. */}

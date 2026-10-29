@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
-import { LiveRun, PortfolioSnapshot } from '../types';
+import { LiveRun, PortfolioSnapshot, TeamMember } from '../types';
 import { useLive } from '../hooks/useLive';
-import { elapsed, kindLabel, ms, stateLabel, stripRuns } from '../utils/live';
+import { elapsed, kindLabel, ms, stateLabel, stripRuns, teamLine } from '../utils/live';
 import { EntityMark, SectionLabel } from './BoardUI';
 
 // Ticks once a second while something is on screen, for elapsed times.
@@ -31,6 +31,39 @@ export function LiveDot({ color, pulsing }: { color: string; pulsing: boolean })
       }}
     >
       <style>{'@keyframes pulse-live { 0%, 100% { opacity: 1 } 50% { opacity: 0.35 } }'}</style>
+    </span>
+  );
+}
+
+const TEAM_SHOWN = 4;
+
+export function memberTone(status: string, c: ReturnType<typeof useTheme>['tokens']['colors']): string {
+  return status === 'running' ? c.accent : status === 'completed' ? c.success : status === 'failed' ? c.danger : c.textDim;
+}
+
+// The agents a lead deployed, nested under it: working ones first.
+function TeamList({ team, now }: { team: TeamMember[]; now: number }) {
+  const { tokens } = useTheme();
+  const c = tokens.colors;
+  const working = team.filter((m) => m.status === 'running').length;
+  const shown = [...team].sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || ms(b.started) - ms(a.started)).slice(0, TEAM_SHOWN);
+  return (
+    <span style={{ display: 'block', marginTop: '8px', paddingLeft: '10px', borderLeft: `2px solid ${c.border}` }}>
+      <span style={{ display: 'block', fontSize: tokens.type.micro, color: c.textMuted }}>
+        → {teamLine(team)}
+        {working > 0 && working < team.length && ` · ${working} still working`}
+      </span>
+      {shown.map((m) => (
+        <span key={m.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: tokens.type.micro, color: c.textDim, marginTop: '3px', minWidth: 0 }}>
+          <LiveDot color={memberTone(m.status, c)} pulsing={m.status === 'running'} />
+          <span style={{ color: c.text, fontWeight: 500, whiteSpace: 'nowrap' }}>{m.type}</span>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{m.description || m.prompt}</span>
+          <span style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+            {m.status === 'running' ? elapsed(ms(m.started), now) : m.status}
+          </span>
+        </span>
+      ))}
+      {team.length > TEAM_SHOWN && <span style={{ display: 'block', fontSize: tokens.type.micro, color: c.textDim, marginTop: '3px' }}>+{team.length - TEAM_SHOWN} more</span>}
     </span>
   );
 }
@@ -80,6 +113,7 @@ function RunCard({ run, snapshot, now, onOpen }: { run: LiveRun; snapshot: Portf
         <span style={{ display: 'block', fontSize: tokens.type.small, color: c.textMuted, marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {kindLabel(run.kind)} · {step}
         </span>
+        {(run.team?.length ?? 0) > 0 && <TeamList team={run.team!} now={now} />}
       </span>
     </button>
   );

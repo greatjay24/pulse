@@ -19,6 +19,7 @@ export interface ActivityItem {
   running?: boolean;
   link?: string | null;
   runId?: string; // the run's transcript, for Conversations
+  agents?: number; // subagents the run deployed; 0 = worked solo
 }
 
 export function localDay(ms: number): string {
@@ -107,6 +108,7 @@ export function activityItems(activity: ActivitySnapshot | null, snapshot: Portf
         secs: r.secs,
         ok: r.ok,
         runId: r.run_id,
+        agents: r.agents,
       }),
     );
   }
@@ -128,6 +130,7 @@ export function activityItems(activity: ActivitySnapshot | null, snapshot: Portf
       ok: r.running ? undefined : r.ok,
       running: !!r.running,
       runId: r.run_id,
+      agents: r.running ? undefined : r.agents,
     });
   }
 

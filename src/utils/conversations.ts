@@ -24,6 +24,7 @@ export type ConvItem =
       cost?: number | null;
       secs?: number | null;
       result?: string;
+      agents?: number; // subagents deployed; 0 = worked solo
       live: LiveRun | null;
     };
 
@@ -60,7 +61,7 @@ export function buildThreads(
     if (s.start?.t !== 'start') continue;
     const st = s.start;
     const item: RunItem = { type: 'run', key: `run-${s.run_id}`, at: ms(st.at), runId: s.run_id, agent: st.agent, kind: st.kind, doing: st.doing, live: null };
-    if (s.last?.t === 'result') Object.assign(item, { ok: s.last.ok, cost: s.last.cost_usd, secs: s.last.secs, result: s.last.result });
+    if (s.last?.t === 'result') Object.assign(item, { ok: s.last.ok, cost: s.last.cost_usd, secs: s.last.secs, result: s.last.result, agents: s.last.agents });
     runs.set(s.run_id, { thread: threadOf(st.entity), item });
   }
   for (const r of live?.runs ?? []) {
@@ -70,6 +71,7 @@ export function buildThreads(
       if (r.state !== 'running' && r.state !== 'idle' && known.item.ok === undefined) {
         Object.assign(known.item, { ok: r.ok ?? r.state === 'finished', cost: r.cost_usd, secs: r.secs, result: r.result });
       }
+      if (r.kind !== 'interactive' && r.state !== 'running') known.item.agents ??= r.team?.length ?? 0;
     } else {
       runs.set(r.run_id, {
         thread: threadOf(r.entity),
@@ -86,6 +88,7 @@ export function buildThreads(
       const known = r.run_id ? runs.get(r.run_id) : undefined;
       if (known) {
         known.item.cost ??= r.cost_usd;
+        known.item.agents ??= r.agents;
         return;
       }
       const weekly = r.agent === 'chief-of-staff';
@@ -105,6 +108,7 @@ export function buildThreads(
     const known = r.run_id ? runs.get(r.run_id) : undefined;
     if (known) {
       known.item.cost ??= r.cost_usd;
+      known.item.agents ??= r.agents;
       continue;
     }
     const ask = asks.get(`${r.entity}/${r.decision}`) ?? r.decision ?? '';

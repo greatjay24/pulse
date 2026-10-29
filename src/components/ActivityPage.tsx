@@ -4,6 +4,7 @@ import { PortfolioSnapshot } from '../types';
 import { useOrgActivity } from '../hooks/useOrgActivity';
 import { ActivityItem, ActivityKind, activityItems, costBetween, formatCost, formatSecs, localDay, startOfDay } from '../utils/activity';
 import { openExternal } from '../utils/tracker';
+import { deployedLine } from '../utils/live';
 import { Card, Notice, PageHeader, SectionLabel } from './BoardUI';
 import { WorkingNow } from './WorkingNow';
 import { Icon } from './Icons';
@@ -62,6 +63,7 @@ function Row({ item, entityName, onOpen }: { item: ActivityItem; entityName: str
     entityName,
     item.secs !== undefined ? formatSecs(item.secs) : null,
     item.cost ? formatCost(item.cost) : null,
+    deployedLine(item.agents),
     item.running ? 'running' : null,
     item.ok === false ? 'failed' : null,
   ].filter(Boolean);

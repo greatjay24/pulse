@@ -1,4 +1,4 @@
-import { LiveRun, LiveSnapshot } from '../types';
+import { LiveRun, LiveSnapshot, TeamMember } from '../types';
 import { UrgentSignal } from './today';
 
 // What the Working now strip shows: runs at work, interactive sessions waiting on the owner, and
@@ -61,15 +61,51 @@ export function elapsed(fromMs: number, toMs: number): string {
 
 // The menu bar's list: one line per working agent.
 export function trayRuns(live: LiveSnapshot | null): { run_id: string; label: string }[] {
-  return workingRuns(live).map((r) => ({ run_id: r.run_id, label: `${r.agent}: ${r.step || r.doing}` }));
+  return workingRuns(live).map((r) => {
+    const team = (r.team ?? []).filter((m) => m.status === 'running').length;
+    return { run_id: r.run_id, label: `${r.agent}${team ? ` → ${team} ${team === 1 ? 'agent' : 'agents'}` : ''}: ${r.step || r.doing}` };
+  });
 }
 
-// One notification when a headless run starts and one when it ends. Interactive sessions
-// are left out: the owner is the one typing. Keys are per run, so the seen-list dedupes them.
+// Agents deployed in one go (live.py batches those within 5s). A batch is announced once
+// nothing has joined it for this long, so a team launched over a few messages is one alert.
+const BATCH_SETTLE_MS = 6_000;
+
+export function batches(team: TeamMember[] | undefined): TeamMember[][] {
+  const out = new Map<number, TeamMember[]>();
+  for (const m of team ?? []) out.set(m.batch, [...(out.get(m.batch) ?? []), m]);
+  return [...out.values()];
+}
+
+// "3 agents: researcher, builder, qa"
+export function teamLine(members: { type: string }[]): string {
+  const n = members.length;
+  return `${n} ${n === 1 ? 'agent' : 'agents'}: ${[...new Set(members.map((m) => m.type))].join(', ')}`;
+}
+
+export function deployedLine(n: number | undefined): string | null {
+  if (n === undefined || n === null) return null;
+  return n === 0 ? 'worked solo' : `deployed ${n} ${n === 1 ? 'agent' : 'agents'}`;
+}
+
+// One notification when a headless run starts, one each time it deploys a team, and one
+// when it ends. Interactive sessions are left out: the owner is the one typing. Keys are
+// per run (and per batch), so the seen-list dedupes them.
 export function liveSignals(live: LiveSnapshot | null, now = Date.now()): UrgentSignal[] {
   const out: UrgentSignal[] = [];
   for (const r of live?.runs ?? []) {
     if (r.kind === 'interactive') continue;
+    for (const members of batches(r.team)) {
+      const last = Math.max(...members.map((m) => ms(m.started)));
+      const settled = r.state !== 'running' || now - last > BATCH_SETTLE_MS;
+      if (!settled || now - last > ANNOUNCE_WINDOW_MS) continue;
+      const n = members.length;
+      out.push({
+        key: `live-team:${r.run_id}:${members[0].batch}`,
+        title: `${r.agent} deployed ${n} ${n === 1 ? 'agent' : 'agents'} for: ${r.doing}`.slice(0, 120),
+        body: members.map((m) => `${m.type}${m.description ? ` (${m.description})` : ''}`).join(', ').slice(0, 200),
+      });
+    }
     if (r.state === 'running') {
       out.push({ key: `live-start:${r.run_id}`, title: `${r.agent} started`, body: r.doing });
       continue;

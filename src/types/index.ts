@@ -690,6 +690,7 @@ export interface DecisionRow {
 export interface AgentRun {
   agent: string;
   run_id?: string; // its transcript in logs/transcripts/ (runs from before transcripts have none)
+  agents?: number; // subagents it deployed; 0 = worked solo (absent on runs from before tracking)
   ok?: boolean;
   result?: string;
   cost_usd?: number | null;
@@ -751,6 +752,24 @@ export interface LiveRun {
   cost_usd?: number | null;
   secs?: number | null;
   last?: string; // interactive: the agent's last message
+  team?: TeamMember[]; // subagents this run deployed
+  deployments?: number;
+}
+
+// A subagent a lead deployed. Agents deployed within a few seconds share a batch.
+export interface TeamMember {
+  id: string;
+  type: string;
+  description: string;
+  prompt: string;
+  background?: boolean;
+  by?: string | null; // set when another subagent deployed it
+  batch: number;
+  started: string;
+  status: 'running' | 'completed' | 'failed' | 'unfinished' | string;
+  finished?: string;
+  summary?: string;
+  secs?: number | null;
 }
 
 export interface LiveSnapshot {
@@ -765,7 +784,9 @@ export type TranscriptLine =
   | { t: 'text'; at: string; text: string; sub?: boolean }
   | { t: 'tool'; at: string; name: string; summary: string; sub?: boolean }
   | { t: 'error'; at: string; text: string }
-  | { t: 'result'; at: string; ok: boolean; result: string; cost_usd: number | null; secs: number | null; turns?: number; models?: string[] };
+  | { t: 'deploy'; at: string; agents: Omit<TeamMember, 'batch' | 'started' | 'status'>[]; sub?: boolean }
+  | { t: 'agent_done'; at: string; id: string; status: string; summary: string; secs: number | null; tools: number | null }
+  | { t: 'result'; at: string; ok: boolean; result: string; cost_usd: number | null; secs: number | null; turns?: number; models?: string[]; agents?: number };
 
 export interface Transcript {
   run_id: string;
