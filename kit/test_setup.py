@@ -97,14 +97,19 @@ class SetupE2E(unittest.TestCase):
         self.assertIn(f"{self.org}/companies/acme/BRIEF.md", acme)
         self.assertIn("Initech", (self.agents / "chief-of-staff.md").read_text())
         self.assertEqual(commits(self.org), 1)
-        self.assertIn("claude --agent acme-lead", r.stdout)
+        self.assertIn("bin/talk.py acme", r.stdout)
+        self.assertEqual(reg["runner"], "claude-code")
+        neutral = (self.org / "agents" / "acme-lead.md").read_text()
+        self.assertIn("role: lead\ntier: deep\n", neutral)                  # model-neutral source
+        self.assertIn("model: opus\n", acme)                                  # translated for Claude Code
+        self.assertEqual(len(list((self.org / "agents").glob("*.md"))), 11)
         self.assertIn("launchd/install.sh", r.stdout)
         self.assertIn('"matcher": "Agent|Task"', r.stdout)
         self.assertIn("SubagentStop", r.stdout)
         self.assertFalse((self.home / "Library").exists())          # launchd was not installed
 
         # The installed scripts work where they landed.
-        for t in ("test_act.py", "test_live.py"):
+        for t in ("test_act.py", "test_live.py", "test_runners.py"):
             out = subprocess.run([sys.executable, str(self.org / "bin" / t)], capture_output=True, text=True,
                                  env={**os.environ, "HOME": str(self.home)}, timeout=120)
             self.assertEqual(out.returncode, 0, out.stderr[-2000:])
@@ -153,6 +158,7 @@ class SetupE2E(unittest.TestCase):
             "acme", "", "1", "Builds websites.", "", "", "", "",   # id, name, group, desc, color, logo, schedule, parent
             "globex", "Globex Rentals", "Family", "Rental homes.", "#123456", "", "on-call", "",
             "",                                             # done adding
+            "claude-code",                                  # runner
             "y",                                            # write?
         ]) + "\n"
         r = run(self.home, stdin=answers)
@@ -163,6 +169,36 @@ class SetupE2E(unittest.TestCase):
         self.assertEqual((e["globex"]["group"], e["globex"]["color"], e["globex"]["schedule"]), ("family", "#123456", "on-call"))
         self.assertTrue((self.agents / "globex-lead.md").is_file())
         self.assertEqual(commits(self.org), 1)
+
+    def test_runner_choice_and_switch(self):
+        r = run(self.home, "--config", str(self.config(runner="codex")))
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        reg = json.loads((self.org / "portfolio.json").read_text())
+        self.assertEqual(reg["runner"], "codex")
+        self.assertFalse(self.agents.exists())                           # nothing for Claude Code
+        rules = self.home / ".codex" / "rules" / "pulse-org.rules"
+        self.assertIn('decision = "forbidden"', rules.read_text())
+        self.assertEqual(len(list((self.org / "agents").glob("*.md"))), 11)
+        self.assertIn("Codex (ChatGPT)", r.stdout)
+        self.assertIn("Claude Code only", r.stdout)                      # no hooks snippet for codex
+        self.assertNotIn('"matcher"', r.stdout)
+        self.assertIn('"runner" in ~/portfolio/portfolio.json', r.stdout)
+
+        # A re-run without --runner keeps the choice; --runner switches and installs that runner's agents.
+        run(self.home, "--config", str(self.config(runner="claude-code")))
+        self.assertEqual(json.loads((self.org / "portfolio.json").read_text())["runner"], "codex")
+        r = run(self.home, "--config", str(self.config()), "--runner", "opencode")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertEqual(json.loads((self.org / "portfolio.json").read_text())["runner"], "opencode")
+        oc = self.home / ".config" / "opencode" / "agents"
+        lead = (oc / "acme-lead.md").read_text()
+        self.assertIn("mode: primary", lead)
+        self.assertIn('"git push --force*": deny', lead)
+        self.assertIn("mode: subagent", (oc / "sales-manager.md").read_text())
+        self.assertEqual(commits(self.org), 2)
+
+        r = run(self.home, "--config", str(self.config(runner="gpt-cli")))
+        self.assertEqual(r.returncode, 2)
 
     def test_dry_run_writes_nothing(self):
         r = run(self.home, "--config", str(self.config()), "--dry-run")

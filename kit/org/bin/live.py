@@ -14,7 +14,7 @@ Transcript lines (one JSON object each, every string redacted):
     {"t":"text","at","text","sub"?}             the agent's words
     {"t":"tool","at","name","summary","sub"?}   a tool call, as one line
     {"t":"error","at","text"}                   a tool call that failed
-    {"t":"result","at","ok","result","cost_usd","secs","turns","models"}
+    {"t":"result","at","ok","result","cost_usd","secs","turns","models","tokens"?}
 `sub` marks events from a subagent the lead delegated to. Tool outputs are never stored.
 
 PORTFOLIO_ROOT overrides the org folder (default: the parent of this bin/).
@@ -436,7 +436,10 @@ class LiveRun:
 
     def event(self, ev):
         """Feed one Claude Code event: append it to the transcript, track the team, move the step."""
-        lines = self.normalizer.feed(ev)
+        return self.add(self.normalizer.feed(ev))
+
+    def add(self, lines):
+        """Transcript lines from any runner (runners.py): append them, track the team, move the step."""
         self.append(lines)
         for x in lines:
             if x["t"] == "deploy":
@@ -477,7 +480,7 @@ class LiveRun:
         self.state.update(redact_obj(fields))
         self._write()
 
-    def finish(self, ok, result="", cost_usd=None, secs=None, append_result=False):
+    def finish(self, ok, result="", cost_usd=None, secs=None, append_result=False, tokens=None, extra=None):
         if self._done:
             return
         self._done = True
@@ -488,7 +491,14 @@ class LiveRun:
         line = " ".join((result or "").split())
         self.state.update(state="finished" if ok else "failed", finished=now_iso(), ok=bool(ok),
                           result=redact(clip(line, 300)), cost_usd=cost_usd, secs=secs)
+        # Runners that report tokens but not cost (codex) show tokens; nothing is estimated.
+        if tokens:
+            self.state["tokens"] = tokens
         if append_result:
-            self.append([redact_obj({"t": "result", "at": now_iso(), "ok": bool(ok), "result": clip(result or "", 4000),
-                                     "cost_usd": cost_usd, "secs": secs})])
+            row = {"t": "result", "at": now_iso(), "ok": bool(ok), "result": clip(result or "", 4000),
+                   "cost_usd": cost_usd, "secs": secs}
+            if tokens:
+                row["tokens"] = tokens
+            row.update(extra or {})
+            self.append([redact_obj(row)])
         self._write()

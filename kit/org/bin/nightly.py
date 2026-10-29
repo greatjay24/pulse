@@ -6,9 +6,9 @@
     nightly.py --weekly        chief-of-staff weekly review
     nightly.py --check         auth/tooling smoke test, no work done
 
-Each run is a headless `claude -p --agent <lead>` under the allow/deny lists in
-policy.py, so a scheduled run physically cannot send, pay, merge, or deploy to
-production. Gate items reach the owner as decisions in each status.json, which
+Each run is a headless lead run on the org's runner (portfolio.json "runner", per-entity
+override; see runners.py): Claude Code, Codex or opencode, under the allow/deny lists in
+policy.py, so a scheduled run cannot send, pay, merge, or deploy to production. Gate items reach the owner as decisions in each status.json, which
 Pulse shows (and, if an optional task tracker is set up, as tracker tasks).
 
 Optional integrations run only when present:
@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from live import HOME, ORG, LiveRun, redact  # noqa: E402
-from policy import ALLOWED, NEVER, NEEDS_YES  # noqa: E402
+import runners  # noqa: E402
 
 LOGS = ORG / "logs"
 EXTRA_PATH = [str(HOME / ".local" / "bin"), "/opt/homebrew/bin", "/usr/local/bin"]
@@ -56,31 +56,61 @@ def prompt_for(e):
 
 
 def claude_cmd(agent, prompt, model, max_turns):
-    # stream-json (needs --verbose under -p) emits each message as it happens; the last
-    # event is the same `result` object --output-format json used to print.
-    return [CLAUDE, "-p", prompt, "--agent", agent, "--model", model,
-            "--output-format", "stream-json", "--verbose", "--max-turns", str(max_turns),
-            "--permission-mode", "acceptEdits",
-            "--allowedTools", *ALLOWED, "--disallowedTools", *(NEVER + NEEDS_YES)]
+    return runners.ClaudeCode().command(CLAUDE, agent, prompt, model, max_turns)
+
+
+# Runner binaries by name, for tests (a fake CLI); otherwise found on the extended PATH.
+BINARIES = {}
+
+
+def runner_for(entity):
+    """The adapter for an entity's runner (the org's when entity is None)."""
+    try:
+        reg = registry()
+    except (OSError, json.JSONDecodeError):
+        reg = {}
+    return runners.get(runners.resolve(reg, entity))
 
 
 def run(agent, prompt, model, max_turns=60, timeout=1800, kind="nightly", entity=None, doing=""):
-    """Run one lead headlessly. Writes logs/live/<run_id>.json while it works and
-    logs/transcripts/<run_id>.jsonl as it goes; returns the result row the logs keep."""
+    """Run one lead headlessly on its runner. Writes logs/live/<run_id>.json while it works and
+    logs/transcripts/<run_id>.jsonl as it goes; returns the result row the logs keep.
+    `model` is a tier hint ("sonnet" = the night shift, "opus" = planning) that Claude Code
+    takes as is and other runners map to their configured models."""
     env = dict(os.environ)
     env["PATH"] = RUN_PATH
     t0 = time.time()
     res = {"agent": agent, "ok": False, "result": ""}
+    adapter = runner_for(entity)
+    claude = adapter.name == "claude-code"
     with LiveRun(kind, agent, entity=entity, doing=doing or f"{kind.title()} run", prompt=prompt) as live:
         env["PORTFOLIO_RUN_ID"] = live.run_id     # session_hook.py leaves runner sessions alone
         res["run_id"] = live.run_id
+        summary = None
         try:
-            final = stream(claude_cmd(agent, prompt, model, max_turns), env, timeout, live)
-            if final is None:
+            binary = CLAUDE if claude else (BINARIES.get(adapter.name) or adapter.find())
+            if not binary:
+                raise RuntimeError(f"{adapter.label} is not installed. {adapter.install_hint}")
+            if not claude:
+                live.set(runner=adapter.name)
+                adapter.ensure_agents([agent])
+            cmd = adapter.command(binary, agent, prompt + adapter.solo_note(), adapter.model(model), max_turns)
+            session = adapter.session()
+            code = stream(cmd, env, timeout, live, session)
+            summary = session.summary(code)
+            if summary is None:
                 res["result"] = live.stderr_tail or "no result from claude"
             else:
-                res.update(ok=not final.get("is_error"), result=(final.get("result") or "")[-1500:],
-                           cost_usd=final.get("total_cost_usd"), models=list((final.get("modelUsage") or {}).keys()))
+                res.update(ok=summary["ok"], result=(summary["result"] or "")[-1500:], cost_usd=summary.get("cost_usd"))
+                if claude:
+                    res["models"] = summary.get("models", [])
+                else:
+                    res["runner"] = adapter.name
+                    res["models"] = [m for m in [adapter.model(model)] if m]
+                    if summary.get("tokens"):
+                        res["tokens"] = summary["tokens"]
+                    if not summary["ok"] and not summary["result"]:
+                        res["result"] = live.stderr_tail or f"{adapter.label} stopped without an answer"
         except subprocess.TimeoutExpired:
             res["result"] = f"timeout after {timeout}s"
         except Exception as e:
@@ -88,14 +118,20 @@ def run(agent, prompt, model, max_turns=60, timeout=1800, kind="nightly", entity
         res["secs"] = int(time.time() - t0)
         res["result"] = redact(res["result"])
         res["agents"] = len(live.team())      # 0 = worked solo
+        # Claude Code's stream already ends with its result line; other runners get one here.
+        native = bool(summary and summary.get("native_result"))
         live.finish(res["ok"], res["result"], res.get("cost_usd"), res["secs"],
-                    append_result="cost_usd" not in res)
+                    append_result=("cost_usd" not in res) if claude else not native,
+                    tokens=res.get("tokens"),
+                    extra=None if claude else {"models": res.get("models", []), "agents": res["agents"], "runner": adapter.name})
     return res
 
 
-def stream(cmd, env, timeout, live):
-    """Runs claude, feeding each stream-json line to `live`. Returns the final `result`
-    event (None if there was none). Kills the run and raises TimeoutExpired after `timeout`."""
+def stream(cmd, env, timeout, live, session=None):
+    """Runs the runner's CLI, feeding each JSON line through `session` (its adapter's
+    translator) into `live`. Returns the exit code. Kills the run and raises
+    TimeoutExpired after `timeout`."""
+    session = session or runners.ClaudeSession()
     with tempfile.TemporaryFile(mode="w+") as err:
         # Its own process group, so a timeout also stops what claude started (MCP servers,
         # shells) and nothing is left holding stdout open.
@@ -111,7 +147,6 @@ def stream(cmd, env, timeout, live):
 
         timer = threading.Timer(timeout, kill)
         timer.start()
-        final = None
         try:
             for line in p.stdout:
                 try:
@@ -120,10 +155,8 @@ def stream(cmd, env, timeout, live):
                     continue
                 if not isinstance(ev, dict):
                     continue
-                if ev.get("type") == "result":
-                    final = ev
                 try:
-                    live.event(ev)
+                    live.add(session.feed(ev))
                 except OSError:
                     pass    # a transcript that can't be written never stops the run
             p.wait()
@@ -137,7 +170,7 @@ def stream(cmd, env, timeout, live):
             raise subprocess.TimeoutExpired(cmd, timeout)
         err.seek(0)
         live.stderr_tail = redact(err.read()[-800:])
-        return final
+        return p.returncode
 
 
 def sales_learning():

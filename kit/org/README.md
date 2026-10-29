@@ -21,8 +21,9 @@ name), or your taste. They show in Pulse as decisions, each with a recommendatio
 Approve / Reject / Discuss buttons.
 
 ## Commands
-- Talk to a lead: `claude --agent <entity-id>-lead`
-- The week: `claude --agent chief-of-staff "weekly review"`
+- Talk to a lead: `python3 {{ORG}}/bin/talk.py <entity-id>` (opens it on the org's runner)
+- The week: `python3 {{ORG}}/bin/talk.py chief-of-staff "weekly review"`
+- Switch runners: set `"runner"` in portfolio.json to `claude-code`, `codex` or `opencode`
 - Run the night shift by hand: `python3 {{ORG}}/bin/nightly.py [entity ...]`
 - Check the setup without doing work: `python3 {{ORG}}/bin/nightly.py --check`
 - Pulse (desktop) reads `portfolio.json`, every `status.json`, `WEEK.md` and `logs/`.

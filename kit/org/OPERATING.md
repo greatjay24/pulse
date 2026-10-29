@@ -1,7 +1,7 @@
 # How the organization runs
 
 Every agent in {{OWNER}}'s organization follows this file. If anything here
-conflicts with ~/CLAUDE.md, ~/CLAUDE.md wins.
+conflicts with the owner's own rules file (~/CLAUDE.md or ~/AGENTS.md), that file wins.
 
 ## The org
 ```
@@ -63,8 +63,10 @@ No questions, because nobody is there to answer. Anything that needs the owner g
 - Spot what's coming: deadlines, renewals, expiring keys, people waiting on the owner.
 
 ## Deploying a team
-- Directors running as the session (`claude --agent <you>`) can launch agents. Run
-  independent work in parallel: managers for each function, workers for wide jobs.
+- Whether you can launch agents depends on the runner (portfolio.json `runner`). Claude Code
+  and opencode can; Codex runs work solo, and its runs say so. When you can, run
+  independent work in parallel: managers for each function, workers for wide jobs. When
+  you can't, do the same jobs yourself, one after another, smallest first.
 - Brief each agent like a peer. Give it the entity path, the goal, the files to read,
   what's already decided, the scope, and **this file's guardrails**. Agents inherit nothing.
 - Verify what comes back against the files before you trust it.

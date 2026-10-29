@@ -7,6 +7,9 @@
 
 Flags:
     --org-dir DIR      where the org lives (default ~/portfolio; Pulse only reads ~/portfolio)
+    --runner NAME      claude-code | codex | opencode (default: ask, offering what's installed;
+                       with --config, the config's "runner" or claude-code). Re-running with a
+                       different runner switches the org and installs that runner's agent files.
     --agents-dir DIR   where Claude Code agents live (default ~/.claude/agents)
     --yes              don't ask before writing
     --update-bin       replace bin/ scripts that differ from this kit (they are kit code, not your data)
@@ -14,6 +17,7 @@ Flags:
 Config file (JSON):
     {
       "owner": "Sam",                                  // first name
+      "runner": "codex",                               // optional: claude-code (default) | codex | opencode
       "groups": ["Companies", "Family", "Personal"],   // or [{"id": "companies", "name": "Companies"}]
       "entities": [
         {"id": "acme", "name": "Acme", "group": "companies",
@@ -30,8 +34,10 @@ What it does (and never does):
 - Creates the org folder: portfolio.json, OPERATING.md, STATUS_SCHEMA.md, README.md, bin/,
   launchd/, logs/, history/, assets/logos/ and one folder per entity with a starter
   BRIEF.md, a valid status.json and an empty decisions.jsonl. Then git init and a first commit.
-- Installs agents into the agents dir: <id>-lead.md per entity, chief-of-staff.md and the
-  five managers.
+- Writes the agents, model-neutral, to <org>/agents/: <id>-lead.md per entity,
+  chief-of-staff.md and the five managers. Then installs them where the runner reads them:
+  Claude Code ~/.claude/agents, opencode ~/.config/opencode/agents; Codex reads <org>/agents
+  directly and gets ~/.codex/rules/pulse-org.rules (the guardrails as execpolicy rules).
 - Never overwrites a file that already exists. A file that differs from what setup would
   write is reported and left alone. portfolio.json is merged: existing entities are kept,
   new ones added, nothing dropped.
@@ -41,6 +47,8 @@ What it does (and never does):
 import argparse, datetime, json, os, pathlib, re, shutil, subprocess, sys
 
 KIT = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(KIT / "org" / "bin"))
+import runners  # noqa: E402
 HOME = pathlib.Path.home()
 MANAGERS = ["sales-manager", "marketing-manager", "delivery-manager", "finance-manager", "admin-manager"]
 DEFAULT_GROUPS = ["Companies", "Family", "Personal"]
@@ -52,7 +60,8 @@ LOGO_MAX = 1024 * 1024
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 LANES = ["sales", "marketing", "delivery", "finance", "admin"]
-BIN_FILES = ["act.py", "live.py", "nightly.py", "session_hook.py", "policy.py", "test_act.py", "test_live.py"]
+BIN_FILES = ["act.py", "live.py", "nightly.py", "session_hook.py", "policy.py", "runners.py", "talk.py",
+             "test_act.py", "test_live.py", "test_runners.py"]
 HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd", "PreToolUse", "SubagentStart", "SubagentStop"]
 
 
@@ -129,7 +138,11 @@ def normalize(cfg):
             raise SetupError(f"{e['id']}: an entity can't be its own parent")
     if not entities:
         raise SetupError("add at least one entity")
-    return {"owner": owner, "groups": groups, "entities": entities}
+    runner = cfg.get("runner") or runners.DEFAULT
+    name = runner.get("name") if isinstance(runner, dict) else runner
+    if name not in runners.ADAPTERS:
+        raise SetupError(f"runner must be one of {sorted(runners.ADAPTERS)}")
+    return {"owner": owner, "groups": groups, "entities": entities, "runner": name}
 
 
 def ask(prompt, default=""):
@@ -139,6 +152,18 @@ def ask(prompt, default=""):
     except EOFError:
         answer = ""
     return answer or default
+
+
+def choose_runner():
+    """Which agent CLI runs the leads. Offers all three, defaulting to the first installed."""
+    found = dict(runners.detect())
+    print("Which AI runs your agents? (you can switch later: one field in portfolio.json)")
+    names = list(runners.ADAPTERS)
+    for i, n in enumerate(names, 1):
+        print(f"    {i}. {runners.ADAPTERS[n].label:<26} {'installed' if n in found else 'not installed'}")
+    default = next((n for n in names if n in found), runners.DEFAULT)
+    pick = ask("  Runner (number or name)", str(names.index(default) + 1))
+    return names[int(pick) - 1] if pick.isdigit() and 0 < int(pick) <= len(names) else pick
 
 
 def interview():
@@ -167,7 +192,23 @@ def interview():
         parent = slugify(ask("  Part of another entity? Its id (optional)"))
         entities.append({"id": eid, "name": name, "group": group, "description": desc, "color": color,
                          "logo": logo or None, "schedule": schedule, "parent": parent or None})
-    return {"owner": owner, "groups": groups, "entities": entities}
+    print()
+    runner = choose_runner()
+    return {"owner": owner, "groups": groups, "entities": entities, "runner": runner}
+
+
+def runner_check(name):
+    """One line on whether the runner is installed and signed in. Never blocks setup."""
+    adapter = runners.ADAPTERS[name]()
+    binary = adapter.find()
+    if not binary:
+        return False, f"{adapter.label} is not installed. {adapter.install_hint}"
+    ok, detail = adapter.signed_in(binary)
+    if ok:
+        return True, f"{adapter.label}: installed ({tilde(binary)}) and signed in."
+    if ok is None:
+        return True, f"{adapter.label}: installed ({tilde(binary)}); couldn't tell if it's signed in."
+    return False, f"{adapter.label}: installed, but not signed in: {detail}."
 
 
 # --------------------------------------------------------------------------
@@ -226,7 +267,7 @@ Lead: `{e['lead']}` · Owner: {owner} · Folder: `{e['path']}`
 Nothing yet. The lead fills this in after its first run.
 
 ## Next three moves
-1. Run `claude --agent {e['lead']}` and tell it about the business: customers, offer, what's in flight.
+1. Run `python3 ~/portfolio/bin/talk.py {e['id']}` and tell it about the business: customers, offer, what's in flight.
 2. List where its repos, documents and data live (below), so the nightly run can sweep them.
 3. Let the first nightly run write status.json.
 
@@ -296,7 +337,7 @@ class Plan:
             os.replace(tmp, path)
 
 
-def merged_registry(path, owner, groups, entities):
+def merged_registry(path, owner, groups, entities, runner=None, switch=False):
     """The existing portfolio.json with new groups and entities added. Nothing is dropped."""
     reg = {}
     if path.exists():
@@ -308,6 +349,14 @@ def merged_registry(path, owner, groups, entities):
                    "on-call. 'logo' / 'logo_dark' are paths under assets/ (svg, png, jpg, webp; 1 MB max). "
                    "'color' (hex) tints the entity's initial when it has no logo.")
     reg.setdefault("owner", {"name": owner})
+    # The runner is one field: set on the first run, changed only when asked (--runner).
+    if runner and ("runner" not in reg or switch):
+        current = reg.get("runner")
+        if isinstance(current, dict):
+            if current.get("name") != runner:
+                reg["runner"] = {"name": runner}
+        elif current != runner:
+            reg["runner"] = runner
     have = {g.get("id") for g in reg.setdefault("groups", [])}
     reg["groups"].extend({"id": g["id"], "name": g["name"]} for g in groups if g["id"] not in have)
     have = {e.get("id") for e in reg.setdefault("entities", [])}
@@ -324,7 +373,7 @@ def merged_registry(path, owner, groups, entities):
     return reg
 
 
-def build(answers, org, agents_dir, plan, update_bin=False):
+def build(answers, org, agents_dir, plan, update_bin=False, switch_runner=False):
     owner, groups = answers["owner"], answers["groups"]
     entities = [dict(e) for e in answers["entities"]]
     by_id = {e["id"]: e for e in entities}
@@ -350,7 +399,8 @@ def build(answers, org, agents_dir, plan, update_bin=False):
             plan.file(org / rel, e["logo"].read_bytes())
             e["logo_rel"] = rel
 
-    registry = merged_registry(reg_path, owner, groups, entities)
+    registry = merged_registry(reg_path, owner, groups, entities, answers.get("runner"), switch_runner)
+    runner = runners.resolve(registry)["name"]
     all_entities = [{**x, "schedule": x.get("schedule", "nightly")} for x in registry["entities"]]
     all_groups = registry["groups"]
     owner_name = (registry.get("owner") or {}).get("name") or owner
@@ -365,6 +415,9 @@ def build(answers, org, agents_dir, plan, update_bin=False):
     for name in BIN_FILES:
         plan.file(org / "bin" / name, (KIT / "org" / "bin" / name).read_bytes(), mode=0o755, replace=update_bin,
                   hint="pass --update-bin to replace it")
+    plan.dir(org / "bin" / "fixtures")
+    for f in sorted((KIT / "org" / "bin" / "fixtures").glob("*.jsonl")):
+        plan.file(org / "bin" / "fixtures" / f.name, f.read_bytes(), replace=update_bin)
 
     python = shutil.which("python3") or sys.executable
     for job in ["nightly", "weekly"]:
@@ -383,20 +436,43 @@ def build(answers, org, agents_dir, plan, update_bin=False):
 
     group_names = {g["id"]: g["name"] for g in all_groups}
     director = (KIT / "agents" / "director.md").read_text()
-    plan.dir(agents_dir)
+    agents = {}             # name -> rendered, model-neutral text
     for e in entities:
         if e["id"] in existing and existing[e["id"]].get("lead") != f"{e['id']}-lead":
             continue
-        plan.file(agents_dir / f"{e['lead']}.md", render(director, {
+        agents[e["lead"]] = render(director, {
             "OWNER": owner_name, "ENTITY": e["name"], "ENTITY_ID": e["id"], "GROUP": group_names.get(e["group"], e["group"]),
-            "ENTITY_DESC": (e["description"] or f"{e['name']}.").rstrip(".") + ".", "PATH": e["path"], "ORG": str(org)}))
-    plan.file(agents_dir / "chief-of-staff.md", render((KIT / "agents" / "chief-of-staff.md").read_text(), {
+            "ENTITY_DESC": (e["description"] or f"{e['name']}.").rstrip(".") + ".", "PATH": e["path"], "ORG": str(org)})
+    agents["chief-of-staff"] = render((KIT / "agents" / "chief-of-staff.md").read_text(), {
         "OWNER": owner_name, "ORG": str(org), "ENTITY_TABLE": entity_table(org, all_groups, all_entities),
-        "ENTITY_NAMES": ", ".join(x["name"] for x in all_entities)}),
-        hint="it lists the entities; add new ones to its table by hand")
+        "ENTITY_NAMES": ", ".join(x["name"] for x in all_entities)})
     for m in MANAGERS:
-        plan.file(agents_dir / f"{m}.md", render((KIT / "agents" / f"{m}.md").read_text(), {"OWNER": owner_name, "ORG": str(org)}))
+        agents[m] = render((KIT / "agents" / f"{m}.md").read_text(), {"OWNER": owner_name, "ORG": str(org)})
+
+    cos_hint = "it lists the entities; add new ones to its table by hand"
+    plan.dir(org / "agents")
+    for name, text in agents.items():
+        plan.file(org / "agents" / f"{name}.md", text, hint=cos_hint if name == "chief-of-staff" else "")
+    install_for_runner(runner, agents, agents_dir, plan, cos_hint)
     return registry
+
+
+def install_for_runner(runner, agents, agents_dir, plan, cos_hint=""):
+    """Where the runner reads agents from, translated from the neutral files."""
+    if runner == "claude-code":
+        plan.dir(agents_dir)
+        for name, text in agents.items():
+            plan.file(agents_dir / f"{name}.md", runners.for_claude(*runners.split_agent(text)),
+                      hint=cos_hint if name == "chief-of-staff" else "")
+    elif runner == "opencode":
+        d = runners.OpenCode.AGENTS
+        plan.dir(d)
+        for name, text in agents.items():
+            plan.file(d / f"{name}.md", runners.for_opencode(*runners.split_agent(text)),
+                      hint=cos_hint if name == "chief-of-staff" else "")
+    elif runner == "codex":
+        plan.dir(runners.Codex.RULES.parent)
+        plan.file(runners.Codex.RULES, runners.codex_rules(), hint="your edits are kept; delete it to get the kit's again")
 
 
 # --------------------------------------------------------------------------
@@ -448,23 +524,33 @@ def report(plan, org):
 
 def next_steps(org, registry):
     first = next((e for e in registry["entities"] if e.get("schedule") == "nightly"), registry["entities"][0])
+    runner = runners.resolve(registry)["name"]
+    ok, line = runner_check(runner)
+    print(f"\nRunner: {line}")
+    hooks = (f"""
+4. So Pulse shows your own lead sessions under Working now, merge this
+   into ~/.claude/settings.json (keep any hooks you already have):
+{hooks_snippet(org)}
+""" if runner == "claude-code" else """
+4. (Claude Code only) Live view of your own chat sessions in Pulse needs Claude Code's
+   hooks; with this runner, Pulse shows the night shift and decision runs live.
+""")
     print(f"""
 Next steps (setup ran none of these):
 
 1. Talk to a lead and tell it about the business:
-     claude --agent {first['lead']}
+     python3 {tilde(org)}/bin/talk.py {first['id']}
 
 2. Check the night shift can run (signs in, does no work):
      python3 {tilde(org)}/bin/nightly.py --check
 
 3. Schedule it (directors nightly at 5:30am, chief of staff Mondays at 6:30am):
      sh {tilde(org)}/launchd/install.sh
+{hooks}
+5. Open Pulse. It reads ~/portfolio.
 
-4. So Pulse shows your own `claude --agent ...` sessions under Working now, merge this
-   into ~/.claude/settings.json (keep any hooks you already have):
-{hooks_snippet(org)}
-
-5. Open Pulse. It reads ~/portfolio.""")
+To switch runners later, set "runner" in {tilde(org)}/portfolio.json to claude-code, codex
+or opencode (or re-run setup with --runner NAME, which also installs that runner's agents).""")
 
 
 def main(argv=None):
@@ -475,15 +561,18 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--yes", "-y", action="store_true")
     ap.add_argument("--update-bin", action="store_true")
+    ap.add_argument("--runner", choices=sorted(runners.ADAPTERS))
     a = ap.parse_args(argv)
 
     org = pathlib.Path(os.path.expanduser(a.org_dir)).resolve()
     agents_dir = pathlib.Path(os.path.expanduser(a.agents_dir)).resolve()
     try:
         raw = json.loads(pathlib.Path(os.path.expanduser(a.config)).read_text()) if a.config else interview()
+        if a.runner:
+            raw["runner"] = a.runner
         answers = normalize(raw)
         plan = Plan(a.dry_run)
-        registry = build(answers, org, agents_dir, plan, a.update_bin)
+        registry = build(answers, org, agents_dir, plan, a.update_bin, switch_runner=bool(a.runner))
     except (SetupError, OSError, json.JSONDecodeError) as ex:
         print(f"Setup stopped: {ex}", file=sys.stderr)
         return 2
