@@ -343,6 +343,12 @@ export function Sidebar({
           isActive={activeNav === 'board'}
           onClick={() => onNavChange('board')}
         />
+        <NavButton
+          icon="check"
+          label="Today"
+          isActive={activeNav === 'today'}
+          onClick={() => onNavChange('today')}
+        />
 
         <NavDivider label="SaaS metrics" />
 

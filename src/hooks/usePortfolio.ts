@@ -1,27 +1,39 @@
 import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { PortfolioSnapshot } from '../types';
+import { PortfolioSnapshot, TrackerSnapshot } from '../types';
 
 const IS_TAURI = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
 const POLL_MS = 60_000;
 
-// Reads ~/portfolio through the Rust `read_portfolio` command and re-reads every 60s,
-// plus whenever the window regains focus. Local files only; no network.
+// Reads ~/portfolio and the tracker's data (Rust `read_portfolio` and `read_tracker`) and
+// re-reads every 60s, plus whenever the window regains focus. Local files only; no network.
 export function usePortfolio() {
   const [snapshot, setSnapshot] = useState<PortfolioSnapshot | null>(null);
+  const [tracker, setTracker] = useState<TrackerSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [trackerError, setTrackerError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!IS_TAURI) {
       setError('The org board reads ~/portfolio and only runs in the Pulse desktop app.');
       return;
     }
-    try {
-      const json = await invoke<string>('read_portfolio');
-      setSnapshot(JSON.parse(json));
+    // Independent reads: a tracker problem never blanks the board, and vice versa.
+    const [portfolio, trackerResult] = await Promise.allSettled([
+      invoke<string>('read_portfolio'),
+      invoke<string>('read_tracker'),
+    ]);
+    if (portfolio.status === 'fulfilled') {
+      setSnapshot(JSON.parse(portfolio.value));
       setError(null);
-    } catch (e) {
-      setError(String(e));
+    } else {
+      setError(String(portfolio.reason));
+    }
+    if (trackerResult.status === 'fulfilled') {
+      setTracker(JSON.parse(trackerResult.value));
+      setTrackerError(null);
+    } else {
+      setTrackerError(String(trackerResult.reason));
     }
   }, []);
 
@@ -35,5 +47,5 @@ export function usePortfolio() {
     };
   }, [refresh]);
 
-  return { snapshot, error, refresh };
+  return { snapshot, tracker, error, trackerError, refresh };
 }

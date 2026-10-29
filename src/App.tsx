@@ -24,6 +24,7 @@ import { useHistory } from './hooks/useHistory';
 import { usePortfolio } from './hooks/usePortfolio';
 import { OrgBoard, boardEntities } from './components/OrgBoard';
 import { EntityDashboard } from './components/EntityDashboard';
+import { TodayView } from './components/TodayView';
 import { migrateApps } from './utils/platforms';
 import './index.css';
 
@@ -734,7 +735,13 @@ function DashboardContent() {
     return () => window.removeEventListener('keydown', onKey);
   }, [tvMode, setTv, activeNav, selectedEntityId]);
 
-  const boardItems = boardEntities(portfolio.snapshot);
+  const boardItems = boardEntities(portfolio.snapshot, portfolio.tracker);
+
+  // From the Today view, an entity opens on the board so Backspace returns to the board.
+  const openEntity = useCallback((id: string) => {
+    setSelectedEntityId(id);
+    setActiveNav('board');
+  }, []);
   const selectedEntity = boardItems.find((i) => i.entity.id === selectedEntityId) ?? null;
 
   return (
@@ -769,11 +776,18 @@ function DashboardContent() {
         {activeNav === 'board' && (
           <div style={{ zoom: tvMode ? 1.4 : 1 }}>
             {selectedEntity ? (
-              <EntityDashboard item={selectedEntity} onBack={() => setSelectedEntityId(null)} />
+              <EntityDashboard
+                item={selectedEntity}
+                moneyConnected={!!portfolio.tracker?.money.configured}
+                onBack={() => setSelectedEntityId(null)}
+              />
             ) : (
               <OrgBoard
                 snapshot={portfolio.snapshot}
+                tracker={portfolio.tracker}
                 error={portfolio.error}
+                trackerError={portfolio.trackerError}
+                onOpenToday={() => handleNavChange('today')}
                 onOpenEntity={setSelectedEntityId}
                 onRefresh={portfolio.refresh}
                 tvMode={tvMode}
@@ -781,6 +795,18 @@ function DashboardContent() {
               />
             )}
           </div>
+        )}
+
+        {/* Today: everything due now across entities (successor to the tracker's brief.html) */}
+        {activeNav === 'today' && (
+          <TodayView
+            snapshot={portfolio.snapshot}
+            tracker={portfolio.tracker}
+            error={portfolio.error}
+            trackerError={portfolio.trackerError}
+            onOpenEntity={openEntity}
+            onRefresh={portfolio.refresh}
+          />
         )}
 
         {/* Overview Page */}
