@@ -34,6 +34,7 @@ import { ConversationFocus, ConversationsPage } from './components/Conversations
 import { OutboxPage } from './components/OutboxPage';
 import { GoalsPage } from './components/GoalsPage';
 import { ConnectionsPage } from './components/ConnectionsPage';
+import { UsagePage } from './components/UsagePage';
 import { useLive } from './hooks/useLive';
 import { liveSignals, trayRuns } from './utils/live';
 import { migrateApps } from './utils/platforms';
@@ -1001,6 +1002,7 @@ function DashboardContent() {
         {page === 'outbox' && !selectedEntity && <OutboxPage snapshot={portfolio.snapshot} />}
         {page === 'goals' && !selectedEntity && <GoalsPage snapshot={portfolio.snapshot} />}
         {page === 'connections' && !selectedEntity && <ConnectionsPage snapshot={portfolio.snapshot} />}
+        {page === 'usage' && !selectedEntity && <UsagePage snapshot={portfolio.snapshot} onOpenConversation={openConversation} />}
 
         {/* SaaS metrics pages: kept behind the Settings toggle */}
         {/* Overview Page */}

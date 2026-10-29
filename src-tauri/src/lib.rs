@@ -1,6 +1,7 @@
 mod command;
 mod pty;
 mod ops;
+mod usage;
 
 use chrono::{Datelike, Timelike};
 use serde::{Deserialize, Serialize};
@@ -3659,7 +3660,10 @@ pub fn run() {
             ops::read_goals,
             ops::save_goal,
             ops::read_connections,
-            ops::check_connections
+            ops::check_connections,
+            usage::read_usage,
+            usage::read_preferences,
+            usage::set_preference_disabled
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
