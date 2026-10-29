@@ -6,6 +6,7 @@ import { EntityTracker } from '../utils/tracker';
 import { BoardEntity } from './OrgBoard';
 import { AgeLabel, Card, EntityMark, HealthBadge, HealthWhy, Notice, SectionHeading, StageBadge } from './BoardUI';
 import { Icon } from './Icons';
+import { EntityDecisions } from './DecisionCard';
 import { EntityFinance } from './EntityFinance';
 import { RepoRow, ReplyRow, RowList, TaskRow } from './TrackerRows';
 
@@ -134,35 +135,7 @@ function OverviewTab({ item }: { item: BoardEntity }) {
         </div>
       )}
 
-      <section>
-        <SectionHeading note={`${decisions.length} waiting on you`}>Decisions</SectionHeading>
-        {decisions.length === 0 ? (
-          <Empty>Nothing waiting on you.</Empty>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {decisions.map((d, idx) => (
-              <Card key={idx} padding="20px 24px">
-                <div style={{ display: 'flex', gap: '12px', alignItems: 'baseline', flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: '17px', fontWeight: 600, flex: 1, minWidth: '240px', lineHeight: 1.4 }}>{d.ask}</span>
-                  {d.due && <span style={{ fontSize: tokens.type.small, color: c.warning }}>due {d.due}</span>}
-                  {d.gate && (
-                    <span style={{ fontSize: tokens.type.micro, padding: '3px 10px', borderRadius: '999px', border: `1px solid ${c.border}`, color: c.textMuted }}>
-                      {d.gate}
-                    </span>
-                  )}
-                </div>
-                {d.recommend && (
-                  <div style={{ fontSize: tokens.type.body, lineHeight: 1.55, marginTop: '10px', maxWidth: '80ch' }}>
-                    <span style={{ color: c.accent, fontWeight: 600 }}>Recommend </span>
-                    {d.recommend}
-                  </div>
-                )}
-                {d.why && <div style={{ fontSize: tokens.type.small, lineHeight: 1.55, color: c.textMuted, marginTop: '6px', maxWidth: '80ch' }}>{d.why}</div>}
-              </Card>
-            ))}
-          </div>
-        )}
-      </section>
+      <EntityDecisions entity={entity} decisions={decisions} />
 
       {lanes.length > 0 && (
         <section>

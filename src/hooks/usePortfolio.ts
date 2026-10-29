@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { PortfolioSnapshot, TrackerSnapshot } from '../types';
+import { withoutDecisionDuplicates } from '../utils/decisions';
 
 const IS_TAURI = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
 const POLL_MS = 60_000;
@@ -47,5 +48,9 @@ export function usePortfolio() {
     };
   }, [refresh]);
 
-  return { snapshot, tracker, error, trackerError, refresh };
+  // A "Decide: …" task that mirrors a status.json decision is hidden everywhere; the decision
+  // card (with its buttons) stands for both.
+  const deduped = useMemo(() => (tracker ? withoutDecisionDuplicates(tracker, snapshot) : null), [tracker, snapshot]);
+
+  return { snapshot, tracker: deduped, error, trackerError, refresh };
 }
