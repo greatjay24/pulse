@@ -1,7 +1,7 @@
 import { useTheme } from '../contexts/ThemeContext';
 import { PortfolioSnapshot } from '../types';
 import { useOrgActivity } from '../hooks/useOrgActivity';
-import { formatCost, formatSecs, leadOwners, plainSummary, shifts } from '../utils/activity';
+import { formatSecs, leadOwners, plainSummary, shifts, usage, usageLine } from '../utils/activity';
 import { Card, SectionLabel } from './BoardUI';
 
 // The latest scheduled shift at a glance: who ran, whether it worked, what it cost, and each
@@ -24,7 +24,7 @@ export function LastNightCard({ snapshot, onOpen }: { snapshot: PortfolioSnapsho
     );
   }
 
-  const cost = last.runs.reduce((s, r) => s + (r.cost_usd ?? 0), 0);
+  const used = usageLine(usage(last.runs.map((r) => ({ cost: r.cost_usd, tokens: r.tokens }))), false);
   const failed = last.runs.filter((r) => !r.ok);
   const longest = Math.max(...last.runs.map((r) => r.secs ?? 0));
   const drafts = (activity.drafts ?? []).filter((d) => {
@@ -50,7 +50,7 @@ export function LastNightCard({ snapshot, onOpen }: { snapshot: PortfolioSnapsho
         {failed.length > 0 ? <span style={{ color: c.danger }}>, {failed.length} failed</span> : ', all OK'}
       </div>
       <div style={{ fontSize: tokens.type.small, color: c.textDim, marginBottom: '14px' }}>
-        {formatCost(cost)} agent cost · longest {formatSecs(longest)}
+        {used && `${used} · `}longest {formatSecs(longest)}
         {drafts > 0 && ` · ${drafts} sales ${drafts === 1 ? 'draft' : 'drafts'} written`}
       </div>
       <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '8px' }}>

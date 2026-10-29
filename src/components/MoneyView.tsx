@@ -56,11 +56,12 @@ interface MoneyViewProps {
   snapshot: PortfolioSnapshot | null;
   tracker: TrackerSnapshot | null;
   trackerError: string | null;
+  trackerAbsent?: boolean; // no tracker installed: money has no source
   onOpenFinance: (id: string) => void;
 }
 
 // Cash in across the portfolio, then each business's slice; a card opens its Finance tab.
-export function MoneyView({ snapshot, tracker, trackerError, onOpenFinance }: MoneyViewProps) {
+export function MoneyView({ snapshot, tracker, trackerError, trackerAbsent = false, onOpenFinance }: MoneyViewProps) {
   const { tokens } = useTheme();
   const now = Date.now();
   const ok = tracker && !tracker.error ? tracker : null;
@@ -87,7 +88,10 @@ export function MoneyView({ snapshot, tracker, trackerError, onOpenFinance }: Mo
         subtitle={ok ? <DataStamps sources={moneySources(ok)} now={now} /> : undefined}
       />
       {problem && <Notice>Money not shown: {problem}</Notice>}
-      {!ok && !problem && <Notice tone="quiet">Reading ~/project-tracker…</Notice>}
+      {trackerAbsent && (
+        <Notice tone="quiet">Money comes from an optional tracker that collects payments, and none is set up on this Mac. The leads still report cash in their status metrics on the Board.</Notice>
+      )}
+      {!ok && !problem && !trackerAbsent && <Notice tone="quiet">Reading ~/project-tracker…</Notice>}
       {ok && snapshot?.registry && (
         <>
           <MoneyBand money={ok.money} entities={entities} logos={logos} onOpenEntity={onOpenFinance} />

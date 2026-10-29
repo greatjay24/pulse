@@ -1,4 +1,4 @@
-import { ActivitySnapshot, AgentRun, PortfolioEntity, PortfolioSnapshot } from '../types';
+import { ActivitySnapshot, AgentRun, PortfolioEntity, PortfolioSnapshot, RunTokens } from '../types';
 import { decisionId } from './decisions';
 
 // One line on the Activity timeline. Built only from files the organization wrote:
@@ -14,10 +14,13 @@ export interface ActivityItem {
   title: string;
   detail?: string;
   cost?: number;
+  tokens?: RunTokens; // when the runner reports tokens but not cost
   secs?: number;
   ok?: boolean;
   running?: boolean;
   link?: string | null;
+  runId?: string; // the run's transcript, for Conversations
+  agents?: number; // subagents the run deployed; 0 = worked solo
 }
 
 export function localDay(ms: number): string {
@@ -103,8 +106,11 @@ export function activityItems(activity: ActivitySnapshot | null, snapshot: Portf
         title: `${r.agent} ran the ${r.agent === 'chief-of-staff' ? 'weekly review' : 'night shift'}`,
         detail: plainSummary(r.result),
         cost: r.cost_usd ?? undefined,
+        tokens: r.tokens,
         secs: r.secs,
         ok: r.ok,
+        runId: r.run_id,
+        agents: r.agents,
       }),
     );
   }
@@ -122,9 +128,12 @@ export function activityItems(activity: ActivitySnapshot | null, snapshot: Portf
       title: `${r.agent} ${r.running ? 'is acting on' : 'acted on'} your ${r.action ? VERB[r.action] : 'answer'}: ${askOf(r.entity, r.decision)}`,
       detail: r.running ? undefined : plainSummary(r.result),
       cost: r.cost_usd ?? undefined,
+      tokens: r.tokens,
       secs: r.running ? undefined : r.secs,
       ok: r.running ? undefined : r.ok,
       running: !!r.running,
+      runId: r.run_id,
+      agents: r.running ? undefined : r.agents,
     });
   }
 
@@ -199,6 +208,10 @@ export function costBetween(items: ActivityItem[], from: number, to = Infinity):
   return items.reduce((sum, i) => sum + (i.at >= from && i.at < to && i.cost ? i.cost : 0), 0);
 }
 
+export function usageBetween(items: ActivityItem[], from: number, to = Infinity) {
+  return usage(items.filter((i) => i.at >= from && i.at < to));
+}
+
 export function startOfDay(ms: number): number {
   const d = new Date(ms);
   d.setHours(0, 0, 0, 0);
@@ -207,6 +220,38 @@ export function startOfDay(ms: number): number {
 
 export function formatCost(usd: number): string {
   return usd < 10 ? `$${usd.toFixed(2)}` : `$${Math.round(usd)}`;
+}
+
+export function formatTokens(t: RunTokens): string {
+  const n = t.input + t.output;
+  const short = n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n);
+  return `${short} tokens`;
+}
+
+function addTokens(a: RunTokens | undefined, b: RunTokens | undefined): RunTokens | undefined {
+  if (!b) return a;
+  return { input: (a?.input ?? 0) + b.input, output: (a?.output ?? 0) + b.output };
+}
+
+// What a run (or a set of runs) used, as the runner reported it: dollars when it reports cost
+// (Claude Code, opencode), tokens when it reports only those (Codex), else nothing. Never estimated.
+export function usage(runs: { cost?: number | null; tokens?: RunTokens }[]): { cost: number | null; tokens: RunTokens | undefined } {
+  let cost: number | null = null;
+  let tokens: RunTokens | undefined;
+  for (const r of runs) {
+    if (typeof r.cost === 'number') cost = (cost ?? 0) + r.cost;
+    else tokens = addTokens(tokens, r.tokens);
+  }
+  return { cost, tokens };
+}
+
+// One line for a usage: "$1.30", "84k tokens", "$1.30 + 84k tokens", or null.
+export function usageLine(u: { cost: number | null; tokens: RunTokens | undefined }, hideZeroCost = true): string | null {
+  const parts = [
+    u.cost !== null && !(hideZeroCost && u.cost === 0) ? formatCost(u.cost) : null,
+    u.tokens ? formatTokens(u.tokens) : null,
+  ].filter(Boolean);
+  return parts.length ? parts.join(' + ') : null;
 }
 
 export function formatSecs(secs: number | undefined): string {

@@ -16,6 +16,7 @@ interface SidebarProps {
   saasMetrics: boolean; // the original SaaS pages, behind a toggle in Settings
   decisions: number | null; // decisions waiting on the owner, shown beside Today
   compact: boolean; // narrow window: an icon rail
+  hideMoney?: boolean; // no tracker, so nothing for Money to show
 }
 
 // The main nav, in order of importance.
@@ -23,6 +24,7 @@ const MAIN_NAV: { id: string; label: string; icon: string }[] = [
   { id: 'today', label: 'Today', icon: 'today' },
   { id: 'board', label: 'Board', icon: 'board' },
   { id: 'activity', label: 'Activity', icon: 'activity' }, // decision outcomes, agent runs, cost
+  { id: 'conversations', label: 'Conversations', icon: 'chat' }, // what the owner and the leads said, run by run
   { id: 'money', label: 'Money', icon: 'wallet' },
 ];
 
@@ -331,6 +333,7 @@ export function Sidebar({
   saasMetrics,
   decisions,
   compact,
+  hideMoney = false,
 }: SidebarProps) {
   const { tokens } = useTheme();
 
@@ -365,7 +368,7 @@ export function Sidebar({
 
       {/* Main Nav */}
       <nav style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-        {MAIN_NAV.map((item) => (
+        {MAIN_NAV.filter((item) => !(hideMoney && item.id === 'money')).map((item) => (
           <NavButton
             key={item.id}
             icon={item.icon}
