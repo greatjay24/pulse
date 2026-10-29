@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
+import { VoiceSettings } from './VoiceSettings';
 import { invoke } from '@tauri-apps/api/core';
 import { useTheme, fontOptions, presets, PresetId, ThemeMode, FontChoice } from '../contexts/ThemeContext';
 import { App, IntegrationType, PROJECT_COLORS, GoogleCalendarConfig } from '../types';
 import { Icon } from './Icons';
+import { LearnedPreferences } from './LearnedPreferences';
 
 // Check if running in Tauri environment (Tauri v2 uses __TAURI_INTERNALS__)
 const IS_TAURI = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
@@ -106,7 +108,7 @@ export function Settings({ apps, onSave, onClose, inline = false, saasMetrics, o
   const { tokens, themeMode, setThemeMode, fontChoice, setFontChoice, preset, setPreset, customAccent, setCustomAccent, resolvedTheme } = useTheme();
   const [editedApps, setEditedApps] = useState<App[]>(apps);
   const [activeAppId, setActiveAppId] = useState<string | null>(apps[0]?.id || null);
-  const [activeTab, setActiveTab] = useState<'general' | 'appearance' | 'apps'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'appearance' | 'learned' | 'apps'>('general');
   // The Apps tab configures the SaaS-metrics pages, so it goes away with them.
   const tab = activeTab === 'apps' && !saasMetrics ? 'general' : activeTab;
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'idle'>('idle');
@@ -392,6 +394,7 @@ export function Settings({ apps, onSave, onClose, inline = false, saasMetrics, o
           {[
             { id: 'general', label: 'General', icon: 'bell' },
             { id: 'appearance', label: 'Appearance', icon: 'eye' },
+            { id: 'learned', label: 'Learned', icon: 'pulse' },
             ...(saasMetrics ? [{ id: 'apps', label: 'SaaS apps', icon: 'mobile' }] : []),
           ].map((item) => (
             <button
@@ -434,6 +437,7 @@ export function Settings({ apps, onSave, onClose, inline = false, saasMetrics, o
                   onChange={() => onNotificationsChange(!notifications)}
                 />
               </div>
+              {IS_TAURI && <VoiceSettings />}
               <div style={{ background: tokens.colors.bgCard, border: `1px solid ${tokens.colors.border}`, borderRadius: tokens.radius.lg, padding: '24px' }}>
                 <ToggleRow
                   label="SaaS metrics"
@@ -444,6 +448,9 @@ export function Settings({ apps, onSave, onClose, inline = false, saasMetrics, o
               </div>
             </div>
           )}
+
+          {/* Learned: preferences the org drew from the owner's edits (memory/) */}
+          {tab === 'learned' && <LearnedPreferences />}
 
           {/* Appearance Tab */}
           {tab === 'appearance' && (

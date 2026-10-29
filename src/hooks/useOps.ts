@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { CAN_READ_ORG, DEMO, orgRead } from '../utils/orgSource';
 import { showToast } from '../utils/toast';
-import { ConnectionsDoc, Goal, GoalsSnapshot, OutboxSnapshot } from '../types/ops';
+import { ConnectionsDoc, Goal, GoalsSnapshot, OutboxEdit, OutboxSnapshot } from '../types/ops';
 
 const POLL_MS = 30_000;
 
@@ -40,19 +40,33 @@ function demo(what: string) {
   showToast(`Demo only. In your org, this would ${what}.`);
 }
 
-// The owner's click. Rust re-checks the content, signs a one-time approval and runs
-// bin/outbox_send.py; nothing else in the org can send.
-export async function sendOutbox(id: string, content: string): Promise<{ ok: boolean; warning?: string }> {
+export interface OutboxResult {
+  ok: boolean;
+  warning?: string;
+  status?: string;
+  link?: string | null;
+  next_step?: string | null;
+}
+
+// The owner's click (Send / Publish / Approve). Rust re-checks the content, signs a one-time
+// approval and runs bin/outbox_send.py, which does what the item's kind says; nothing else
+// in the org can.
+export async function sendOutbox(id: string, content: string, what = 'send this message from the right mailbox, threaded, and mark it sent'): Promise<OutboxResult> {
   if (DEMO) {
-    demo('send this message from the right mailbox, threaded, and mark it sent');
+    demo(what);
     return { ok: true };
   }
   return JSON.parse(await invoke<string>('outbox_send', { id, content }));
 }
 
-export async function editOutbox(id: string, fields: { to: string[]; cc: string[]; subject: string; body: string }) {
-  if (DEMO) return demo('save your edit to the message');
-  await invoke<string>('outbox_edit', { id, ...fields });
+export async function editOutbox(id: string, fields: OutboxEdit) {
+  if (DEMO) return demo('save your edit');
+  await invoke<string>('outbox_edit', { id, fields });
+}
+
+export async function markPublished(id: string) {
+  if (DEMO) return demo('mark it published');
+  await invoke<string>('outbox_mark_published', { id });
 }
 
 export async function skipOutbox(id: string) {

@@ -1,13 +1,26 @@
 // Operations data: the Outbox, goals and connections (Rust: src-tauri/src/ops.rs).
 
-export type OutboxStatus = 'pending' | 'sending' | 'sent' | 'skipped' | 'failed';
+export type OutboxStatus = 'pending' | 'sending' | 'sent' | 'approved' | 'published' | 'skipped' | 'failed';
 
-// ~/portfolio/outbox/<id>.json, written by bin/outbox_add.py.
+export type OutboxKind =
+  | 'email'
+  | 'post'
+  | 'text'
+  | 'dm'
+  | 'slack'
+  | 'stripe_send_invoice'
+  | 'stripe_send_quote'
+  | 'stripe_refund'
+  | 'stripe_subscription';
+
+// ~/portfolio/outbox/<id>.json, written by bin/outbox_add.py (and bin/stripe_agent.py for money).
+// Field meanings per kind are in bin/outbox.py.
 export interface OutboxMessage {
   id: string;
+  kind?: OutboxKind; // missing on items written before kinds existed: email
   entity: string;
-  account: string; // which mailbox it goes out from
-  to: string[];
+  account: string; // email: which mailbox it goes out from
+  to: string[]; // email addresses, phone numbers or @handles
   cc: string[];
   subject: string;
   body: string;
@@ -22,8 +35,32 @@ export interface OutboxMessage {
   sent_at?: string | null;
   skipped_at?: string | null;
   edited_at?: string | null;
+  approved_at?: string | null;
+  published_at?: string | null;
   error?: string | null;
+  // post / dm / slack
+  channel?: string | null;
+  title?: string | null;
+  link?: string | null; // where it goes; after a click, where to finish it or the Stripe page
+  media?: string[];
+  next_step?: string | null; // what's left for the owner after the click
+  // stripe_*
+  stripe_id?: string | null;
+  customer_id?: string | null;
+  customer?: string | null;
+  amount?: number | null; // minor units (cents)
+  currency?: string | null;
+  due_date?: string | null;
+  reason?: string | null;
+  action?: 'create' | 'update' | null;
+  items?: string[]; // "price_...:qty"
+  interval?: string | null;
+  days_until_due?: number | null;
+  result?: Record<string, unknown> | null;
 }
+
+// What Pulse may change in an item, by kind (bin/outbox.py EDITABLE is the authority).
+export type OutboxEdit = Partial<Pick<OutboxMessage, 'to' | 'cc' | 'subject' | 'body' | 'title' | 'link'>>;
 
 export interface OutboxEntry {
   content: string; // sha256 of what is shown; Send is refused if the file changed since

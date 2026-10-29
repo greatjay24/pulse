@@ -34,6 +34,7 @@ import { ConversationFocus, ConversationsPage } from './components/Conversations
 import { OutboxPage } from './components/OutboxPage';
 import { GoalsPage } from './components/GoalsPage';
 import { ConnectionsPage } from './components/ConnectionsPage';
+import { UsagePage } from './components/UsagePage';
 import { useLive } from './hooks/useLive';
 import { liveSignals, trayRuns } from './utils/live';
 import { migrateApps } from './utils/platforms';
@@ -41,7 +42,8 @@ import { DEMO } from './utils/orgSource';
 import { DemoBadge, Toast, Welcome } from './components/Welcome';
 import { CommandBox } from './components/CommandBox';
 import { TerminalPage, TerminalRequest } from './components/TerminalPage';
-import { chiefOf } from './utils/command';
+import { chiefOf, frontDoorOf } from './utils/command';
+import { useVoice } from './hooks/useVoice';
 import './index.css';
 
 // Check if running in Tauri environment (Tauri v2 uses __TAURI_INTERNALS__)
@@ -844,6 +846,7 @@ function DashboardContent() {
   // Menu bar count and native notifications, from the same data as Today.
   const { signals, cleared } = urgentSignals(boardItems, portfolio.tracker);
   const { live } = useLive();
+  useVoice(DEMO ? null : live, frontDoorOf(portfolio.snapshot?.registry));
   // The demo org never reaches the menu bar or notifications: they are for the owner's real org.
   // Without a tracker the picture is complete once ~/portfolio has been read.
   useDesktopSignals({
@@ -924,6 +927,7 @@ function DashboardContent() {
         <CommandBox
           entities={portfolio.snapshot?.registry?.entities ?? []}
           chief={chiefOf(portfolio.snapshot?.registry)}
+          frontDoor={frontDoorOf(portfolio.snapshot?.registry)}
           onClose={() => setCommandOpen(false)}
           onStarted={openRun}
         />
@@ -1001,6 +1005,7 @@ function DashboardContent() {
         {page === 'outbox' && !selectedEntity && <OutboxPage snapshot={portfolio.snapshot} />}
         {page === 'goals' && !selectedEntity && <GoalsPage snapshot={portfolio.snapshot} />}
         {page === 'connections' && !selectedEntity && <ConnectionsPage snapshot={portfolio.snapshot} />}
+        {page === 'usage' && !selectedEntity && <UsagePage snapshot={portfolio.snapshot} onOpenConversation={openConversation} />}
 
         {/* SaaS metrics pages: kept behind the Settings toggle */}
         {/* Overview Page */}

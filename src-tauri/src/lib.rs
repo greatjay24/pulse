@@ -1,6 +1,8 @@
 mod command;
+mod jarvis;
 mod pty;
 mod ops;
+mod usage;
 
 use chrono::{Datelike, Timelike};
 use serde::{Deserialize, Serialize};
@@ -3000,6 +3002,7 @@ struct MoneyFinance {
     projects: Vec<ProjectFinance>,
     stripe_accounts: Vec<StripeAccount>,
     bank_accounts: Vec<BankAccount>,
+    payout_weeks: Vec<(String, String, f64)>, // [project, week (Monday, YYYY-MM-DD local), total]: Stripe payouts that arrived
 }
 
 // How far back a source's file reaches: each collector keeps `window_days` before `collected_at`.
@@ -3018,6 +3021,7 @@ struct ProjectFinance {
     d30: f64,
     d90: f64,
     months: Vec<(String, f64)>,      // [YYYY-MM local, total], oldest first, every month on file
+    weeks: Vec<(String, String, f64)>, // [week (Monday, YYYY-MM-DD local), channel, total], oldest first
     by_channel: Vec<(String, f64)>,  // 90 days: stripe | bank | email, largest first
     by_rail: Vec<(String, String, f64)>, // 90 days: [channel, rail (zelle, venmo...), total], largest first
     payers: Vec<PayerTotal>,         // 90 days, largest first
@@ -3047,6 +3051,7 @@ struct BankAccount {
     project: Option<String>,
     balance: Option<f64>,
     currency: String,
+    balance_series: Vec<(String, f64)>, // [YYYY-MM-DD, end-of-day balance], oldest first (Mercury)
 }
 
 fn sorted_desc(m: HashMap<String, f64>) -> Vec<(String, f64)> {
@@ -3058,6 +3063,17 @@ fn sorted_desc(m: HashMap<String, f64>) -> Vec<(String, f64)> {
 fn local_month(ts: f64) -> String {
     chrono::DateTime::from_timestamp(ts as i64, 0)
         .map(|t| t.with_timezone(&chrono::Local).format("%Y-%m").to_string())
+        .unwrap_or_default()
+}
+
+// The Monday that starts the local week a timestamp falls in.
+fn local_week(ts: f64) -> String {
+    use chrono::Datelike;
+    chrono::DateTime::from_timestamp(ts as i64, 0)
+        .map(|t| {
+            let d = t.with_timezone(&chrono::Local).date_naive();
+            (d - chrono::Duration::days(d.weekday().num_days_from_monday() as i64)).format("%Y-%m-%d").to_string()
+        })
         .unwrap_or_default()
 }
 
@@ -3077,6 +3093,12 @@ fn money_finance(counted: &[&MoneyEvent], stripe: &serde_json::Value, mail: &ser
             }
             let mut months: Vec<(String, f64)> = months.into_iter().map(|(k, a)| (k, round_cents(a))).collect();
             months.sort_by(|a, b| a.0.cmp(&b.0));
+            let mut weeks: HashMap<(String, String), f64> = HashMap::new();
+            for e in &events {
+                *weeks.entry((local_week(e.created), e.channel.to_string())).or_default() += e.amount;
+            }
+            let mut weeks: Vec<(String, String, f64)> = weeks.into_iter().map(|((w, c), a)| (w, c, round_cents(a))).collect();
+            weeks.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
             let mut channel = HashMap::new();
             let mut rail: HashMap<(String, String), f64> = HashMap::new();
             // Payers match case-insensitively; the first spelling seen is the one shown.
@@ -3104,6 +3126,7 @@ fn money_finance(counted: &[&MoneyEvent], stripe: &serde_json::Value, mail: &ser
                 d30: round_cents(events.iter().filter(|e| e.created >= d30).map(|e| e.amount).sum()),
                 d90: round_cents(recent.iter().map(|e| e.amount).sum()),
                 months,
+                weeks,
                 by_channel: sorted_desc(channel),
                 by_rail: {
                     let mut v: Vec<(String, String, f64)> = rail.into_iter().map(|((c, r), a)| (c, r, round_cents(a))).collect();
@@ -3151,6 +3174,9 @@ fn money_finance(counted: &[&MoneyEvent], stripe: &serde_json::Value, mail: &ser
                 org: jstr(a, "org"),
                 project: jproject(a),
                 balance: jf64(a, "balance"),
+                balance_series: jlist(a, "balance_series")
+                    .filter_map(|p| Some((p.get(0)?.as_str()?.to_string(), p.get(1)?.as_f64()?)))
+                    .collect(),
                 currency: {
                     let c = jstr(a, "currency");
                     if c.is_empty() { "usd".to_string() } else { c }
@@ -3161,7 +3187,23 @@ fn money_finance(counted: &[&MoneyEvent], stripe: &serde_json::Value, mail: &ser
         vec![]
     };
 
-    MoneyFinance { coverage, projects, stripe_accounts, bank_accounts }
+    // Payouts are the same dollars as the charges they batch, so they are not cash in;
+    // they get their own chart. Only ones that arrived (or are on the way), by arrival week.
+    let mut payouts: HashMap<(String, String), f64> = HashMap::new();
+    if is_ok(stripe) {
+        for p in jlist(stripe, "payouts") {
+            let status = jstr(p, "status");
+            let (Some(amount), Some(when)) = (jf64(p, "amount"), jf64(p, "arrival").or_else(|| jf64(p, "created"))) else { continue };
+            if status == "canceled" || status == "failed" {
+                continue;
+            }
+            *payouts.entry((jproject(p).unwrap_or_else(|| "unsorted".into()), local_week(when))).or_default() += amount;
+        }
+    }
+    let mut payout_weeks: Vec<(String, String, f64)> = payouts.into_iter().map(|((p, w), a)| (p, w, round_cents(a))).collect();
+    payout_weeks.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+
+    MoneyFinance { coverage, projects, stripe_accounts, bank_accounts, payout_weeks }
 }
 
 fn jstr(v: &serde_json::Value, k: &str) -> String {
@@ -3582,8 +3624,11 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(|app, shortcut, event| jarvis::on_shortcut(app, shortcut, event.state())).build())
         .manage(pty::Ptys::default())
+        .manage(jarvis::Voice::default())
         .setup(|app| {
+            jarvis::setup(app.handle());
             let menu = tray_menu(app.handle(), &[])?;
 
             // A template image: macOS tints it for light and dark menu bars.
@@ -3655,11 +3700,26 @@ pub fn run() {
             ops::read_outbox,
             ops::outbox_edit,
             ops::outbox_skip,
+            ops::outbox_mark_published,
             ops::outbox_send,
             ops::read_goals,
             ops::save_goal,
             ops::read_connections,
-            ops::check_connections
+            ops::check_connections,
+            jarvis::speak,
+            jarvis::stop_speaking,
+            jarvis::list_voices,
+            jarvis::start_listening,
+            jarvis::stop_listening,
+            jarvis::cancel_listening,
+            jarvis::open_listen_panel,
+            jarvis::hide_listen_panel,
+            jarvis::open_run_in_main,
+            jarvis::set_listen_hotkey,
+            jarvis::pulse_brief,
+            usage::read_usage,
+            usage::read_preferences,
+            usage::set_preference_disabled
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -3667,6 +3727,7 @@ pub fn run() {
     app.run(|app, event| {
         if let tauri::RunEvent::Exit = event {
             pty::close_all(&app.state::<pty::Ptys>());
+            jarvis::close_all(&app.state::<jarvis::Voice>());
         }
         // Clicking the Dock icon brings the hidden window back.
         #[cfg(target_os = "macos")]
@@ -3994,6 +4055,20 @@ mod tracker_tests {
         assert_eq!(unsorted.no_payer_90d, 80.0);
         assert_eq!((f.stripe_accounts[0].project.as_str(), f.stripe_accounts[0].active, f.stripe_accounts[0].mrr), ("northwind", 3, 40.0));
         assert!(f.coverage.iter().all(|c| c.ok));
+
+        // Weeks add up to the totals; payouts are kept apart, by arrival week.
+        let weeks: f64 = f.projects.iter().flat_map(|p| p.weeks.iter().map(|(_, _, v)| v)).sum();
+        assert!((weeks - 1775.0).abs() < 0.001);
+        assert!(northwind.weeks.iter().all(|(w, c, _)| w.len() == 10 && c == "stripe"));
+        assert_eq!(f.payout_weeks, vec![("northwind".to_string(), local_week(t(4.0)), 116.22)]);
+        // 2026-10-25 is a Sunday: its week starts Monday the 19th.
+        assert_eq!(local_week(now), "2026-10-19");
+        assert_eq!(local_week(now + DAY_SECS), "2026-10-26");
+
+        let with_series = build_money(&off, &json!({}), &json!({"ok": true, "collected_at": now, "accounts": [
+            {"name": "Ops", "org": "Mercury", "balance": 10.0, "currency": "usd", "project": "northwind",
+             "balance_series": [["2026-10-24", 8.0], ["2026-10-25", 10.0], ["bad"]]}]}), now);
+        assert_eq!(with_series.finance.bank_accounts[0].balance_series, vec![("2026-10-24".to_string(), 8.0), ("2026-10-25".to_string(), 10.0)]);
 
         let empty = build_money(&off, &json!({}), &off, now);
         assert!(empty.finance.projects.is_empty() && empty.finance.stripe_accounts.is_empty());

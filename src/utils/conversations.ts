@@ -2,12 +2,14 @@ import { ActivitySnapshot, DecisionRow, LiveRun, LiveSnapshot, PortfolioSnapshot
 import { decisionId } from './decisions';
 import { leadOwners, shifts, stampOf } from './activity';
 import { ms } from './live';
+import { frontDoorOf } from './command';
 
 // Conversations: one thread per entity (plus the org's own, for the chief of staff and
 // managers), each interleaving the owner's side (their answers in decisions.jsonl, their turns in a
 // session) with the lead's (replies, done records, and every run's transcript).
 
 export const ORG_THREAD = 'org';
+export const PULSE_THREAD = 'front-door'; // the front door's own conversation, pinned first
 
 export type ConvItem =
   | { type: 'owner'; key: string; at: number; row: DecisionRow; ask: string }
@@ -27,6 +29,10 @@ export type ConvItem =
       result?: string;
       agents?: number; // subagents deployed; 0 = worked solo
       live: LiveRun | null;
+      parentRun?: string; // the front-door run that handed this one off
+      trigger?: string; // report | brief | followup (front-door runs)
+      source?: string; // telegram, schedule, ...
+      children?: RunItem[]; // runs this one handed off (front door)
     };
 
 export interface Thread {
@@ -53,6 +59,8 @@ export function buildThreads(
   const entities = snapshot?.registry?.entities ?? [];
   const owners = leadOwners(entities);
   const threadOf = (entity: string | null | undefined) => (entity && entities.some((e) => e.id === entity) ? entity : ORG_THREAD);
+  const door = frontDoorOf(snapshot?.registry);
+  const runThread = (agent: string, entity: string | null | undefined) => (door && agent === door ? PULSE_THREAD : threadOf(entity));
   const items = new Map<string, ConvItem[]>();
   const add = (thread: string, it: ConvItem) => items.set(thread, [...(items.get(thread) ?? []), it]);
 
@@ -61,9 +69,9 @@ export function buildThreads(
   for (const s of index) {
     if (s.start?.t !== 'start') continue;
     const st = s.start;
-    const item: RunItem = { type: 'run', key: `run-${s.run_id}`, at: ms(st.at), runId: s.run_id, agent: st.agent, kind: st.kind, doing: st.doing, live: null };
+    const item: RunItem = { type: 'run', key: `run-${s.run_id}`, at: ms(st.at), runId: s.run_id, agent: st.agent, kind: st.kind, doing: st.doing, live: null, parentRun: st.parent_run, trigger: st.trigger, source: st.source };
     if (s.last?.t === 'result') Object.assign(item, { ok: s.last.ok, cost: s.last.cost_usd, tokens: s.last.tokens, secs: s.last.secs, result: s.last.result, agents: s.last.agents });
-    runs.set(s.run_id, { thread: threadOf(st.entity), item });
+    runs.set(s.run_id, { thread: runThread(st.agent, st.entity), item });
   }
   for (const r of live?.runs ?? []) {
     const known = runs.get(r.run_id);
@@ -76,8 +84,8 @@ export function buildThreads(
       if (r.kind !== 'interactive' && !pending) known.item.agents ??= r.team?.length ?? 0;
     } else {
       runs.set(r.run_id, {
-        thread: threadOf(r.entity),
-        item: { type: 'run', key: `run-${r.run_id}`, at: ms(r.started), runId: r.run_id, agent: r.agent, kind: r.kind, doing: r.doing, live: r },
+        thread: runThread(r.agent, r.entity),
+        item: { type: 'run', key: `run-${r.run_id}`, at: ms(r.started), runId: r.run_id, agent: r.agent, kind: r.kind, doing: r.doing, live: r, parentRun: r.parent_run, trigger: r.trigger, source: r.source },
       });
     }
   }
@@ -119,6 +127,11 @@ export function buildThreads(
     const at = ms(r.started) || stampOf(f.file.replace(/^act-/, '')) || 0;
     legacy(threadOf(r.entity), `log-${f.file}`, at, r.agent, 'act', `${r.action ? verbOf(r.action) : 'Answer'}: ${ask}`, r);
   }
+  // Hand-offs also nest under the front-door run that launched them, like a team deployment.
+  for (const { item } of runs.values()) {
+    const parent = item.parentRun ? runs.get(item.parentRun)?.item : undefined;
+    if (parent) parent.children = [...(parent.children ?? []), item].sort((a, b) => a.at - b.at);
+  }
   for (const { thread, item } of runs.values()) add(thread, item);
 
   // decisions.jsonl: the owner's answers and the lead's replies.
@@ -140,8 +153,8 @@ export function buildThreads(
     const working = sorted.some((i) => i.type === 'run' && i.live?.state === 'running');
     threads.push({
       id,
-      name: e?.name ?? 'Organization',
-      lead: e?.lead ?? null,
+      name: id === PULSE_THREAD ? 'Pulse' : e?.name ?? 'Organization',
+      lead: id === PULSE_THREAD ? door : e?.lead ?? null,
       items: sorted,
       latest: last?.at ?? 0,
       working,
@@ -154,7 +167,9 @@ export function buildThreads(
     if (e.lead && !items.has(e.id)) threads.push({ id: e.id, name: e.name, lead: e.lead, items: [], latest: 0, working: false, preview: 'No conversation yet' });
   }
   if (chief && !items.has(ORG_THREAD)) threads.push({ id: ORG_THREAD, name: 'Organization', lead: null, items: [], latest: 0, working: false, preview: 'No conversation yet' });
-  return threads.sort((a, b) => Number(b.working) - Number(a.working) || b.latest - a.latest);
+  if (door && !items.has(PULSE_THREAD)) threads.push({ id: PULSE_THREAD, name: 'Pulse', lead: door, items: [], latest: 0, working: false, preview: 'Ask anything; Pulse hands it to the right lead' });
+  // Pulse first, always: it's the one conversation the owner never has to look for.
+  return threads.sort((a, b) => Number(b.id === PULSE_THREAD) - Number(a.id === PULSE_THREAD) || Number(b.working) - Number(a.working) || b.latest - a.latest);
 }
 
 function previewOf(it: ConvItem | undefined): string {

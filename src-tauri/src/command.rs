@@ -12,7 +12,8 @@ const ASK_MESSAGE_MAX: usize = 8000;
 const ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 // Stopping waits for claude's process group to exit (up to a couple of seconds).
 const STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
-const ORG_TARGETS: &[&str] = &["org", "chief-of-staff"];
+// pulse / org: the front door (portfolio.json front_door); chief-of-staff: the weekly reviewer.
+const ORG_TARGETS: &[&str] = &["pulse", "org", "chief-of-staff"];
 
 // Claude session ids are UUIDs: lowercase hex in 8-4-4-4-12.
 pub(crate) fn is_session_id(s: &str) -> bool {
@@ -62,7 +63,7 @@ pub(crate) fn ask_args(target: &str, message: &str, session: Option<&str>, fresh
     Ok(args)
 }
 
-// Every agent the org runs: each entity's lead, the chief of staff and the managers.
+// Every agent the org runs: the front door, each entity's lead, the chief of staff and the managers.
 pub(crate) fn org_agents(root: &Path) -> Result<Vec<String>, String> {
     let reg = resolve_portfolio_file(root, ".", "portfolio.json").and_then(|p| read_portfolio_json(&p))?;
     let mut out: Vec<String> = Vec::new();
@@ -73,6 +74,7 @@ pub(crate) fn org_agents(root: &Path) -> Result<Vec<String>, String> {
             }
         }
     };
+    add(reg.get("front_door").and_then(|c| c.get("lead")).and_then(|v| v.as_str()));
     for e in reg.get("entities").and_then(|e| e.as_array()).into_iter().flatten() {
         add(e.get("lead").and_then(|v| v.as_str()));
     }
@@ -101,7 +103,7 @@ fn python() -> Result<&'static str, String> {
 }
 
 // Runs ~/portfolio/bin/ask.py and returns its one JSON line, or its refusal.
-async fn run_ask(script: PathBuf, args: Vec<String>, timeout: std::time::Duration) -> Result<String, String> {
+pub(crate) async fn run_ask(script: PathBuf, args: Vec<String>, timeout: std::time::Duration) -> Result<String, String> {
     let python = python()?;
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -256,10 +258,11 @@ mod tests {
         let root = root.canonicalize().unwrap();
         fs::write(
             root.join("portfolio.json"),
-            r#"{"entities":[{"id":"acme","lead":"acme-lead"},{"id":"bad","lead":"--x"}],"chief_of_staff":{"lead":"chief-of-staff"},"managers":["sales-manager","acme-lead"]}"#,
+            r#"{"front_door":{"lead":"pulse"},"entities":[{"id":"acme","lead":"acme-lead"},{"id":"bad","lead":"--x"}],"chief_of_staff":{"lead":"chief-of-staff"},"managers":["sales-manager","acme-lead"]}"#,
         )
         .unwrap();
-        assert_eq!(org_agents(&root).unwrap(), vec!["acme-lead", "chief-of-staff", "sales-manager"]);
+        assert_eq!(org_agents(&root).unwrap(), vec!["pulse", "acme-lead", "chief-of-staff", "sales-manager"]);
+        assert!(target_known(&root, "pulse").is_ok());
         assert!(target_known(&root, "acme").is_ok());
         assert!(target_known(&root, "acme-lead").is_ok());
         assert!(target_known(&root, "org").is_ok());

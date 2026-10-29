@@ -34,7 +34,7 @@ const CHECK_TIMEOUT: Duration = Duration::from_secs(240);
 // Running the org's scripts: fixed interpreter, fixed script path, validated args
 // ------------------------------------------
 
-fn run_script(root: &Path, script: &str, args: &[String], stdin: Option<&str>, timeout: Duration) -> Result<serde_json::Value, String> {
+pub(crate) fn run_script(root: &Path, script: &str, args: &[String], stdin: Option<&str>, timeout: Duration) -> Result<serde_json::Value, String> {
     let path = resolve_portfolio_file(root, "bin", script).map_err(|e| format!("~/portfolio/bin/{}: {}", script, e))?;
     let python = PYTHON_CANDIDATES.iter().find(|p| Path::new(p).is_file()).ok_or("python3 not found")?;
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
@@ -99,8 +99,48 @@ fn str_field<'a>(item: &'a serde_json::Value, key: &str) -> &'a str {
     item.get(key).and_then(|v| v.as_str()).unwrap_or("")
 }
 
-// Mirrors sendguard.content_hash: the fields in order, lists joined with ',', U+001E between.
-pub(crate) fn content_hash(item: &serde_json::Value) -> String {
+// What the owner approves for each non-email kind, in order. Mirrors sendguard.HASH_FIELDS.
+const HASH_FIELDS: &[(&str, &[&str])] = &[
+    ("post", &["channel", "title", "body", "link", "media"]),
+    ("text", &["to", "body"]),
+    ("dm", &["channel", "to", "body", "link"]),
+    ("slack", &["channel", "body", "link"]),
+    ("stripe_send_invoice", &["stripe_id", "customer_id", "amount", "currency", "due_date", "subject", "body"]),
+    ("stripe_send_quote", &["stripe_id", "customer_id", "amount", "currency", "subject", "body"]),
+    ("stripe_refund", &["stripe_id", "amount", "currency", "reason", "subject", "body"]),
+    ("stripe_subscription", &["action", "stripe_id", "customer_id", "items", "amount", "currency", "interval", "days_until_due", "subject", "body"]),
+];
+
+// Mirrors sendguard._part: strings as is, integers in decimal, lists joined with U+001F, null/missing empty.
+fn hash_part(v: Option<&serde_json::Value>) -> Result<String, String> {
+    match v {
+        None | Some(serde_json::Value::Null) => Ok(String::new()),
+        Some(serde_json::Value::String(s)) => Ok(s.clone()),
+        Some(serde_json::Value::Number(n)) if n.is_i64() || n.is_u64() => Ok(n.to_string()),
+        Some(serde_json::Value::Array(a)) => Ok(a.iter().map(|x| hash_part(Some(x))).collect::<Result<Vec<_>, _>>()?.join("\u{1f}")),
+        Some(other) => Err(format!("can't hash {}", other)),
+    }
+}
+
+fn item_kind(item: &serde_json::Value) -> &str {
+    match str_field(item, "kind") {
+        "" => "email",
+        k => k,
+    }
+}
+
+// Mirrors sendguard.content_hash. Email: the fields in order, lists joined with ',', U+001E between
+// (unchanged since the first Outbox). Other kinds: "kind:<kind>", the entity, then HASH_FIELDS.
+pub(crate) fn content_hash(item: &serde_json::Value) -> Result<String, String> {
+    let kind = item_kind(item);
+    if kind != "email" {
+        let fields = HASH_FIELDS.iter().find(|(k, _)| *k == kind).map(|(_, f)| *f).ok_or_else(|| format!("unknown kind: {}", kind))?;
+        let mut parts = vec![format!("kind:{}", kind), str_field(item, "entity").to_string()];
+        for f in fields {
+            parts.push(hash_part(item.get(*f))?);
+        }
+        return Ok(hex::encode(Sha256::digest(parts.join("\u{1e}").as_bytes())));
+    }
     let parts = [
         str_field(item, "account").to_string(),
         str_list(item.get("to")).join(","),
@@ -110,7 +150,7 @@ pub(crate) fn content_hash(item: &serde_json::Value) -> String {
         str_field(item, "in_reply_to").to_string(),
         str_list(item.get("references")).join(" "),
     ];
-    hex::encode(Sha256::digest(parts.join("\u{1e}").as_bytes()))
+    Ok(hex::encode(Sha256::digest(parts.join("\u{1e}").as_bytes())))
 }
 
 fn is_outbox_id(s: &str) -> bool {
@@ -145,9 +185,10 @@ fn read_outbox_at(root: &Path) -> OutboxSnapshot {
                 .and_then(|p| read_text_capped(&p, OUTBOX_ITEM_MAX_BYTES))
                 .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).map_err(|e| format!("malformed: {}", e)))
             {
-                Ok(item) if item.get("id").and_then(|v| v.as_str()) == Some(id) => {
-                    items.push(OutboxItem { content: content_hash(&item), item })
-                }
+                Ok(item) if item.get("id").and_then(|v| v.as_str()) == Some(id) => match content_hash(&item) {
+                    Ok(content) => items.push(OutboxItem { content, item }),
+                    Err(e) => errors.push(format!("outbox/{}: {}", name, e)),
+                },
                 Ok(_) => errors.push(format!("outbox/{}: id does not match the file name", name)),
                 Err(e) => errors.push(format!("outbox/{}: {}", name, e)),
             }
@@ -166,16 +207,41 @@ pub async fn read_outbox() -> Result<String, String> {
     serde_json::to_string(&snap).map_err(|e| e.to_string())
 }
 
+// The owner's edit. Which fields a kind may change is decided (and validated) by bin/outbox.py;
+// here only the shape and size are checked.
+const EDIT_FIELDS: &[&str] = &["to", "cc", "subject", "body", "title", "link"];
+
+pub(crate) fn edit_fields_ok(fields: &serde_json::Value) -> Result<(), String> {
+    let obj = fields.as_object().ok_or("edit must be an object")?;
+    if obj.is_empty() {
+        return Err("nothing to save".to_string());
+    }
+    if let Some(k) = obj.keys().find(|k| !EDIT_FIELDS.contains(&k.as_str())) {
+        return Err(format!("can't edit {}", k));
+    }
+    if fields.to_string().len() > 64 * 1024 {
+        return Err("message is too long".to_string());
+    }
+    Ok(())
+}
+
 #[tauri::command]
-pub async fn outbox_edit(id: String, to: Vec<String>, cc: Vec<String>, subject: String, body: String) -> Result<String, String> {
+pub async fn outbox_edit(id: String, fields: serde_json::Value) -> Result<String, String> {
     if !is_outbox_id(&id) {
         return Err("invalid outbox id".to_string());
     }
-    if subject.chars().count() > 300 || body.chars().count() > 20000 || to.len() + cc.len() > 40 {
-        return Err("message is too long".to_string());
-    }
-    let fields = serde_json::json!({ "to": to, "cc": cc, "subject": subject, "body": body });
+    edit_fields_ok(&fields)?;
     let v = run_script_async("outbox.py", vec!["edit".into(), id], Some(fields.to_string()), SCRIPT_TIMEOUT).await?;
+    Ok(v.to_string())
+}
+
+// The owner posted an approved post/text/DM/Slack message by hand.
+#[tauri::command]
+pub async fn outbox_mark_published(id: String) -> Result<String, String> {
+    if !is_outbox_id(&id) {
+        return Err("invalid outbox id".to_string());
+    }
+    let v = run_script_async("outbox.py", vec!["published".into(), id], None, SCRIPT_TIMEOUT).await?;
     Ok(v.to_string())
 }
 
@@ -265,7 +331,7 @@ pub async fn outbox_send(id: String, content: String) -> Result<String, String> 
         if str_field(&item, "status") != "pending" {
             return Err(format!("not sending: it is {}", str_field(&item, "status")));
         }
-        if content_hash(&item) != content {
+        if content_hash(&item)? != content {
             return Err("This message changed since you opened it. Review it and click Send again.".to_string());
         }
         let key = SigningKey::from_bytes(&keychain_seed()?);
@@ -476,10 +542,36 @@ mod ops_tests {
     fn content_hash_matches_python() {
         let item = serde_json::json!({"account": "studio", "to": ["a@x.com", "b@y.com"], "cc": [], "subject": "Hi – there",
             "body": "Line 1\nLine 2\n", "in_reply_to": "m1@x", "references": ["m0@x", "m1@x"]});
-        assert_eq!(content_hash(&item), PY_HASH);
+        assert_eq!(content_hash(&item).unwrap(), PY_HASH);
         let mut edited = item.clone();
         edited["body"] = "Line 1\n".into();
-        assert_ne!(content_hash(&edited), PY_HASH);
+        assert_ne!(content_hash(&edited).unwrap(), PY_HASH);
+        // An explicit "email" kind hashes like the original Outbox items.
+        let mut tagged = item.clone();
+        tagged["kind"] = "email".into();
+        assert_eq!(content_hash(&tagged).unwrap(), PY_HASH);
+    }
+
+    // Same item and constant as bin/test_outbox.py `test_kind_hash_matches_pulse`.
+    #[test]
+    fn kind_hash_matches_python() {
+        let item = serde_json::json!({"kind": "stripe_subscription", "entity": "acme", "action": "create", "stripe_id": null,
+            "customer_id": "cus_A1", "items": ["price_A:2", "price_B:1"], "amount": 4500, "currency": "usd",
+            "interval": "month", "days_until_due": 30, "subject": "Start – sub", "body": "Line 1\nLine 2"});
+        assert_eq!(content_hash(&item).unwrap(), "ff42dcc39b97ad759cd18bb70e8f393fd8b715a0e4c977c2ae1f06cbce12d7e3");
+        let mut more = item.clone();
+        more["amount"] = 4501.into();
+        assert_ne!(content_hash(&more).unwrap(), content_hash(&item).unwrap());
+        assert!(content_hash(&serde_json::json!({"kind": "fax"})).is_err());
+        assert!(content_hash(&serde_json::json!({"kind": "stripe_refund", "amount": 1.5})).is_err());
+    }
+
+    #[test]
+    fn edit_fields_are_checked() {
+        assert!(edit_fields_ok(&serde_json::json!({"body": "hi", "link": "https://x.example"})).is_ok());
+        assert!(edit_fields_ok(&serde_json::json!({"amount": 1})).is_err());
+        assert!(edit_fields_ok(&serde_json::json!({})).is_err());
+        assert!(edit_fields_ok(&serde_json::json!("body")).is_err());
     }
 
     #[test]
@@ -542,7 +634,7 @@ mod ops_tests {
         fs::write(root.join("outbox/Bad.json"), r#"{"id":"Bad"}"#).unwrap();
         let snap = read_outbox_at(&root);
         assert_eq!(snap.items.len(), 1);
-        assert_eq!(snap.items[0].content, content_hash(&snap.items[0].item));
+        assert_eq!(snap.items[0].content, content_hash(&snap.items[0].item).unwrap());
         assert_eq!(snap.errors.len(), 1);
         let _ = fs::remove_dir_all(&root);
     }
