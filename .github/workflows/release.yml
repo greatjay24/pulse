@@ -1,5 +1,17 @@
 name: Release
 
+# Builds draft releases from a pushed tag (v*) or by hand. macOS gets a .dmg for Apple
+# Silicon and one for Intel. Signing is optional: with the Apple secrets below the app is
+# signed with a Developer ID and notarized; without them it is ad-hoc signed, which opens
+# after right-click > Open (or System Settings > Privacy & Security > Open Anyway).
+#
+# Secrets for a signed, notarized build (repo Settings > Secrets and variables > Actions):
+#   APPLE_CERTIFICATE           base64 of the Developer ID Application .p12
+#   APPLE_CERTIFICATE_PASSWORD  the .p12's password
+#   APPLE_SIGNING_IDENTITY      e.g. "Developer ID Application: Your Name (TEAMID)"
+#   APPLE_ID, APPLE_PASSWORD    Apple ID and an app-specific password, for notarization
+#   APPLE_TEAM_ID               the 10-character team id
+
 on:
   push:
     tags:
@@ -48,7 +60,31 @@ jobs:
           rustup target add x86_64-apple-darwin
 
       - name: Install frontend dependencies
-        run: npm install
+        run: npm ci
+
+      # The Apple variables are only exported when the secrets exist: an empty
+      # APPLE_CERTIFICATE would make the bundler try to import an empty certificate.
+      - name: Signing setup (macOS)
+        if: matrix.platform == 'macos-latest'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+              val="${!v}"
+              [ -n "$val" ] || continue
+              { echo "$v<<__SIGNING_EOF__"; echo "$val"; echo "__SIGNING_EOF__"; } >> "$GITHUB_ENV"
+            done
+            echo "Signing with a Developer ID."
+          else
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+            echo "No Apple secrets: ad-hoc signing (unsigned for Gatekeeper)."
+          fi
 
       - uses: tauri-apps/tauri-action@v0
         env:

@@ -47,7 +47,7 @@
     },
     "category": "Productivity",
     "shortDescription": "Today, the board and money across the portfolio",
-    "longDescription": "Pulse reads ~/portfolio and ~/project-tracker and shows what needs you today: the decision queue, each business's health, and cash in."
+    "longDescription": "Pulse reads ~/portfolio (and an optional task tracker) and shows what needs you today: the decision queue, each business's health, and what your agents are doing."
   },
   "plugins": {
     "store": {}

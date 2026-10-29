@@ -27,6 +27,21 @@
 - **Privacy First** - All data stored locally on your machine
 - **Cross-Platform** - Available for macOS, Windows, and Linux
 
+## Getting started
+
+New here? Read **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** (one page, no
+engineering needed). In short:
+
+1. Install Claude Code and sign in; make sure `python3` works.
+2. Download Pulse from [Releases](https://github.com/greatjay24/pulse/releases) and open it
+   (right-click → Open the first time; the build isn't signed yet).
+3. Pulse opens on a welcome screen with the setup command, or **Try the demo** to click
+   through a fictional org (Acme Studio, Northwind Supply, Globex Rentals) first. The demo is
+   bundled in the app, read-only, and its action buttons only show a message.
+4. Run setup: `git clone https://github.com/greatjay24/pulse.git ~/pulse && python3 ~/pulse/kit/setup.py`.
+   It builds your org in `~/portfolio` and installs a lead agent per business in
+   `~/.claude/agents`. See [kit/README.md](kit/README.md) for what the starter kit contains.
+
 ## Today, Board, Money
 
 The sidebar is Today, Board, Money and Settings, in that order of importance. Pulse opens
@@ -66,10 +81,12 @@ The original SaaS metrics views (Overview, Analytics, Calendar, per-app projects
 MRR) sit behind Settings > General > SaaS metrics, off by default. Their settings, data
 and calendar fetching are unchanged.
 
-### Tracker
+### Tracker (optional)
 
-The board also reads the owner's project tracker (`~/project-tracker`) through a second
-read-only command, `read_tracker`. It can open only a fixed list of files:
+The board can also read a project tracker (`~/project-tracker`) through a second
+read-only command, `read_tracker`. The tracker is optional: without it, Pulse hides the
+Money page, the entity Finance and Tasks tabs and the inbox rows, with no errors.
+It can open only a fixed list of files:
 `data/tasks.json`, `email.json`, `scan.json`, `stripe.json`, `bank.json`,
 `payments_email.json`, plus `projects.json` and `notes.json`. Tracker projects roll up
 into entities through `tracker_projects` in `~/portfolio/portfolio.json`; a project no
@@ -198,3 +215,19 @@ All credentials are stored securely in your local app data directory.
 ## License
 
 MIT
+
+## First run and demo mode
+
+When `~/portfolio/portfolio.json` doesn't exist, Pulse shows a welcome screen instead of an
+empty board: what Pulse is, a check for Claude Code and python3 (`setup_check`, existence
+checks at fixed paths only), the setup command with a copy button, and **Try the demo**.
+
+Demo mode serves a fictional org bundled in the frontend (`src/demo/demoOrg.ts`): status
+reports, decisions, a `WEEK.md`, finished runs with transcripts, an interactive session and
+a lead with a team at work. No file is read or written, the Rust read restrictions are
+unchanged, the menu bar and notifications stay off, and Approve/Reject/Discuss only show a
+message. **Exit demo** (bottom right) returns to the real org. A browser preview of the
+frontend (`npm run dev`) shows the welcome screen; `?demo=1` opens the demo.
+
+Debug builds only: `PULSE_PORTFOLIO_DIR` and `PULSE_TRACKER_DIR` point Pulse at scratch
+folders, so first run can be tried without touching `~/portfolio`. Release builds ignore them.
