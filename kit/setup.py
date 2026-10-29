@@ -13,6 +13,9 @@ Flags:
     --agents-dir DIR   where Claude Code agents live (default ~/.claude/agents)
     --yes              don't ask before writing
     --update-bin       replace bin/ scripts that differ from this kit (they are kit code, not your data)
+    --install-codex-rules
+                       with the codex runner: write ~/.codex/rules/pulse-org.rules (the guardrails as
+                       codex rules). Shows the file first. Without it setup only explains it.
 
 Config file (JSON):
     {
@@ -37,8 +40,9 @@ What it does (and never does):
   BRIEF.md, a valid status.json and an empty decisions.jsonl. Then git init and a first commit.
 - Writes the agents, model-neutral, to <org>/agents/: <id>-lead.md per entity,
   chief-of-staff.md and the five managers. Then installs them where the runner reads them:
-  Claude Code ~/.claude/agents, opencode ~/.config/opencode/agents; Codex reads <org>/agents
-  directly and gets ~/.codex/rules/pulse-org.rules (the guardrails as execpolicy rules).
+  Claude Code ~/.claude/agents, opencode ~/.config/opencode/agents (new files only, and the
+  plan says so before anything is written); Codex reads <org>/agents directly. Codex's rules
+  file goes into ~/.codex only with --install-codex-rules, which shows it first.
 - Never overwrites a file that already exists. A file that differs from what setup would
   write is reported and left alone. portfolio.json is merged: existing entities are kept,
   new ones added, nothing dropped.
@@ -388,7 +392,7 @@ def merged_registry(path, owner, groups, entities, runner=None, switch=False):
     return reg
 
 
-def build(answers, org, agents_dir, plan, update_bin=False, switch_runner=False):
+def build(answers, org, agents_dir, plan, update_bin=False, switch_runner=False, codex_rules=False):
     owner, groups = answers["owner"], answers["groups"]
     entities = [dict(e) for e in answers["entities"]]
     by_id = {e["id"]: e for e in entities}
@@ -468,11 +472,11 @@ def build(answers, org, agents_dir, plan, update_bin=False, switch_runner=False)
     plan.dir(org / "agents")
     for name, text in agents.items():
         plan.file(org / "agents" / f"{name}.md", text, hint=cos_hint if name == "chief-of-staff" else "")
-    install_for_runner(runner, agents, agents_dir, plan, cos_hint)
+    install_for_runner(runner, agents, agents_dir, plan, cos_hint, codex_rules)
     return registry
 
 
-def install_for_runner(runner, agents, agents_dir, plan, cos_hint=""):
+def install_for_runner(runner, agents, agents_dir, plan, cos_hint="", codex_rules=False):
     """Where the runner reads agents from, translated from the neutral files."""
     if runner == "claude-code":
         plan.dir(agents_dir)
@@ -485,9 +489,33 @@ def install_for_runner(runner, agents, agents_dir, plan, cos_hint=""):
         for name, text in agents.items():
             plan.file(d / f"{name}.md", runners.for_opencode(*runners.split_agent(text)),
                       hint=cos_hint if name == "chief-of-staff" else "")
-    elif runner == "codex":
+    elif runner == "codex" and codex_rules:
         plan.dir(runners.Codex.RULES.parent)
         plan.file(runners.Codex.RULES, runners.codex_rules(), hint="your edits are kept; delete it to get the kit's again")
+
+
+def runner_config_note(runner, agents_dir):
+    """What setup will put in the runner's own config folder, said before the plan."""
+    where = {"claude-code": agents_dir, "opencode": runners.OpenCode.AGENTS}.get(runner)
+    if where:
+        print(f"Agent files go into {tilde(where)}, where {runners.ADAPTERS[runner].label} looks for agents: "
+              "one per lead and manager. Only new files are written; nothing already there is changed.\n")
+
+
+def codex_rules_note(show):
+    """The codex rules file: explained (default) or shown in full before --install-codex-rules writes it."""
+    path = tilde(runners.Codex.RULES)
+    if not show:
+        print(f"""
+Codex guardrail rules (not installed). Setup doesn't write into ~/.codex on its own.
+{path} would make codex refuse, by rule, the commands the org never runs unattended:
+force-pushes, deleting branches or data, merges, pushes to main, production deploys, DNS and
+billing. Every run is already fenced by codex's sandbox without it. To review and install it:
+     python3 {tilde(KIT)}/setup.py --install-codex-rules
+""")
+        return
+    print(f"\nThis is the file --install-codex-rules writes to {path}:\n")
+    print("    " + runners.codex_rules().replace("\n", "\n    "))
 
 
 # --------------------------------------------------------------------------
@@ -542,6 +570,8 @@ def next_steps(org, registry):
     runner = runners.resolve(registry)["name"]
     ok, line = runner_check(runner)
     print(f"\nRunner: {line}")
+    if runner == "codex" and not runners.Codex.RULES.exists():
+        codex_rules_note(show=False)
     hooks = (f"""
 4. So Pulse shows your own lead sessions under Working now, merge this
    into ~/.claude/settings.json (keep any hooks you already have):
@@ -577,6 +607,7 @@ def main(argv=None):
     ap.add_argument("--yes", "-y", action="store_true")
     ap.add_argument("--update-bin", action="store_true")
     ap.add_argument("--runner", choices=sorted(runners.ADAPTERS))
+    ap.add_argument("--install-codex-rules", action="store_true")
     a = ap.parse_args(argv)
 
     org = pathlib.Path(os.path.expanduser(a.org_dir)).resolve()
@@ -587,7 +618,8 @@ def main(argv=None):
             raw["runner"] = a.runner
         answers = normalize(raw)
         plan = Plan(a.dry_run)
-        registry = build(answers, org, agents_dir, plan, a.update_bin, switch_runner=bool(a.runner))
+        registry = build(answers, org, agents_dir, plan, a.update_bin, switch_runner=bool(a.runner),
+                         codex_rules=a.install_codex_rules)
     except (SetupError, OSError, json.JSONDecodeError) as ex:
         print(f"Setup stopped: {ex}", file=sys.stderr)
         return 2
@@ -597,7 +629,13 @@ def main(argv=None):
               "but Pulse won't show it unless ~/portfolio points there.\n")
 
     changes = plan.changes()
-    print(f"Org: {tilde(org)}   Agents: {tilde(agents_dir)}")
+    runner = runners.resolve(registry)["name"]
+    if runner == "codex" and a.install_codex_rules:
+        codex_rules_note(show=True)
+    elif a.install_codex_rules:
+        print(f"--install-codex-rules applies to the codex runner; this org uses {runner}. Nothing written for codex.\n")
+    runner_config_note(runner, agents_dir)
+    print(f"Org: {tilde(org)}   Agents: {tilde(org / 'agents')}")
     report(plan, org)
     if a.dry_run:
         print(f"\nDry run: {len(changes)} file(s) would be written. Nothing was written.")

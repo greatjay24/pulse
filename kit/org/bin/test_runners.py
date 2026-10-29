@@ -364,7 +364,9 @@ class RunOnEachRunnerTests(unittest.TestCase):
         self.assertEqual((t[-1]["cost_usd"], t[-1]["tokens"], t[-1]["runner"]), (None, {"input": 24763, "output": 186}, "codex"))
         f = json.loads((live.LIVE / f"{res['run_id']}.json").read_text())
         self.assertEqual((f["state"], f["runner"], f["tokens"]["output"]), ("finished", "codex", 186))
-        self.assertTrue(runners.Codex.RULES.exists())            # guardrails installed on first run
+        # A run never writes into codex's config folder; it says the rules are missing instead.
+        self.assertFalse(runners.Codex.RULES.exists())
+        self.assertTrue(any(x["t"] == "error" and "--install-codex-rules" in x["text"] for x in t))
 
     def test_codex_signed_out(self):
         write_registry({"name": "codex"})
@@ -378,6 +380,8 @@ class RunOnEachRunnerTests(unittest.TestCase):
     def test_opencode_run_with_a_team(self):
         write_registry("opencode")
         os.environ["FAKE_FIXTURE"] = str(FIX / "opencode-team.jsonl")
+        names = ["acme-lead", *runners.MANAGERS]
+        missing = {f"{a}.md" for a in names if not (runners.OpenCode.AGENTS / f"{a}.md").exists()}
         res = nightly.run("acme-lead", "x", "sonnet", timeout=20, entity="acme")
         self.assertTrue(res["ok"])
         self.assertEqual((res["agents"], res["cost_usd"]), (1, 0))
@@ -390,8 +394,12 @@ class RunOnEachRunnerTests(unittest.TestCase):
         self.assertNotIn("can't deploy agents", argv[-1])
         team = json.loads((live.LIVE / f"{res['run_id']}.json").read_text())["team"]
         self.assertEqual((team[0]["type"], team[0]["status"]), ("researcher", "completed"))
-        # The lead and the managers it can call were installed for opencode, never overwritten.
+        # The lead and the managers it can call were installed for opencode, never overwritten,
+        # and the transcript says so.
         self.assertTrue((runners.OpenCode.AGENTS / "acme-lead.md").exists())
+        t = self.transcript(res["run_id"])
+        installed = [x["summary"] for x in t if x["t"] == "tool" and x["summary"].startswith("Installed agent file")]
+        self.assertEqual({x.rsplit("/", 1)[-1] for x in installed}, missing)
         self.assertTrue((runners.OpenCode.AGENTS / "sales-manager.md").exists())
         (runners.OpenCode.AGENTS / "acme-lead.md").write_text("mine")
         nightly.run("acme-lead", "x", "sonnet", timeout=20, entity="acme")
@@ -415,6 +423,139 @@ class RunOnEachRunnerTests(unittest.TestCase):
     def test_claude_code_stays_the_default(self):
         write_registry(None)
         self.assertEqual(nightly.runner_for("acme").name, "claude-code")
+
+
+# Odd shapes seen in the wild or plausible after a CLI update: a string where an object was
+# expected, string or numeric content items, list ids, non-dict usage. Each stream ends with
+# valid events, so a run that survives them finishes normally.
+MALFORMED = {
+    "claude-code": [
+        {"type": "assistant", "message": "just a string"},
+        {"type": "assistant", "message": {"content": "a string, not a list"}},
+        {"type": "assistant", "message": {"content": ["str item", 5, None, {"type": "text", "text": 7},
+                                                    {"type": "tool_use", "name": "Agent", "id": ["x"], "input": "not a dict"},
+                                                    {"type": "tool_use", "name": "Read", "input": ["x"]}]}},
+        {"type": "user", "toolUseResult": "a string", "message": {"content": [
+            "str item", {"type": "tool_result", "tool_use_id": ["a"], "content": [{"text": 3}, "x"]},
+            {"type": "text", "text": {"not": "a string"}}]}},
+        {"type": "system", "subtype": "task_notification", "tool_use_id": {"a": 1}, "usage": "lots", "summary": 5, "status": 3},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "Done after odd events."}]}},
+        {"type": "result", "is_error": False, "result": "Done after odd events.", "total_cost_usd": 0.01,
+         "duration_ms": 1000, "num_turns": 2, "usage": "x", "subagent_stats": "x", "modelUsage": ["not", "a", "dict"]},
+    ],
+    "codex": [
+        {"type": "thread.started", "thread_id": ["x"]},
+        {"type": "item.completed", "item": "a string"},
+        {"type": "item.started", "item": {"id": ["x"], "type": "command_execution", "command": 5}},
+        {"type": "item.completed", "item": {"id": {"a": 1}, "type": "command_execution", "command": None, "status": "failed"}},
+        {"type": "item.completed", "item": {"type": "file_change", "changes": ["a", {"path": 3, "kind": [1]}]}},
+        {"type": "item.started", "item": {"type": "mcp_tool_call", "server": 1, "tool": None, "arguments": "x"}},
+        {"type": "item.completed", "item": {"type": "mcp_tool_call", "error": "boom", "status": "failed"}},
+        {"type": "item.started", "item": {"type": "collab_tool_call", "tool": "spawn_agent", "prompt": 9}},
+        {"type": "item.completed", "item": {"type": "collab_tool_call", "tool": "spawn_agent", "receiver_thread_ids": "t1",
+                                            "agents_states": "x"}},
+        {"type": "item.completed", "item": {"type": "collab_tool_call", "agents_states": {"t1": "running", "t2": {"status": "completed", "message": 4}}}},
+        {"type": "error", "message": {"x": 1}},
+        {"type": "turn.completed", "usage": "lots"},
+        {"type": "turn.completed", "usage": {"input_tokens": "10", "output_tokens": 5, "reasoning_output_tokens": None}},
+        {"type": "item.completed", "item": {"id": "item_9", "type": "agent_message", "text": "Done after odd events."}},
+        {"type": "turn.completed", "usage": {"input_tokens": 100, "output_tokens": 20}},
+    ],
+    "opencode": [
+        {"type": "text", "part": "a string"},
+        {"type": "text", "part": {"text": ["x"]}},
+        {"type": "tool_use", "part": {"tool": 5, "state": "x"}},
+        {"type": "tool_use", "part": {"tool": "read", "state": {"input": "x", "status": "error", "error": {"m": 1}}}},
+        {"type": "tool_use", "part": {"tool": "task", "callID": ["c"], "state": {"input": "x", "time": {"start": "a", "end": None}, "output": 7}}},
+        {"type": "step_finish", "part": {"tokens": "x", "cost": "1", "reason": ["stop"]}},
+        {"type": "step_finish", "part": {"tokens": {"cache": "x", "input": "5", "output": None}, "cost": True}},
+        {"type": "text", "part": {"text": "Done after odd events."}},
+        {"type": "step_finish", "part": {"tokens": {"input": 10, "output": 2}, "cost": 0.002, "reason": "stop"}},
+    ],
+}
+
+
+class MalformedEventTests(unittest.TestCase):
+    """A tracking or translation problem must never stop a run (a night shift once crashed on
+    every lead with "'str' object has no attribute 'get'")."""
+
+    def setUp(self):
+        for d in (live.LIVE, live.TRANSCRIPTS):
+            if d.exists():
+                shutil.rmtree(d)
+        self.errors = live.LOGS / ".live_errors.jsonl"
+        if self.errors.exists():
+            self.errors.unlink()
+        fake = ROOT / "fake-cli"
+        fake.write_text(FAKE_CLI)
+        fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+        os.environ["FAKE_ARGV"] = str(ROOT / "argv.json")
+        nightly.BINARIES.update({"codex": str(fake), "opencode": str(fake)})
+        self.old_claude = nightly.CLAUDE
+        nightly.CLAUDE = str(fake)
+        (ROOT / "agents").mkdir(exist_ok=True)
+        (ROOT / "agents" / "acme-lead.md").write_text(LEAD)
+
+    def tearDown(self):
+        nightly.BINARIES.clear()
+        nightly.CLAUDE = self.old_claude
+        os.environ.pop("FAKE_EXIT", None)
+
+    def replay(self, runner, events):
+        write_registry(runner)
+        path = ROOT / f"malformed-{runner}.jsonl"
+        path.write_text("".join(json.dumps(e) + "\n" for e in events) + "not json at all\n[1, 2]\n")
+        os.environ["FAKE_FIXTURE"] = str(path)
+        return nightly.run("acme-lead", "NIGHTLY run", "sonnet", timeout=20, entity="acme", doing="Night shift for Acme")
+
+    def test_each_adapter_survives_malformed_events(self):
+        for runner, events in MALFORMED.items():
+            with self.subTest(runner=runner):
+                for name, session in (("claude-code", runners.ClaudeSession), ("codex", runners.CodexSession),
+                                      ("opencode", runners.OpenCodeSession)):
+                    if name == runner:
+                        s = session()
+                        for ev in events:
+                            s.feed(ev)                  # (b): the translators type-check, nothing raises
+                res = self.replay(runner, events)
+                self.assertTrue(res["ok"], (runner, res))
+                self.assertIn("Done after odd events.", res["result"])
+                f = json.loads((live.LIVE / f"{res['run_id']}.json").read_text())
+                self.assertEqual(f["state"], "finished")
+                t = [json.loads(l) for l in (live.TRANSCRIPTS / f"{res['run_id']}.jsonl").read_text().splitlines()]
+                self.assertEqual((t[0]["t"], t[-1]["t"]), ("start", "result"))
+                self.assertFalse(self.errors.exists(), self.errors.read_text() if self.errors.exists() else "")
+
+    def test_an_error_event_with_a_string_body_fails_the_run_cleanly(self):
+        s = runners.OpenCodeSession()
+        self.assertEqual(s.feed({"type": "error", "error": "a string"})[0]["text"], "a string")
+        self.assertEqual((s.summary(0)["ok"], s.summary(0)["result"]), (False, "a string"))
+        c = runners.CodexSession()
+        c.feed({"type": "turn.failed", "error": "plain text"})
+        self.assertEqual((c.summary(1)["ok"], c.summary(1)["result"]), (False, "plain text"))
+
+    def test_a_tracking_exception_is_logged_redacted_and_the_run_finishes(self):
+        key = "sk-" + "ant-" + "api03-" + "k" * 30
+        boom = runners.OpenCodeSession.feed
+
+        def flaky(session, ev):
+            if ev.get("type") == "tool_use":
+                raise AttributeError(f"'str' object has no attribute 'get' ({key})")
+            return boom(session, ev)
+        runners.OpenCodeSession.feed = flaky
+        try:
+            events = [{"type": "tool_use", "part": {"tool": "bash", "state": {"input": {"command": f"echo {key}"}}}},
+                      {"type": "text", "part": {"text": "Done after odd events."}},
+                      {"type": "step_finish", "part": {"reason": "stop", "tokens": {"input": 1, "output": 1}}}]
+            res = self.replay("opencode", events)
+        finally:
+            runners.OpenCodeSession.feed = boom
+        self.assertTrue(res["ok"], res)                                   # (a): the run continued
+        rows = [json.loads(l) for l in self.errors.read_text().splitlines()]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["run_id"], rows[0]["event_type"]), (res["run_id"], "tool_use"))
+        self.assertIn("AttributeError", rows[0]["error"])
+        self.assertNotIn(key, self.errors.read_text())                    # redacted
 
 
 if __name__ == "__main__":

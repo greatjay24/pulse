@@ -92,7 +92,9 @@ What differs:
 - **Cost.** Pulse shows dollars when the AI reports them (Claude Code, opencode) and token
   counts when it only reports tokens (Codex). It never estimates.
 - **Guardrails.** All three get the same rules: no sending, no paying, no force-pushes,
-  merges or production deploys.
+  merges or production deploys. For Codex, setup can also install those rules into Codex's
+  own settings; it shows you the file and only does it when you run
+  `python3 ~/pulse/kit/setup.py --install-codex-rules`.
 
 ## What your agents can see
 

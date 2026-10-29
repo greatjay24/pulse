@@ -256,6 +256,12 @@ class Adapter:
                 "time (sales, marketing, delivery, finance, admin), and keep each step small.")
 
     def ensure_agents(self, agents):
+        """Install missing agent files where this CLI reads them. Never overwrites. Returns the
+        paths written, so the caller can say so: nothing goes into a runner's config folder silently."""
+        return []
+
+    def warnings(self):
+        """Lines a run should show the owner about this runner's setup (nothing is fixed silently)."""
         return []
 
     def cwd(self, dirs):
@@ -299,8 +305,9 @@ class ClaudeCode(Adapter):
         out = []
         for a in agents:
             text = agent_text(a)
-            if text and install_missing(HOME / ".claude" / "agents" / f"{a}.md", for_claude(*split_agent(text))):
-                out.append(a)
+            path = HOME / ".claude" / "agents" / f"{a}.md"
+            if text and install_missing(path, for_claude(*split_agent(text))):
+                out.append(str(path))
         return out
 
     def session(self):
@@ -366,8 +373,14 @@ class Codex(Adapter):
             cmd += ["-m", model]
         return cmd + [prompt]
 
-    def ensure_agents(self, agents):
-        return ["execpolicy rules"] if install_missing(self.RULES, codex_rules()) else []
+    def warnings(self):
+        # The rules file lives in codex's own config folder, so only setup writes it, and only
+        # when asked (setup.py --install-codex-rules shows it first). Runs say when it's missing;
+        # the permission profile still fences every command without it.
+        if self.RULES.exists():
+            return []
+        return [f"Codex guardrail rules aren't installed ({self.RULES}). The sandbox still applies; to also block "
+                "force-pushes, merges and production deploys by rule, run: python3 kit/setup.py --install-codex-rules"]
 
     def session(self):
         return CodexSession()
@@ -405,8 +418,9 @@ class OpenCode(Adapter):
         out = []
         for a in list(agents) + list(MANAGERS):
             text = agent_text(a)
-            if text and install_missing(self.AGENTS / f"{a}.md", for_opencode(*split_agent(text))):
-                out.append(a)
+            path = self.AGENTS / f"{a}.md"
+            if text and install_missing(path, for_opencode(*split_agent(text))):
+                out.append(str(path))
         return out
 
     def session(self):
@@ -452,8 +466,26 @@ class ClaudeSession:
         f = self.final
         if f is None:
             return None
-        return {"ok": not f.get("is_error"), "result": f.get("result") or "", "cost_usd": f.get("total_cost_usd"),
-                "models": list((f.get("modelUsage") or {}).keys()), "native_result": True}
+        cost = f.get("total_cost_usd")
+        return {"ok": not f.get("is_error"), "result": _s(f.get("result")), "cost_usd": cost if isinstance(cost, (int, float)) else None,
+                "models": list(_d(f.get("modelUsage")).keys()), "native_result": True}
+
+
+# Type guards: CLIs change their event shapes, and one odd field must never stop a run.
+def _d(v):
+    return v if isinstance(v, dict) else {}
+
+
+def _l(v):
+    return v if isinstance(v, list) else []
+
+
+def _s(v):
+    return v if isinstance(v, str) else ""
+
+
+def _n(v):
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else 0
 
 
 def _tool(at, name, inp, sub=False):
@@ -478,50 +510,51 @@ class CodexSession:
         at, t = now_iso(), ev.get("type")
         if t == "turn.completed":
             self.completed = True
-            u = ev.get("usage") or {}
-            self.tokens["input"] += int(u.get("input_tokens") or 0)
-            self.tokens["output"] += int(u.get("output_tokens") or 0) + int(u.get("reasoning_output_tokens") or 0)
+            u = _d(ev.get("usage"))
+            self.tokens["input"] += int(_n(u.get("input_tokens")))
+            self.tokens["output"] += int(_n(u.get("output_tokens"))) + int(_n(u.get("reasoning_output_tokens")))
             return []
         if t == "turn.failed":
-            self.failed = ((ev.get("error") or {}).get("message") or "the turn failed")
+            self.failed = _s(_d(ev.get("error")).get("message")) or _s(ev.get("error")) or "the turn failed"
             return [{"t": "error", "at": at, "text": clip(self.failed, 400)}]
         if t == "error":
-            msg = ev.get("message") or ""
+            msg = _s(ev.get("message"))
             # Transport retries ("Reconnecting... 2/5") are noise; the final failure follows.
             return [] if msg.startswith("Reconnecting") else [{"t": "error", "at": at, "text": clip(msg, 400)}]
         if t not in ("item.started", "item.updated", "item.completed"):
             return []
-        item = ev.get("item") or {}
-        kind, iid, status = item.get("type"), item.get("id"), item.get("status")
+        item = _d(ev.get("item"))
+        kind, status = item.get("type"), item.get("status")
+        iid = _s(item.get("id")) or f"item-{len(self.seen)}"
         out = []
         first = iid not in self.seen
         self.seen.add(iid)
-        if kind == "agent_message" and t == "item.completed" and (item.get("text") or "").strip():
-            self.last_text = item["text"].strip()
+        if kind == "agent_message" and t == "item.completed" and _s(item.get("text")).strip():
+            self.last_text = _s(item.get("text")).strip()
             out.append({"t": "text", "at": at, "text": clip(self.last_text)})
         elif kind == "command_execution":
-            cmd = re.sub(r"^(?:/bin/)?(?:ba|z)?sh -l?c\s+", "", item.get("command") or "").strip("'\"")
+            cmd = re.sub(r"^(?:/bin/)?(?:ba|z)?sh -l?c\s+", "", _s(item.get("command"))).strip("'\"")
             if first:
                 out.append(_tool(at, "Bash", {"command": cmd}))
             if t == "item.completed" and status in ("failed", "declined"):
                 why = "declined by the sandbox or rules" if status == "declined" else f"exit {item.get('exit_code')}"
                 out.append({"t": "error", "at": at, "text": clip(f"{cmd}: {why}", 400)})
         elif kind == "file_change" and t == "item.completed":
-            for c in (item.get("changes") or [])[:5]:
-                name = {"add": "Write", "delete": "Edit"}.get(c.get("kind"), "Edit")
-                out.append(_tool(at, name, {"file_path": c.get("path")}))
+            for c in [c for c in _l(item.get("changes")) if isinstance(c, dict)][:5]:
+                name = {"add": "Write", "delete": "Edit"}.get(_s(c.get("kind")), "Edit")
+                out.append(_tool(at, name, {"file_path": _s(c.get("path"))}))
         elif kind == "mcp_tool_call":
-            name = f"mcp__{item.get('server') or 'mcp'}__{item.get('tool') or 'tool'}"
+            name = f"mcp__{_s(item.get('server')) or 'mcp'}__{_s(item.get('tool')) or 'tool'}"
             if first:
-                out.append(_tool(at, name, item.get("arguments")))
+                out.append(_tool(at, name, _d(item.get("arguments"))))
             if t == "item.completed" and (item.get("error") or status == "failed"):
-                out.append({"t": "error", "at": at, "text": clip(((item.get("error") or {}).get("message") or f"{name} failed"), 400)})
+                out.append({"t": "error", "at": at, "text": clip(_s(_d(item.get("error")).get("message")) or f"{name} failed", 400)})
         elif kind == "web_search" and first:
-            out.append(_tool(at, "WebSearch", {"query": item.get("query")}))
+            out.append(_tool(at, "WebSearch", {"query": _s(item.get("query"))}))
         elif kind == "todo_list" and first:
             out.append(_tool(at, "TodoWrite", {}))
-        elif kind == "error" and item.get("message"):
-            out.append({"t": "error", "at": at, "text": clip(item["message"], 400)})
+        elif kind == "error" and _s(item.get("message")):
+            out.append({"t": "error", "at": at, "text": clip(_s(item.get("message")), 400)})
         elif kind == "collab_tool_call":
             out += self._collab(at, t, item)
         return out
@@ -530,23 +563,25 @@ class CodexSession:
         """Codex's own subagents: spawn_agent is a deployment; an agent state of completed /
         errored / shutdown is its end."""
         out = []
-        iid = item.get("id")
+        iid = _s(item.get("id")) or f"collab-{len(self.done)}"
         if item.get("tool") == "spawn_agent" and iid not in self.done and t == "item.started":
-            prompt = item.get("prompt") or ""
+            prompt = _s(item.get("prompt"))
             out.append({"t": "deploy", "at": at, "agents": [{"id": iid, "type": "agent", "description": clip(first_line(prompt, 120), 120),
                                                            "prompt": first_line(prompt), "background": True, "by": None}]})
             self.deployed += 1
             self.done.add(iid)
         if item.get("tool") == "spawn_agent":
-            for rid in item.get("receiver_thread_ids") or []:
-                self.spawned.setdefault(rid, iid)
-        for rid, state in (item.get("agents_states") or {}).items():
+            for rid in _l(item.get("receiver_thread_ids")):
+                if isinstance(rid, str):
+                    self.spawned.setdefault(rid, iid)
+        for rid, state in _d(item.get("agents_states")).items():
+            state = _d(state)
             sid = self.spawned.get(rid)
-            st = (state or {}).get("status")
+            st = state.get("status")
             if sid and st in ("completed", "errored", "shutdown", "interrupted") and ("end", sid) not in self.done:
                 self.done.add(("end", sid))
                 out.append({"t": "agent_done", "at": at, "id": sid, "status": "completed" if st == "completed" else "failed",
-                            "summary": clip((state or {}).get("message") or "", 600), "secs": None, "tools": None})
+                            "summary": clip(_s(state.get("message")), 600), "secs": None, "tools": None})
         return out
 
     def summary(self, returncode):
@@ -574,45 +609,46 @@ class OpenCodeSession:
         self.last_reason = None    # a run that finished on its own ends with a "stop" step
 
     def feed(self, ev):
-        t, part = ev.get("type"), ev.get("part") or {}
+        t, part = ev.get("type"), _d(ev.get("part"))
         at = now_iso()
-        if t == "text" and (part.get("text") or "").strip():
-            self.last_text = part["text"].strip()
+        if t == "text" and _s(part.get("text")).strip():
+            self.last_text = _s(part.get("text")).strip()
             return [{"t": "text", "at": at, "text": clip(self.last_text)}]
         if t == "step_finish":
-            self.last_reason = part.get("reason")
-            tok = part.get("tokens") or {}
-            self.tokens["input"] += int(tok.get("input") or 0) + int((tok.get("cache") or {}).get("read") or 0)
-            self.tokens["output"] += int(tok.get("output") or 0) + int(tok.get("reasoning") or 0)
-            if isinstance(part.get("cost"), (int, float)):
+            self.last_reason = _s(part.get("reason")) or None
+            tok = _d(part.get("tokens"))
+            self.tokens["input"] += int(_n(tok.get("input"))) + int(_n(_d(tok.get("cache")).get("read")))
+            self.tokens["output"] += int(_n(tok.get("output"))) + int(_n(tok.get("reasoning")))
+            if isinstance(part.get("cost"), (int, float)) and not isinstance(part.get("cost"), bool):
                 self.cost = (self.cost or 0) + part["cost"]
             return []
         if t == "error":
-            err = ev.get("error") or {}
-            msg = (err.get("data") or {}).get("message") or err.get("message") or err.get("name") or "opencode error"
+            err = _d(ev.get("error"))
+            msg = (_s(_d(err.get("data")).get("message")) or _s(err.get("message")) or _s(err.get("name"))
+                   or _s(ev.get("error")) or "opencode error")
             self.error = msg
             return [{"t": "error", "at": at, "text": clip(str(msg), 400)}]
         if t != "tool_use":
             return []
-        tool = part.get("tool") or ""
-        state = part.get("state") or {}
+        tool = _s(part.get("tool"))
+        state = _d(part.get("state"))
         inp = state.get("input") if isinstance(state.get("input"), dict) else {}
         if tool == "task":
-            tid = part.get("callID") or part.get("id") or "task"
-            times = state.get("time") or {}
-            secs = round((times["end"] - times["start"]) / 1000) if times.get("end") and times.get("start") else None
-            summary = TASK_RESULT.sub("", state.get("output") or state.get("error") or "").strip()
-            return [{"t": "deploy", "at": at, "agents": [{"id": tid, "type": inp.get("subagent_type") or "agent",
-                                                          "description": clip(inp.get("description") or "", 120),
-                                                          "prompt": first_line(inp.get("prompt")), "background": False, "by": None}]},
+            tid = _s(part.get("callID")) or _s(part.get("id")) or "task"
+            times = _d(state.get("time"))
+            secs = round((_n(times.get("end")) - _n(times.get("start"))) / 1000) if _n(times.get("end")) and _n(times.get("start")) else None
+            summary = TASK_RESULT.sub("", _s(state.get("output")) or _s(state.get("error"))).strip()
+            return [{"t": "deploy", "at": at, "agents": [{"id": tid, "type": _s(inp.get("subagent_type")) or "agent",
+                                                          "description": clip(_s(inp.get("description")), 120),
+                                                          "prompt": first_line(_s(inp.get("prompt"))), "background": False, "by": None}]},
                     {"t": "agent_done", "at": at, "id": tid, "status": "failed" if state.get("status") == "error" else "completed",
                      "summary": clip(summary, 600), "secs": secs, "tools": None}]
         name = OPENCODE_TOOLS.get(tool, tool)
-        args = {"file_path": inp.get("filePath") or inp.get("path"), "command": inp.get("command"),
-                "pattern": inp.get("pattern"), "url": inp.get("url"), "query": inp.get("query")}
+        args = {"file_path": _s(inp.get("filePath")) or _s(inp.get("path")), "command": _s(inp.get("command")),
+                "pattern": _s(inp.get("pattern")), "url": _s(inp.get("url")), "query": _s(inp.get("query"))}
         out = [_tool(at, name, {k: v for k, v in args.items() if v})]
         if state.get("status") == "error":
-            out.append({"t": "error", "at": at, "text": clip(state.get("error") or f"{tool} failed", 400)})
+            out.append({"t": "error", "at": at, "text": clip(_s(state.get("error")) or f"{tool} failed", 400)})
         return out
 
     def summary(self, returncode):

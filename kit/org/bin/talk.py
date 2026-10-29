@@ -36,7 +36,10 @@ def main(argv):
     if not binary:
         print(f"{adapter.label} is not installed. {adapter.install_hint}", file=sys.stderr)
         return 1
-    adapter.ensure_agents([agent])
+    for path in adapter.ensure_agents([agent]):
+        print(f"Installed agent file {path} (it was missing; nothing existing was changed).")
+    for warning in adapter.warnings():
+        print(warning)
     dirs = runners.work_dirs(reg, ent["id"] if ent else None)
     model = adapter.model("sonnet")
     if adapter.name == "claude-code":

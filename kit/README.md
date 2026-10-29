@@ -43,11 +43,14 @@ change your Mac's behavior: the nightly schedule (`sh ~/portfolio/launchd/instal
 
 `"runner"` in portfolio.json picks the agent CLI for the whole org; an entity can override it.
 Switching is that one field (or `setup.py --runner NAME`, which also installs the files).
+Nothing goes into a runner's own config folder silently: setup lists agent files before it
+writes them, codex's rules file needs `--install-codex-rules`, and when a run installs a
+missing agent file it says so in the transcript and the night shift's log.
 
 | Runner | Runs | Instructions | Guardrails | Teams | Usage shown |
 |---|---|---|---|---|---|
 | `claude-code` | `claude -p --agent <lead> --output-format stream-json` | `~/.claude/agents/<lead>.md` | `--allowedTools` / `--disallowedTools` from policy.py | yes | cost |
-| `codex` | `codex exec --json --sandbox workspace-write -c approval_policy="never"` | the lead's file as `developer_instructions` | sandbox (writes only under home; network on unless `"network": false`), never asks for approval, `~/.codex/rules/pulse-org.rules` forbids the never and ask-first commands | no (works solo) | tokens |
+| `codex` | `codex exec --json --skip-git-repo-check -C <org> -c approval_policy="never"` + a permission profile | the lead's file as `developer_instructions` | the OS-level permission profile (see below); approvals never granted; optionally `~/.codex/rules/pulse-org.rules`, which forbids the never and ask-first commands (installed only with `setup.py --install-codex-rules`, which shows it first; runs say when it's missing) | no (works solo) | tokens |
 | `opencode` | `opencode run --format json --agent <lead>` | `~/.config/opencode/agents/<lead>.md` | a `permission` block per agent: bash deny-by-default with the allow list, the never and ask-first lists denied, nothing outside the run's folder | yes | cost (as opencode reports it) and tokens |
 
 Options: `{"name": "codex", "model": "...", "plan_model": "...", "network": true, "read_also": [...], "temp": true}`;

@@ -98,6 +98,7 @@ class SetupE2E(unittest.TestCase):
         self.assertIn("Initech", (self.agents / "chief-of-staff.md").read_text())
         self.assertEqual(commits(self.org), 1)
         self.assertIn("bin/talk.py acme", r.stdout)
+        self.assertIn("Agent files go into ~/.claude/agents", r.stdout)       # said before the plan
         self.assertEqual(reg["runner"], "claude-code")
         neutral = (self.org / "agents" / "acme-lead.md").read_text()
         self.assertIn("role: lead\ntier: deep\n", neutral)                  # model-neutral source
@@ -178,8 +179,18 @@ class SetupE2E(unittest.TestCase):
         reg = json.loads((self.org / "portfolio.json").read_text())
         self.assertEqual(reg["runner"], "codex")
         self.assertFalse(self.agents.exists())                           # nothing for Claude Code
+        # Nothing goes into ~/.codex without --install-codex-rules; setup explains the file instead.
         rules = self.home / ".codex" / "rules" / "pulse-org.rules"
+        self.assertFalse(rules.exists())
+        self.assertFalse((self.home / ".codex").exists())
+        self.assertIn("Codex guardrail rules (not installed)", r.stdout)
+        self.assertIn("--install-codex-rules", r.stdout)
+        r = run(self.home, "--config", str(self.config(runner="codex")), "--install-codex-rules")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertIn("This is the file --install-codex-rules writes", r.stdout)
+        self.assertLess(r.stdout.index("prefix_rule("), r.stdout.index("create  ~/.codex/rules/pulse-org.rules"))   # shown first
         self.assertIn('decision = "forbidden"', rules.read_text())
+        self.assertNotIn("Codex guardrail rules (not installed)", r.stdout)
         self.assertEqual(len(list((self.org / "agents").glob("*.md"))), 11)
         self.assertIn("Codex (ChatGPT)", r.stdout)
         self.assertIn("Claude Code only", r.stdout)                      # no hooks snippet for codex

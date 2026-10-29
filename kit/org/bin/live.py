@@ -170,7 +170,7 @@ def result_text(content):
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return " ".join(c.get("text", "") for c in content if isinstance(c, dict))
+        return " ".join(c["text"] for c in content if isinstance(c, dict) and isinstance(c.get("text"), str))
     return ""
 
 
@@ -184,7 +184,7 @@ INJECTED = ("<command-", "<local-command", "<system-reminder", "<bash-", "<user-
 
 
 def owner_text(text):
-    text = (text or "").strip()
+    text = text.strip() if isinstance(text, str) else ""
     return "" if not text or text.startswith(INJECTED) else text
 
 
@@ -212,6 +212,10 @@ class Normalizer:
         self.agents = {}          # tool_use_id -> {"background": bool, "done": bool}
 
     def _done(self, at, tid, status, summary="", secs=None, tools=None):
+        if not isinstance(tid, str):
+            return []
+        summary = summary if isinstance(summary, str) else ""
+        status = status if isinstance(status, str) else "completed"
         a = self.agents.get(tid)
         if not a or a["done"]:
             return []
@@ -226,16 +230,21 @@ class Normalizer:
         sub = bool(parent) or bool(event.get("isSidechain"))
         extra = {"sub": True} if sub else {}
         out = []
-        msg = event.get("message") or {}
+        # Every nested field is type-checked before .get: one odd event (a string message, a
+        # string content item, a non-dict usage) must never stop a run.
+        msg = event.get("message")
+        msg = msg if isinstance(msg, dict) else {}
         content = msg.get("content")
+        if isinstance(content, list):
+            content = [c for c in content if isinstance(c, dict)]
         if t == "assistant" and isinstance(content, list):
             team = []
             for c in content:
-                if c.get("type") == "text" and (c.get("text") or "").strip():
+                if c.get("type") == "text" and isinstance(c.get("text"), str) and c["text"].strip():
                     out.append({"t": "text", "at": at, "text": clip(c["text"].strip()), **extra})
                 elif c.get("type") == "tool_use" and c.get("name") in AGENT_TOOLS:
                     inp = c.get("input") if isinstance(c.get("input"), dict) else {}
-                    tid = c.get("id") or f"agent-{len(self.agents)}"
+                    tid = c.get("id") if isinstance(c.get("id"), str) else f"agent-{len(self.agents)}"
                     self.agents[tid] = {"background": bool(inp.get("run_in_background")), "done": False}
                     team.append({"id": tid, "type": inp.get("subagent_type") or "agent",
                                  "description": clip(inp.get("description") or "", 120),
@@ -253,7 +262,7 @@ class Normalizer:
                 meta = event.get("tool_use_result") or event.get("toolUseResult")
                 meta = meta if isinstance(meta, dict) else {}
                 for c in content:
-                    tid = c.get("tool_use_id")
+                    tid = c.get("tool_use_id") if isinstance(c.get("tool_use_id"), str) else None
                     if c.get("type") == "tool_result" and tid in self.agents:
                         # An async agent's tool result only says it launched (Claude Code may
                         # run one async even when not asked); its end comes as a task notification.
@@ -269,21 +278,22 @@ class Normalizer:
                         continue
                     elif c.get("type") == "tool_result" and c.get("is_error"):
                         out.append({"t": "error", "at": at, "text": clip(result_text(c.get("content")), 400)})
-                    elif c.get("type") == "text" and owner_text(c.get("text")) and not event.get("isMeta"):
+                    elif c.get("type") == "text" and isinstance(c.get("text"), str) and owner_text(c.get("text")) and not event.get("isMeta"):
                         out.append({"t": "user", "at": at, "text": clip(owner_text(c["text"]))})
         elif t == "system" and event.get("subtype") == "task_notification":
-            usage = event.get("usage") or {}
+            usage = event.get("usage") if isinstance(event.get("usage"), dict) else {}
             status = event.get("status") or "completed"
             out += self._done(at, event.get("tool_use_id"), "completed" if status == "completed" else status,
                               event.get("summary") or "", secs_of(usage.get("duration_ms")), usage.get("tool_uses"))
         elif t == "result":
-            stats = event.get("subagent_stats") or {}
+            stats = event.get("subagent_stats") if isinstance(event.get("subagent_stats"), dict) else {}
+            usage_by_model = event.get("modelUsage") if isinstance(event.get("modelUsage"), dict) else {}
             out.append({"t": "result", "at": at, "ok": not event.get("is_error"),
                         "result": clip(event.get("result") or "", 4000),
                         "cost_usd": event.get("total_cost_usd"),
                         "secs": round((event.get("duration_ms") or 0) / 1000),
                         "turns": event.get("num_turns"),
-                        "models": list((event.get("modelUsage") or {}).keys()),
+                        "models": list(usage_by_model.keys()),
                         "agents": max(stats.get("spawned") or 0, len(self.agents))})
         return [redact_obj(x) for x in out]
 
@@ -433,6 +443,18 @@ class LiveRun:
         self.state["step"] = redact(clip(text, 160))
         self.state["step_at"] = now_iso()
         self._write()
+
+    def note_error(self, exc, ev=None):
+        """Record a tracking failure (redacted, clipped) in logs/.live_errors.jsonl and keep going."""
+        try:
+            row = {"at": now_iso(), "run_id": self.run_id, "error": redact(f"{type(exc).__name__}: {exc}"),
+                   "event_type": ev.get("type") if isinstance(ev, dict) else type(ev).__name__,
+                   "event": clip(redact(json.dumps(ev, default=str)), 1500)}
+            LOGS.mkdir(parents=True, exist_ok=True)
+            with open(LOGS / ".live_errors.jsonl", "a") as f:
+                f.write(json.dumps(row) + "\n")
+        except Exception:
+            pass
 
     def event(self, ev):
         """Feed one Claude Code event: append it to the transcript, track the team, move the step."""

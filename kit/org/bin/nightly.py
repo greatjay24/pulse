@@ -20,7 +20,7 @@ import contextlib, json, os, pathlib, shutil, signal, subprocess, sys, tempfile,
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from live import HOME, ORG, LiveRun, redact  # noqa: E402
+from live import HOME, ORG, LiveRun, now_iso, redact, short_path  # noqa: E402
 import runners  # noqa: E402
 
 LOGS = ORG / "logs"
@@ -98,7 +98,14 @@ def run(agent, prompt, model, max_turns=60, timeout=1800, kind="nightly", entity
                 raise RuntimeError(f"{adapter.label} is not installed. {adapter.install_hint}")
             if not claude:
                 live.set(runner=adapter.name)
-                adapter.ensure_agents([agent])
+                # Anything written into the runner's own config folder is said out loud: in the
+                # transcript (Pulse's Conversations) and in the night shift's log.
+                notes = [{"t": "tool", "at": now_iso(), "name": "Write", "summary": f"Installed agent file {short_path(p)}"}
+                         for p in adapter.ensure_agents([agent])]
+                notes += [{"t": "error", "at": now_iso(), "text": w} for w in adapter.warnings()]
+                for n in notes:
+                    print(f"[{adapter.name}] {n.get('summary') or n.get('text')}")
+                live.add(notes)
             cmd = adapter.command(binary, agent, prompt + adapter.solo_note(), adapter.model(model), max_turns, dirs)
             env.update(adapter.env(agent, dirs))
             session = adapter.session()
@@ -163,8 +170,10 @@ def stream(cmd, env, timeout, live, session=None, cwd=None):
                     continue
                 try:
                     live.add(session.feed(ev))
-                except OSError:
-                    pass    # a transcript that can't be written never stops the run
+                except Exception as e:
+                    # Tracking is a side job: a transcript, parse or translation problem never
+                    # stops the run. It is logged (redacted) to logs/.live_errors.jsonl.
+                    live.note_error(e, ev)
             p.wait()
         finally:
             timer.cancel()
