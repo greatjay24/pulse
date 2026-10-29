@@ -121,6 +121,37 @@ brief: the same payment seen as a Stripe charge, its payout and the bank deposit
 - Payer names reach the UI for the top payers list (this is the owner's own machine). Email
   bodies, transaction descriptions and account numbers never leave Rust.
 
+### Ask, chat and terminal
+
+Pulse is also where you tell the org what to do.
+
+- **Command box** (⌘K, or "Ask a lead…" at the top of the sidebar): type anything. A
+  leading name routes it (`Acme: draft the pricing page`), as does `@acme` or a single
+  entity mentioned anywhere; everything else goes to the chief of staff. The To menu
+  overrides the route. Enter sends, Shift+Enter adds a line, Esc closes. It shows your
+  recent commands and a few starting points. Sending starts the lead at once: it shows in
+  Working now and its conversation opens live.
+- **Chat** under every Conversations thread: a message continues your latest conversation
+  with that lead (its Claude session is resumed), or starts a new one. Replies stream in
+  with their tool steps and any team the lead deploys. While a lead is replying, Enter
+  queues your next message (it goes when the reply ends, in the same conversation) and
+  "Stop and send" ends the reply first. Stop ends a run and everything it started.
+- **Terminal**: real `claude --agent <lead>` (or plain `claude`) sessions in tabs, started
+  in your home folder through your login shell, so your environment and sign-in are the
+  usual ones. Up to eight tabs; closing one ends its session. "Open in Terminal.app" opens
+  the same thing outside Pulse.
+
+How it runs: Pulse calls `~/portfolio/bin/ask.py <entity|lead> --message "..."`
+(`--new`, `--session <id>`, `--stop <run_id>`), the same way decisions call `act.py`.
+The script validates against `portfolio.json`, starts `claude -p --agent <lead>` in the
+background with the night shift's allow and deny lists, and writes the run's live file and
+transcript (kind `chat`) like any other run. Runs use the `claude` CLI's own sign-in (your
+Claude subscription): `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and the variables that
+switch provider are removed from the child's environment, and Pulse makes no API calls of
+its own. A lead's `model` in `portfolio.json` is used when set, else the CLI's default.
+Chat needs a Claude Code org with `ask.py` in its `bin/`; the starter kit doesn't ship it
+yet, and Pulse says so when it's missing.
+
 ### Mac app
 
 - **Menu bar**: a Pulse mark with the count of decisions waiting on you. Its menu: Open

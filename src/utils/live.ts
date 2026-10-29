@@ -13,9 +13,9 @@ export function ms(iso: string | undefined): number {
 }
 
 export function stripRuns(live: LiveSnapshot | null, now = Date.now()): LiveRun[] {
-  const order = { running: 0, idle: 1, stopped: 2, finished: 3, failed: 3 } as const;
+  const order = { running: 0, idle: 1, queued: 1, stopped: 2, finished: 3, failed: 3 } as const;
   return (live?.runs ?? [])
-    .filter((r) => r.state === 'running' || r.state === 'idle' || (r.state === 'stopped' && now - ms(r.updated) < STOPPED_SHOWN_MS))
+    .filter((r) => r.state === 'running' || r.state === 'idle' || r.state === 'queued' || (r.state === 'stopped' && now - ms(r.updated) < STOPPED_SHOWN_MS))
     .sort((a, b) => order[a.state] - order[b.state] || ms(b.started) - ms(a.started));
 }
 
@@ -29,6 +29,7 @@ const KIND_LABEL: Record<string, string> = {
   act: 'Your answer',
   check: 'Check',
   interactive: 'With you',
+  chat: 'Chat',
 };
 
 export function kindLabel(kind: string): string {
@@ -41,6 +42,8 @@ export function stateLabel(r: LiveRun): string {
       return 'working';
     case 'idle':
       return 'waiting for you';
+    case 'queued':
+      return 'queued';
     case 'stopped':
       return 'stopped unexpectedly';
     case 'failed':
@@ -106,8 +109,10 @@ export function liveSignals(live: LiveSnapshot | null, now = Date.now()): Urgent
         body: members.map((m) => `${m.type}${m.description ? ` (${m.description})` : ''}`).join(', ').slice(0, 200),
       });
     }
+    if (r.state === 'queued') continue;
     if (r.state === 'running') {
-      out.push({ key: `live-start:${r.run_id}`, title: `${r.agent} started`, body: r.doing });
+      // A chat run starts because the owner just sent it: only its reply is news.
+      if (r.kind !== 'chat') out.push({ key: `live-start:${r.run_id}`, title: `${r.agent} started`, body: r.doing });
       continue;
     }
     // A dead run's last write can be long before anyone noticed, so it is announced while shown.
