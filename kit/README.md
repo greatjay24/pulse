@@ -30,7 +30,7 @@ change your Mac's behavior: the nightly schedule (`sh ~/portfolio/launchd/instal
 | `org/bin/session_hook.py` | Claude Code hook: shows your own `claude --agent <lead>` sessions in Pulse. |
 | `org/bin/policy.py` | The allow and deny lists for headless runs. No sending, no force-push, no merges, no production deploys. |
 | `org/bin/runners.py` | One adapter per agent CLI (claude-code, codex, opencode): the command, the guardrails, and the translation of its events into Pulse's transcript lines. |
-| `org/bin/talk.py` | Opens a lead interactively on the org's runner. |
+| `org/bin/talk.py` | Opens a lead interactively on the org's runner, fenced the same way. |
 | `org/bin/fixtures/` | Recorded codex and opencode event streams the runner tests replay. |
 | `org/bin/test_*.py` | Tests. `python3 ~/portfolio/bin/test_act.py` and `test_live.py`. |
 | `agents/director.md` | The template for each entity's lead (`<id>-lead`). Model-neutral: frontmatter `name`, `description`, `role` (lead, chief, manager), `tier` (deep, fast); each runner translates it. |
@@ -50,8 +50,24 @@ Switching is that one field (or `setup.py --runner NAME`, which also installs th
 | `codex` | `codex exec --json --sandbox workspace-write -c approval_policy="never"` | the lead's file as `developer_instructions` | sandbox (writes only under home; network on unless `"network": false`), never asks for approval, `~/.codex/rules/pulse-org.rules` forbids the never and ask-first commands | no (works solo) | tokens |
 | `opencode` | `opencode run --format json --agent <lead>` | `~/.config/opencode/agents/<lead>.md` | a `permission` block per agent: bash deny-by-default with the allow list, the never and ask-first lists denied, nothing outside the run's folder | yes | cost (as opencode reports it) and tokens |
 
-Options: `{"name": "codex", "model": "...", "plan_model": "...", "network": true}`;
-`max_turns` applies to Claude Code only. Live view of your own chat sessions in Pulse uses
+Options: `{"name": "codex", "model": "...", "plan_model": "...", "network": true, "read_also": [...], "temp": true}`;
+`max_turns` applies to Claude Code only.
+
+### Where a lead can read and write
+
+Every run starts in the org folder. Extra folders (a business's repos) go in `"dirs"` on the
+entity, or at the top of portfolio.json for every lead. Each runner fences reads to those:
+
+| Runner | How | What it covers | What it doesn't |
+|---|---|---|---|
+| `codex` | an OS-level permission profile (`default_permissions`, codex 0.138+): `":root"="deny"`, the work dirs as workspace roots, `:minimal` system paths, `read_also` (default `~/.gitconfig`, `~/.config/git`, `~/.config/gh`) | every command and subprocess | network destinations (on unless `"network": false`) |
+| `claude-code` | cwd = org, `--add-dir` for the dirs, `--settings` with `permissions.blockReadsOutsideWorkingDirectories`; `ls`/`cat`/`grep`... are not pre-approved, so a read outside prompts and an unattended run refuses it | Read, Grep, Glob, LSP, and the shell commands Claude Code recognizes as file reads | other programs (git, node, python scripts); Claude Code's OS sandbox would cover those but also blocks `~/.ssh` and tool credentials, so it is left off |
+| `opencode` | `--dir` = org; `external_directory` deny except the dirs; bash deny-by-default with `ls`/`cat`/... allowed only on paths under the dirs (inline per run via `OPENCODE_CONFIG_CONTENT`; the agent files alone allow only the org) | read, edit, grep, glob and other file tools | the shell rules match command text, so they are best-effort; other programs aren't fenced |
+
+Checked offline (no model called): `codex sandbox` with the generated profile allows the org and
+the dirs and refuses the rest of home; `opencode debug agent --tool` with the generated
+permissions does the same; `codex execpolicy check` for every forbidden command. The tests
+re-run these when the CLIs are installed. Live view of your own chat sessions in Pulse uses
 Claude Code's hooks; with the other runners, Pulse shows the night shift and decision runs.
 
 ## Optional extras
@@ -60,7 +76,8 @@ The scripts work with nothing but one runner and python3. These are used only if
 
 - **A task tracker** (`PULSE_TRACKER_DIR`, default `~/project-tracker`, with `todos.json`
   and `add_todo.py`): approving a decision also closes its matching "Decide: ..." task.
-  Without one, decisions live in `status.json` and Pulse.
+  Without one, decisions live in `status.json` and Pulse. Leads can read it only if its folder is in the top-level
+  `"dirs"` of portfolio.json.
 - **Sales learning** (`~/portfolio/sales/sales_learn.py`): run before the night shift.
 - **Money and inbox data** in Pulse's Money page come from the same optional tracker.
   Without it, Pulse hides those sections.

@@ -34,6 +34,9 @@ bring a recommendation, not a question.
 2. Read any live data sources your BRIEF.md lists (repos, data exports, notes). If the owner
    has set up a task tracker, its location is in BRIEF.md too; without one, skip it.
 3. Before touching a repo, read its CLAUDE.md / AGENTS.md. Repo rules beat this file.
+4. You can read and write only the org folder and the "dirs" listed for your entity in
+   portfolio.json. If the work needs another folder, don't go around it: put it in
+   `owner_actions` ("add ~/code/x to dirs for <entity>") and carry on with what you can reach.
 
 ## Every session: finish
 1. Rewrite your `status.json` (schema in STATUS_SCHEMA.md) and refresh the BRIEF.md

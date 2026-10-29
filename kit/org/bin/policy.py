@@ -50,3 +50,8 @@ SHELL_FORBIDDEN = [
     (["git", "merge"], "Merges need the owner's click."),
     (["git", "push", ["origin", "upstream"], ["main", "master", "develop"]], "Never push to the main branches."),
 ]
+
+# Shell commands that only read files. Runners confine them to the org folder and the
+# entity's extra "dirs" (see runners.py): Claude Code through its working directories,
+# codex through its sandbox, opencode through per-path command rules.
+READ_SHELL = ["ls", "cat", "head", "tail", "grep", "find", "wc"]

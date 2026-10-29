@@ -9,7 +9,23 @@ portfolio.json picks one for the whole org, and an entity can override it:
 
 Fields: name (claude-code | codex | opencode), model (the night shift and decision runs),
 plan_model (the weekly review), max_turns (claude-code only), network (codex: let commands
-reach the network inside its sandbox; default true, leads push branches and open PRs).
+reach the network inside its sandbox; default true, leads push branches and open PRs),
+read_also (codex: files outside the work dirs commands may read; default git and gh config),
+temp (codex: commands may use the temp folders; default true).
+
+Where a lead may work: the org folder, plus "dirs" (a list of folders, such as the repos a
+business owns) at the top of portfolio.json and on each entity. Every run starts in the org
+folder and its reads are confined to those dirs as far as the CLI allows:
+
+    claude-code  working directories (--add-dir) + permissions.blockReadsOutsideWorkingDirectories;
+                 the read-only shell commands (ls, cat, grep...) are not pre-approved, so a read
+                 outside prompts, which an unattended run refuses. Other programs it runs
+                 (git, node, python) are not fenced by Claude Code.
+    codex        an OS-level permission profile: every command reads and writes only the work
+                 dirs, read_also and the system paths tools need (codex's ":minimal"), plus temp.
+    opencode     external_directory: deny except the dirs (file tools), and shell read commands
+                 allowed only with a path under a work dir. A command rule matches text, not
+                 paths, so it is best-effort; other programs it runs are not fenced.
 Switching runners is that one field. A runner whose agent files are missing gets them
 from <org>/agents on its first run (never overwriting).
 
@@ -34,6 +50,7 @@ import policy
 
 EXTRA_PATH = [str(HOME / ".local" / "bin"), str(HOME / ".opencode" / "bin"), "/opt/homebrew/bin", "/usr/local/bin"]
 DEFAULT = "claude-code"
+MANAGERS = ("sales-manager", "marketing-manager", "delivery-manager", "finance-manager", "admin-manager")
 AGENTS_DIR = ORG / "agents"            # the model-neutral agent files setup.py renders
 
 
@@ -70,26 +87,60 @@ def for_claude(meta, body):
     return "---\n" + "\n".join(lines) + "\n---\n\n" + body
 
 
-def opencode_permission(role):
-    """The policy as an opencode permission block. Bash rules: last match wins, so
-    deny-everything first, then the allowed prefixes, then the never and ask-first lists."""
-    def pattern(rule):
-        return rule[len("Bash("):-1] if rule.startswith("Bash(") and rule.endswith(")") else None
-    allow = [p for p in map(pattern, policy.ALLOWED) if p]
-    deny = [p for p in map(pattern, policy.NEVER + policy.NEEDS_YES) if p]
-    # external_directory: outside the run's folder is refused, not asked about. In an
-    # unattended run an "ask" is auto-rejected and ends the whole run.
-    lines = ["permission:", "  edit: allow", "  webfetch: allow", "  external_directory: deny",
-             f"  task: {'deny' if role == 'manager' else 'allow'}", "  bash:", '    "*": deny']
-    lines += [f"    {json.dumps(p)}: allow" for p in allow]
-    lines += [f"    {json.dumps(p)}: deny" for p in deny]
-    return "\n".join(lines)
+def _bash_pattern(rule):
+    return rule[len("Bash("):-1] if rule.startswith("Bash(") and rule.endswith(")") else None
+
+
+def is_read_shell(rule):
+    p = _bash_pattern(rule)
+    return bool(p) and p.split(" ", 1)[0] in policy.READ_SHELL
+
+
+def opencode_rules(role, dirs=()):
+    """The policy as an opencode permission object. Bash: last match wins, so deny-everything
+    first, then the allowed prefixes, the read commands for paths under the work dirs only, and
+    last the never and ask-first lists. external_directory: anything outside the run's folder
+    (the org) is refused, not asked about (an "ask" in an unattended run is auto-rejected and
+    ends the whole run), except the extra dirs."""
+    bash = {"*": "deny"}
+    for rule in policy.ALLOWED:
+        p = _bash_pattern(rule)
+        if p and not is_read_shell(rule):
+            bash[p] = "allow"
+    bash["ls"] = "allow"                        # the run's folder itself
+    for d in dirs:
+        for cmd in policy.READ_SHELL:
+            bash[f"{cmd} {d}*"] = "allow"
+            bash[f"{cmd} -* {d}*"] = "allow"
+    for rule in policy.NEVER + policy.NEEDS_YES:
+        p = _bash_pattern(rule)
+        if p:
+            bash[p] = "deny"
+    external = {"*": "deny"}
+    for d in list(dirs)[1:]:
+        external[f"{d}/**"] = "allow"
+    return {"edit": "allow", "read": {"*": "allow", "*.env": "deny", "*.env.*": "deny"}, "webfetch": "allow",
+            "external_directory": external, "task": "deny" if role == "manager" else "allow", "bash": bash}
+
+
+def _yaml(obj, indent=0):
+    out = []
+    for k, v in obj.items():
+        key = k if re.match(r"^[a-z_]+$", k) else json.dumps(k)
+        if isinstance(v, dict):
+            out.append(" " * indent + f"{key}:")
+            out += _yaml(v, indent + 2)
+        else:
+            out.append(" " * indent + f"{key}: {v}")
+    return out
 
 
 def for_opencode(meta, body):
+    """The static agent file: the policy with no extra dirs, so the agent alone can't leave the
+    org folder. Each run passes the entity's dirs on top (OpenCode.env)."""
     mode = "subagent" if meta.get("role") == "manager" else "primary"
     head = [f"description: {json.dumps(meta.get('description', ''), ensure_ascii=False)}", f"mode: {mode}",
-            opencode_permission(meta.get("role"))]
+            "permission:"] + _yaml(opencode_rules(meta.get("role")), 2)
     return "---\n" + "\n".join(head) + "\n---\n\n" + body
 
 
@@ -101,6 +152,13 @@ def codex_rules():
         out.append(f"prefix_rule(\n    pattern = {json.dumps(pattern)},\n    decision = \"forbidden\",\n"
                    f"    justification = {json.dumps(why)},\n)\n")
     return "\n".join(out)
+
+
+def _toml_table(d):
+    """An inline TOML table; JSON strings are valid TOML basic strings."""
+    def val(v):
+        return "true" if v is True else "false" if v is False else json.dumps(v, ensure_ascii=False)
+    return "{" + ",".join(f"{json.dumps(k, ensure_ascii=False)}={val(v)}" for k, v in d.items()) + "}"
 
 
 def agent_text(agent):
@@ -150,6 +208,25 @@ def get(cfg):
     return ADAPTERS[cfg["name"]](cfg)
 
 
+def work_dirs(registry, entity_id=None):
+    """Where a lead may work: the org folder first, then the registry's and the entity's
+    "dirs", absolute, without duplicates. A dir that doesn't exist is still listed (a repo
+    may be cloned later) but never the filesystem root or the home folder itself."""
+    ent = next((e for e in (registry or {}).get("entities", []) if e.get("id") == entity_id), None) or {}
+    out = [str(ORG.resolve())]
+    for d in list((registry or {}).get("dirs") or []) + list(ent.get("dirs") or []):
+        if not isinstance(d, str) or not d.strip():
+            continue
+        p = pathlib.Path(os.path.expanduser(d.strip()))
+        if not p.is_absolute():
+            p = ORG / p
+        p = p.resolve()
+        if p in (pathlib.Path("/"), HOME.resolve()) or str(p) in out:
+            continue
+        out.append(str(p))
+    return out
+
+
 # --------------------------------------------------------------------------
 # Adapters
 # --------------------------------------------------------------------------
@@ -181,6 +258,12 @@ class Adapter:
     def ensure_agents(self, agents):
         return []
 
+    def cwd(self, dirs):
+        return dirs[0]
+
+    def env(self, agent, dirs):
+        return {}
+
     def signed_in(self, binary):
         """(True | False | None, detail). None = couldn't tell."""
         return None, ""
@@ -195,13 +278,22 @@ class ClaudeCode(Adapter):
         plan = tier_model == "opus"
         return self.cfg.get("plan_model" if plan else "model") or tier_model
 
-    def command(self, binary, agent, prompt, model, max_turns):
+    def command(self, binary, agent, prompt, model, max_turns, dirs=None):
         # stream-json (needs --verbose under -p) emits each message as it happens; the last
         # event is the same `result` object --output-format json used to print.
+        # The run starts in the org folder (cwd); --add-dir adds the entity's other dirs and the
+        # settings make the file tools refuse anything outside them. The read-only shell
+        # commands are left out of the allow list: inside the dirs Claude Code runs them
+        # without asking, outside they need a yes nobody is there to give.
+        # --allowedTools / --disallowedTools take every argument after them, so they come last.
+        dirs = dirs or [str(ORG)]
+        settings = json.dumps({"permissions": {"blockReadsOutsideWorkingDirectories": True}})
+        extra = ["--add-dir", *dirs[1:]] if len(dirs) > 1 else []
         return [binary, "-p", prompt, "--agent", agent, "--model", model,
                 "--output-format", "stream-json", "--verbose", "--max-turns", str(self.cfg.get("max_turns") or max_turns),
-                "--permission-mode", "acceptEdits",
-                "--allowedTools", *policy.ALLOWED, "--disallowedTools", *(policy.NEVER + policy.NEEDS_YES)]
+                "--permission-mode", "acceptEdits", "--settings", settings, *extra,
+                "--allowedTools", *[r for r in policy.ALLOWED if not is_read_shell(r)],
+                "--disallowedTools", *(policy.NEVER + policy.NEEDS_YES)]
 
     def ensure_agents(self, agents):
         out = []
@@ -237,15 +329,36 @@ class Codex(Adapter):
         text = agent_text(agent)
         return split_agent(text)[1] if text else ""
 
-    def command(self, binary, agent, prompt, model, max_turns):
-        # No --agent in codex: the lead's file goes in as developer instructions. The sandbox
-        # keeps writes inside the workspace (home, like the other runners' cwd); approvals are
-        # never asked for in an unattended run, so anything the sandbox or the rules block
-        # simply fails. Network stays on unless the config turns it off: leads push branches.
+    PROFILE = "pulse-org"
+    READ_ALSO = ["~/.gitconfig", "~/.config/git", "~/.config/gh"]
+
+    def profile(self, dirs):
+        """-c overrides for a permission profile (codex 0.138+; verified with `codex sandbox`):
+        every command reads and writes only the work dirs (workspace roots), reads read_also
+        and the system paths tools need, and nothing else on disk. Profiles replace the older
+        --sandbox flag, which must not be passed with them."""
+        p = f"permissions.{self.PROFILE}"
+        files = {":root": "deny", ":minimal": "read"}
+        if not self.cfg.get("temp", True):          # temp folders stay usable unless turned off
+            files.update({":tmpdir": "deny", ":slash_tmp": "deny"})
+        for f in self.cfg.get("read_also", self.READ_ALSO):
+            files[f] = "read"
         net = "true" if self.cfg.get("network", True) else "false"
-        cmd = [binary, "exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write",
-               "-C", str(HOME), "-c", 'approval_policy="never"',
-               "-c", f"sandbox_workspace_write.network_access={net}"]
+        out = ["-c", f'default_permissions="{self.PROFILE}"', "-c", f'{p}.extends=":workspace"',
+               "-c", f"{p}.filesystem=" + _toml_table(files), "-c", f"{p}.network.enabled={net}"]
+        if len(dirs) > 1:
+            out += ["-c", f"{p}.workspace_roots=" + _toml_table({d: True for d in dirs[1:]})]
+        return out
+
+    def command(self, binary, agent, prompt, model, max_turns, dirs=None):
+        # No --agent in codex: the lead's file goes in as developer instructions. The run starts
+        # in the org folder (-C), which is the main workspace root; the permission profile fences
+        # every command to the work dirs. Approvals are never asked for in an unattended run, so
+        # anything the profile or the rules block simply fails. Network stays on unless the
+        # config turns it off: leads push branches.
+        dirs = dirs or [str(ORG)]
+        cmd = [binary, "exec", "--json", "--skip-git-repo-check", "-C", dirs[0],
+               "-c", 'approval_policy="never"', *self.profile(dirs)]
         instr = self.instructions(agent)
         if instr:
             cmd += ["-c", "developer_instructions=" + json.dumps(instr, ensure_ascii=False)]
@@ -273,16 +386,24 @@ class OpenCode(Adapter):
     install_hint = "Install opencode (`npm i -g opencode-ai` or `brew install opencode`), then `opencode auth login` for your provider."
     AGENTS = HOME / ".config" / "opencode" / "agents"
 
-    def command(self, binary, agent, prompt, model, max_turns):
-        cmd = [binary, "run", "--format", "json", "--agent", agent, "--dir", str(HOME)]
+    def env(self, agent, dirs):
+        """This run's permissions for the lead and every manager it can call: the agent files'
+        policy plus the entity's dirs. Passed as inline config, so the files never go stale
+        (verified with `opencode debug agent`: it takes precedence over the file)."""
+        names = [agent] + list(MANAGERS)
+        cfg = {"agent": {a: {"permission": opencode_rules("manager" if a in MANAGERS else "lead", dirs)} for a in names}}
+        return {"OPENCODE_CONFIG_CONTENT": json.dumps(cfg)}
+
+    def command(self, binary, agent, prompt, model, max_turns, dirs=None):
+        dirs = dirs or [str(ORG)]
+        cmd = [binary, "run", "--format", "json", "--agent", agent, "--dir", dirs[0]]
         if model:
             cmd += ["-m", model]
         return cmd + [prompt]
 
     def ensure_agents(self, agents):
         out = []
-        managers = [m for m in ("sales-manager", "marketing-manager", "delivery-manager", "finance-manager", "admin-manager")]
-        for a in list(agents) + managers:
+        for a in list(agents) + list(MANAGERS):
             text = agent_text(a)
             if text and install_missing(self.AGENTS / f"{a}.md", for_opencode(*split_agent(text))):
                 out.append(a)

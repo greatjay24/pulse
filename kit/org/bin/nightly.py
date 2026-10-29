@@ -63,13 +63,16 @@ def claude_cmd(agent, prompt, model, max_turns):
 BINARIES = {}
 
 
+def _registry_or_empty():
+    try:
+        return registry()
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 def runner_for(entity):
     """The adapter for an entity's runner (the org's when entity is None)."""
-    try:
-        reg = registry()
-    except (OSError, json.JSONDecodeError):
-        reg = {}
-    return runners.get(runners.resolve(reg, entity))
+    return runners.get(runners.resolve(_registry_or_empty(), entity))
 
 
 def run(agent, prompt, model, max_turns=60, timeout=1800, kind="nightly", entity=None, doing=""):
@@ -81,7 +84,9 @@ def run(agent, prompt, model, max_turns=60, timeout=1800, kind="nightly", entity
     env["PATH"] = RUN_PATH
     t0 = time.time()
     res = {"agent": agent, "ok": False, "result": ""}
-    adapter = runner_for(entity)
+    reg = _registry_or_empty()
+    adapter = runners.get(runners.resolve(reg, entity))
+    dirs = runners.work_dirs(reg, entity)       # the org folder first; reads stay inside these
     claude = adapter.name == "claude-code"
     with LiveRun(kind, agent, entity=entity, doing=doing or f"{kind.title()} run", prompt=prompt) as live:
         env["PORTFOLIO_RUN_ID"] = live.run_id     # session_hook.py leaves runner sessions alone
@@ -94,9 +99,10 @@ def run(agent, prompt, model, max_turns=60, timeout=1800, kind="nightly", entity
             if not claude:
                 live.set(runner=adapter.name)
                 adapter.ensure_agents([agent])
-            cmd = adapter.command(binary, agent, prompt + adapter.solo_note(), adapter.model(model), max_turns)
+            cmd = adapter.command(binary, agent, prompt + adapter.solo_note(), adapter.model(model), max_turns, dirs)
+            env.update(adapter.env(agent, dirs))
             session = adapter.session()
-            code = stream(cmd, env, timeout, live, session)
+            code = stream(cmd, env, timeout, live, session, cwd=adapter.cwd(dirs))
             summary = session.summary(code)
             if summary is None:
                 res["result"] = live.stderr_tail or "no result from claude"
@@ -127,7 +133,7 @@ def run(agent, prompt, model, max_turns=60, timeout=1800, kind="nightly", entity
     return res
 
 
-def stream(cmd, env, timeout, live, session=None):
+def stream(cmd, env, timeout, live, session=None, cwd=None):
     """Runs the runner's CLI, feeding each JSON line through `session` (its adapter's
     translator) into `live`. Returns the exit code. Kills the run and raises
     TimeoutExpired after `timeout`."""
@@ -135,7 +141,7 @@ def stream(cmd, env, timeout, live, session=None):
     with tempfile.TemporaryFile(mode="w+") as err:
         # Its own process group, so a timeout also stops what claude started (MCP servers,
         # shells) and nothing is left holding stdout open.
-        p = subprocess.Popen(cmd, cwd=str(HOME), env=env, stdin=subprocess.DEVNULL,
+        p = subprocess.Popen(cmd, cwd=cwd or str(ORG), env=env, stdin=subprocess.DEVNULL,
                              stdout=subprocess.PIPE, stderr=err, text=True, bufsize=1, start_new_session=True)
         live.set(child_pid=p.pid)
         timed_out = threading.Event()

@@ -26,7 +26,8 @@ Config file (JSON):
          "logo": "~/Desktop/acme.svg",                 // optional: svg, png, jpg or webp, 1 MB max
          "schedule": "nightly",                        // nightly (default) | weekly | on-call
          "parent": null,                               // another entity's id, for a venture under it
-         "stage": "active"}                            // active (default) | pending | paused | idea
+         "stage": "active",                            // active (default) | pending | paused | idea
+         "dirs": ["~/code/acme-site"]}                 // optional: folders this lead may work in besides the org
       ]
     }
 
@@ -127,9 +128,18 @@ def normalize(cfg):
                 raise SetupError(f"{eid}: logo must be svg, png, jpg or webp")
             if logo.stat().st_size > LOGO_MAX:
                 raise SetupError(f"{eid}: logo is over 1 MB")
+        dirs = e.get("dirs") or []
+        if isinstance(dirs, str):
+            dirs = [d.strip() for d in dirs.split(",") if d.strip()]
+        if not isinstance(dirs, list) or not all(isinstance(d, str) and d.strip() for d in dirs):
+            raise SetupError(f"{eid}: dirs must be a list of folder paths")
+        for d in dirs:
+            if pathlib.Path(os.path.expanduser(d)).resolve() in (pathlib.Path("/"), HOME.resolve()):
+                raise SetupError(f"{eid}: dirs can't include / or your whole home folder")
         entities.append({"id": eid, "name": (e.get("name") or eid).strip(), "group": gids[slugify(group)],
                          "description": (e.get("description") or "").strip(), "color": color.upper(),
-                         "logo": logo, "schedule": schedule, "parent": e.get("parent") or None, "stage": stage})
+                         "logo": logo, "schedule": schedule, "parent": e.get("parent") or None, "stage": stage,
+                         "dirs": dirs})
     ids = [e["id"] for e in entities]
     for e in entities:
         if e["parent"] and e["parent"] not in ids:
@@ -190,8 +200,9 @@ def interview():
         logo = ask("  Logo file (optional: svg, png, jpg, webp)")
         schedule = ask("  Runs nightly, weekly or on-call", "nightly")
         parent = slugify(ask("  Part of another entity? Its id (optional)"))
+        dirs = ask("  Folders it works in, like its code repos (comma separated, optional)")
         entities.append({"id": eid, "name": name, "group": group, "description": desc, "color": color,
-                         "logo": logo or None, "schedule": schedule, "parent": parent or None})
+                         "logo": logo or None, "schedule": schedule, "parent": parent or None, "dirs": dirs})
     print()
     runner = choose_runner()
     return {"owner": owner, "groups": groups, "entities": entities, "runner": runner}
@@ -272,6 +283,8 @@ Nothing yet. The lead fills this in after its first run.
 3. Let the first nightly run write status.json.
 
 ## Where things live
+(The lead can only read and write inside the org folder and the "dirs" listed for this
+entity in portfolio.json. Add a repo there before asking the lead to work on it.)
 - Repos:
 - Documents:
 - Data (payments, bank, analytics exports):
@@ -367,6 +380,8 @@ def merged_registry(path, owner, groups, entities, runner=None, switch=False):
                "path": e["path"], "lead": e["lead"], "schedule": e["schedule"], "color": e["color"]}
         if e.get("logo_rel"):
             row["logo"] = row["logo_dark"] = e["logo_rel"]
+        if e.get("dirs"):
+            row["dirs"] = list(e["dirs"])
         reg["entities"].append(row)
     reg.setdefault("managers", list(MANAGERS))
     reg.setdefault("chief_of_staff", {"lead": "chief-of-staff", "schedule": "weekly", "output": "WEEK.md"})

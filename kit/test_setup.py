@@ -155,8 +155,8 @@ class SetupE2E(unittest.TestCase):
     def test_interactive(self):
         answers = "\n".join([
             "Sam", "",                                      # owner, default groups
-            "acme", "", "1", "Builds websites.", "", "", "", "",   # id, name, group, desc, color, logo, schedule, parent
-            "globex", "Globex Rentals", "Family", "Rental homes.", "#123456", "", "on-call", "",
+            "acme", "", "1", "Builds websites.", "", "", "", "", "~/code/acme-site",   # id, name, group, desc, color, logo, schedule, parent, dirs
+            "globex", "Globex Rentals", "Family", "Rental homes.", "#123456", "", "on-call", "", "",
             "",                                             # done adding
             "claude-code",                                  # runner
             "y",                                            # write?
@@ -167,6 +167,8 @@ class SetupE2E(unittest.TestCase):
         e = {x["id"]: x for x in reg["entities"]}
         self.assertEqual((e["acme"]["name"], e["acme"]["group"], e["acme"]["schedule"]), ("Acme", "companies", "nightly"))
         self.assertEqual((e["globex"]["group"], e["globex"]["color"], e["globex"]["schedule"]), ("family", "#123456", "on-call"))
+        self.assertEqual(e["acme"]["dirs"], ["~/code/acme-site"])
+        self.assertNotIn("dirs", e["globex"])
         self.assertTrue((self.agents / "globex-lead.md").is_file())
         self.assertEqual(commits(self.org), 1)
 
@@ -221,6 +223,8 @@ class SetupE2E(unittest.TestCase):
                     {"entities": [{"id": "x", "color": "red"}]},
                     {"entities": [{"id": "x", "parent": "y"}]},
                     {"entities": [{"id": "x", "logo": "/no/such.svg"}]},
+                    {"entities": [{"id": "x", "dirs": ["~"]}]},
+                    {"entities": [{"id": "x", "dirs": [3]}]},
                     {"entities": []}]:
             r = run(self.home, "--config", str(self.config(**bad)))
             self.assertEqual(r.returncode, 2, bad)

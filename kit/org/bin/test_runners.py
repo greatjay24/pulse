@@ -24,6 +24,8 @@ FAKE_CLI = r'''#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ["FAKE_ARGV"], "w") as f:
     json.dump(sys.argv, f)
+with open(os.environ["FAKE_ARGV"] + ".ctx", "w") as f:
+    json.dump({"cwd": os.getcwd(), "opencode": os.environ.get("OPENCODE_CONFIG_CONTENT")}, f)
 sys.stdout.write(open(os.environ["FAKE_FIXTURE"]).read())
 sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
 '''
@@ -123,11 +125,23 @@ class CodexTests(unittest.TestCase):
     def test_command_guardrails(self):
         (ROOT / "agents").mkdir(exist_ok=True)
         (ROOT / "agents" / "acme-lead.md").write_text(LEAD)
-        cmd = runners.Codex({"name": "codex", "network": False}).command("codex", "acme-lead", "NIGHTLY", "gpt-x", 60)
+        dirs = [str(ROOT), "/home/sam/code/acme-site"]
+        cmd = runners.Codex({"name": "codex", "network": False}).command("codex", "acme-lead", "NIGHTLY", "gpt-x", 60, dirs)
         self.assertEqual(cmd[:4], ["codex", "exec", "--json", "--skip-git-repo-check"])
-        self.assertEqual(cmd[cmd.index("--sandbox") + 1], "workspace-write")
+        self.assertEqual(cmd[cmd.index("-C") + 1], str(ROOT))              # starts in the org folder
         self.assertIn('approval_policy="never"', cmd)
-        self.assertIn("sandbox_workspace_write.network_access=false", cmd)
+        self.assertIn('default_permissions="pulse-org"', cmd)
+        self.assertIn('permissions.pulse-org.extends=":workspace"', cmd)
+        files = next(c for c in cmd if c.startswith("permissions.pulse-org.filesystem="))
+        self.assertIn('":root"="deny"', files)
+        self.assertIn('":minimal"="read"', files)
+        self.assertIn('"~/.gitconfig"="read"', files)
+        self.assertNotIn(":tmpdir", files)
+        self.assertIn("permissions.pulse-org.network.enabled=false", cmd)
+        self.assertIn('permissions.pulse-org.workspace_roots={"/home/sam/code/acme-site"=true}', cmd)
+        # Permission profiles replace the older sandbox flags; mixing them would switch the profile off.
+        self.assertNotIn("--sandbox", cmd)
+        self.assertFalse(any(c.startswith("sandbox_workspace_write") for c in cmd))
         self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", cmd)
         self.assertNotIn("--approve-for-me", cmd)
         instr = next(c for c in cmd if c.startswith("developer_instructions="))
@@ -139,6 +153,29 @@ class CodexTests(unittest.TestCase):
         for needle in ['"git", "push", ["--force"', '"gh", "pr", "merge"', '"rm", ["-rf"', '["main", "master", "develop"]']:
             self.assertIn(needle, rules)
         self.assertEqual(rules.count('decision = "forbidden"'), len(runners.policy.SHELL_FORBIDDEN))
+
+    @unittest.skipUnless(shutil.which("codex", path=runners.search_path()), "codex not installed")
+    def test_profile_confines_reads_with_the_real_codex(self):
+        """`codex sandbox` runs one local command under the profile; no model is called."""
+        home = ROOT / "sbx-home"
+        org, site, private = home / "portfolio", home / "code" / "site", home / "private"
+        for d, f in ((org, "BRIEF.md"), (site, "index.html"), (private, "notes.txt")):
+            d.mkdir(parents=True, exist_ok=True)
+            (d / f).write_text(f"{f} body")
+        codex = shutil.which("codex", path=runners.search_path())
+        # temp off: this test's folders live under the temp dir, a real org doesn't.
+        flags = runners.Codex({"name": "codex", "temp": False, "read_also": []}).profile([str(org), str(site)])
+        (ROOT / "codex-home").mkdir(exist_ok=True)
+
+        def run(*cmd):
+            p = subprocess.run([codex, "sandbox", *flags, "-P", "pulse-org", "-C", str(org), "--", *cmd],
+                               capture_output=True, text=True, timeout=60, env={**os.environ, "CODEX_HOME": str(ROOT / "codex-home")})
+            return p.returncode, p.stdout
+        self.assertEqual(run("cat", str(org / "BRIEF.md")), (0, "BRIEF.md body"))
+        self.assertEqual(run("cat", str(site / "index.html")), (0, "index.html body"))
+        self.assertNotEqual(run("cat", str(private / "notes.txt"))[0], 0)
+        self.assertNotEqual(run("ls", str(home))[0], 0)
+        self.assertNotEqual(run("ls", "/Users")[0], 0)
 
     @unittest.skipUnless(shutil.which("codex", path=runners.search_path()), "codex not installed")
     def test_rules_with_the_real_codex(self):
@@ -199,14 +236,83 @@ class OpenCodeTests(unittest.TestCase):
         self.assertIn('    "git *": allow', text)
         self.assertLess(text.index('"git *": allow'), text.index('"git push --force*": deny'))   # last match wins
         self.assertIn("  task: allow", text)
-        self.assertIn("  external_directory: deny", text)
+        self.assertIn("  external_directory:\n    \"*\": deny\n", text)
+        # Read commands are not allowed on any path in the static file: only the run's dirs open them.
+        self.assertNotIn('"cat *"', text)
+        self.assertNotIn('"ls *"', text)
         manager = runners.for_opencode(*runners.split_agent(LEAD.replace("role: lead", "role: manager")))
         self.assertIn("mode: subagent", manager)
         self.assertIn("  task: deny", manager)
         self.assertEqual(body, "You are the operating lead for **Acme**.\n")
 
+    def test_run_permissions_open_only_the_work_dirs(self):
+        dirs = ["/home/sam/portfolio", "/home/sam/code/site"]
+        env = runners.OpenCode().env("acme-lead", dirs)
+        cfg = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+        self.assertEqual(set(cfg["agent"]), {"acme-lead", *runners.MANAGERS})
+        lead, manager = cfg["agent"]["acme-lead"]["permission"], cfg["agent"]["sales-manager"]["permission"]
+        self.assertEqual(lead["external_directory"], {"*": "deny", "/home/sam/code/site/**": "allow"})
+        self.assertEqual((lead["task"], manager["task"]), ("allow", "deny"))
+        bash = lead["bash"]
+        self.assertEqual(bash["cat /home/sam/portfolio*"], "allow")
+        self.assertEqual(bash["grep -* /home/sam/code/site*"], "allow")
+        self.assertNotIn("cat *", bash)
+        self.assertEqual(list(bash)[0], "*")
+        self.assertEqual(bash["git push --force*"], "deny")
+        self.assertEqual(lead["read"]["*.env"], "deny")
+        oc = runners.OpenCode().command("opencode", "acme-lead", "x", None, 60, dirs)
+        self.assertEqual(oc[oc.index("--dir") + 1], "/home/sam/portfolio")
+
+    @unittest.skipUnless(shutil.which("opencode", path=runners.search_path()), "opencode not installed")
+    def test_permissions_with_the_real_opencode(self):
+        """`opencode debug agent --tool` runs one tool under the agent's permissions; no model is called."""
+        home = ROOT / "oc-home"
+        org, site, private = home / "portfolio", home / "code" / "site", home / "private"
+        for d, f in ((org, "BRIEF.md"), (site, "index.html"), (private, "notes.txt")):
+            d.mkdir(parents=True, exist_ok=True)
+            (d / f).write_text(f"{f} body")
+        subprocess.run(["git", "init", "-q", str(org)], check=True)
+        agents = home / ".config" / "opencode" / "agents"
+        agents.mkdir(parents=True, exist_ok=True)
+        (agents / "acme-lead.md").write_text(runners.for_opencode(*runners.split_agent(LEAD)))
+        env = {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config"), "XDG_DATA_HOME": str(home / ".local/share"),
+               "XDG_CACHE_HOME": str(home / ".cache"), "XDG_STATE_HOME": str(home / ".local/state"),
+               **runners.OpenCode().env("acme-lead", [str(org), str(site)])}
+        oc = shutil.which("opencode", path=runners.search_path())
+
+        def tool(name, **params):
+            p = subprocess.run([oc, "debug", "agent", "acme-lead", "--tool", name, "--params", json.dumps(params)],
+                               capture_output=True, text=True, timeout=120, env=env, cwd=str(org))
+            return p.stdout + p.stderr
+        self.assertIn("BRIEF.md body", tool("read", filePath=str(org / "BRIEF.md")))
+        self.assertIn("index.html body", tool("read", filePath=str(site / "index.html")))
+        self.assertNotIn("notes.txt body", tool("read", filePath=str(private / "notes.txt")))
+        self.assertNotIn("notes.txt body", tool("bash", command=f"cat {private / 'notes.txt'}", description="x"))
+        self.assertIn("index.html body", tool("bash", command=f"cat {site / 'index.html'}", description="x"))
+
+
+class WorkDirsTests(unittest.TestCase):
+    def test_org_first_then_dirs(self):
+        reg = {"dirs": ["~/code/shared"], "entities": [{"id": "acme", "dirs": ["~/code/acme-site", "~/code/shared", "~", "/"]}]}
+        dirs = runners.work_dirs(reg, "acme")
+        home = str(pathlib.Path.home().resolve())
+        self.assertEqual(dirs, [str(ROOT.resolve()), f"{home}/code/shared", f"{home}/code/acme-site"])
+        self.assertEqual(runners.work_dirs({}, None), [str(ROOT.resolve())])
+
 
 class ClaudeTranslationTests(unittest.TestCase):
+    def test_command_confines_reads(self):
+        cmd = runners.ClaudeCode().command("claude", "acme-lead", "x", "sonnet", 5, ["/home/sam/portfolio", "/home/sam/code/site"])
+        settings = json.loads(cmd[cmd.index("--settings") + 1])
+        self.assertTrue(settings["permissions"]["blockReadsOutsideWorkingDirectories"])
+        self.assertEqual(cmd[cmd.index("--add-dir") + 1], "/home/sam/code/site")
+        allowed = cmd[cmd.index("--allowedTools") + 1:cmd.index("--disallowedTools")]
+        self.assertNotIn("Bash(cat *)", allowed)
+        self.assertNotIn("Bash(ls *)", allowed)
+        self.assertIn("Bash(git *)", allowed)
+        self.assertLess(cmd.index("--add-dir"), cmd.index("--allowedTools"))      # variadic flags last
+        self.assertNotIn("--add-dir", runners.ClaudeCode().command("claude", "a", "x", "sonnet", 5, ["/o"]))
+
     def test_claude_file_is_unchanged_in_shape(self):
         out = runners.for_claude(*runners.split_agent(LEAD))
         self.assertEqual(out, "---\nname: acme-lead\ndescription: Operating lead for Acme.\nmodel: opus\n---\n\n"
@@ -248,6 +354,8 @@ class RunOnEachRunnerTests(unittest.TestCase):
         self.assertEqual(res["tokens"], {"input": 24763, "output": 186})
         self.assertEqual(res["models"], [])
         argv = json.loads(self.argv.read_text())
+        self.assertEqual(argv[argv.index("-C") + 1], str(ROOT.resolve()))
+        self.assertNotIn("--sandbox", argv)
         self.assertIn("can't deploy agents", argv[-1])           # the solo note rides on the prompt
         self.assertTrue(argv[-1].startswith("NIGHTLY run"))
         t = self.transcript(res["run_id"])
@@ -275,6 +383,10 @@ class RunOnEachRunnerTests(unittest.TestCase):
         self.assertEqual((res["agents"], res["cost_usd"]), (1, 0))
         argv = json.loads(self.argv.read_text())
         self.assertEqual(argv[1:6], ["run", "--format", "json", "--agent", "acme-lead"])
+        self.assertEqual(argv[argv.index("--dir") + 1], str(ROOT.resolve()))
+        ctx = json.loads(pathlib.Path(str(self.argv) + ".ctx").read_text())
+        self.assertEqual(pathlib.Path(ctx["cwd"]).resolve(), ROOT.resolve())         # runs from the org folder
+        self.assertIn("acme-lead", json.loads(ctx["opencode"])["agent"])           # this run's permissions
         self.assertNotIn("can't deploy agents", argv[-1])
         team = json.loads((live.LIVE / f"{res['run_id']}.json").read_text())["team"]
         self.assertEqual((team[0]["type"], team[0]["status"]), ("researcher", "completed"))

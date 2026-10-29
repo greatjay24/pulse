@@ -5,9 +5,12 @@
     talk.py chief-of-staff       the chief of staff
     talk.py acme "what's slipping?"
 
-Claude Code:  claude --agent <lead> [prompt]
-Codex:        codex -C ~ -s workspace-write -a on-request -c developer_instructions=<the lead's file> [prompt]
-opencode:     opencode --agent <lead> [--prompt ...]
+Claude Code:  claude --agent <lead> --settings <reads fenced> [--add-dir <dirs>] [prompt]
+Codex:        codex -C <org> -a on-request <the permission profile> -c developer_instructions=<the lead's file> [prompt]
+opencode:     opencode --agent <lead> [--prompt ...], with the run's permissions inline
+
+Like the night shift, the session starts in the org folder and reads stay inside it and the
+entity's "dirs" (see runners.py).
 
 Interactive sessions ask before anything outside the guardrails, because you are there to
 answer. Only Claude Code sessions show under Working now in Pulse (through its hooks);
@@ -17,7 +20,7 @@ import json, os, pathlib, sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import runners  # noqa: E402
-from live import HOME, ORG  # noqa: E402
+from live import ORG  # noqa: E402
 
 
 def main(argv):
@@ -34,17 +37,20 @@ def main(argv):
         print(f"{adapter.label} is not installed. {adapter.install_hint}", file=sys.stderr)
         return 1
     adapter.ensure_agents([agent])
+    dirs = runners.work_dirs(reg, ent["id"] if ent else None)
+    model = adapter.model("sonnet")
     if adapter.name == "claude-code":
-        cmd = [binary, "--agent", agent] + ([prompt] if prompt else [])
+        settings = json.dumps({"permissions": {"blockReadsOutsideWorkingDirectories": True}})
+        cmd = [binary, "--agent", agent, "--settings", settings] + (["--add-dir", *dirs[1:]] if len(dirs) > 1 else [])
+        cmd += ([prompt] if prompt else [])
     elif adapter.name == "codex":
-        cmd = [binary, "-C", str(HOME), "-s", "workspace-write", "-a", "on-request",
+        cmd = [binary, "-C", dirs[0], "-a", "on-request", *adapter.profile(dirs),
                "-c", "developer_instructions=" + json.dumps(adapter.instructions(agent), ensure_ascii=False)]
-        model = adapter.model("sonnet")
         cmd += (["-m", model] if model else []) + ([prompt] if prompt else [])
     else:
-        model = adapter.model("sonnet")
         cmd = [binary, "--agent", agent] + (["-m", model] if model else []) + (["--prompt", prompt] if prompt else [])
-    os.chdir(HOME)
+        os.environ.update(adapter.env(agent, dirs))
+    os.chdir(dirs[0])
     os.execv(binary, cmd)
 
 

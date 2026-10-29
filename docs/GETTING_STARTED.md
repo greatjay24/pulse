@@ -92,8 +92,26 @@ What differs:
 - **Cost.** Pulse shows dollars when the AI reports them (Claude Code, opencode) and token
   counts when it only reports tokens (Codex). It never estimates.
 - **Guardrails.** All three get the same rules: no sending, no paying, no force-pushes,
-  merges or production deploys. Codex also runs commands in a sandbox that can only write
-  inside your home folder.
+  merges or production deploys.
+
+## What your agents can see
+
+A lead works in `~/portfolio` and nowhere else, unless you list more folders for it. To let
+the Acme lead work on its website code, add the folder to that business in
+`~/portfolio/portfolio.json`:
+
+```
+"dirs": ["~/code/acme-site"]
+```
+
+How strictly that's enforced depends on the AI:
+
+- **Codex** enforces it for everything: the operating system blocks every command from
+  reading or writing anywhere else in your home folder.
+- **Claude Code** enforces it for its own file tools and for shell commands like `ls` and
+  `cat`. Other programs a lead runs, like `git` or a script, aren't fenced by Claude Code.
+- **opencode** enforces it for its file tools; shell commands are checked by matching the
+  command's text, which is best-effort.
 
 ## The four gates
 
