@@ -1,4 +1,5 @@
 import { demoConnections, demoGoals, demoOutbox } from './demoOps';
+import { demoPreferences, demoUsage } from './demoUsage';
 import {
   ActivitySnapshot,
   EntityStatus,
@@ -475,6 +476,10 @@ export function demoRead(cmd: string, args?: Record<string, unknown>): unknown {
       return demoGoals();
     case 'read_connections':
       return demoConnections();
+    case 'read_usage':
+      return demoUsage();
+    case 'read_preferences':
+      return demoPreferences();
     case 'setup_check':
       return { setup_needed: false, claude: null, python3: null, tracker: true };
     default:

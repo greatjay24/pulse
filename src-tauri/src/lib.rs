@@ -2,6 +2,7 @@ mod command;
 mod jarvis;
 mod pty;
 mod ops;
+mod usage;
 
 use chrono::{Datelike, Timelike};
 use serde::{Deserialize, Serialize};
@@ -3715,7 +3716,10 @@ pub fn run() {
             jarvis::hide_listen_panel,
             jarvis::open_run_in_main,
             jarvis::set_listen_hotkey,
-            jarvis::pulse_brief
+            jarvis::pulse_brief,
+            usage::read_usage,
+            usage::read_preferences,
+            usage::set_preference_disabled
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

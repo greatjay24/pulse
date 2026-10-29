@@ -34,7 +34,7 @@ const CHECK_TIMEOUT: Duration = Duration::from_secs(240);
 // Running the org's scripts: fixed interpreter, fixed script path, validated args
 // ------------------------------------------
 
-fn run_script(root: &Path, script: &str, args: &[String], stdin: Option<&str>, timeout: Duration) -> Result<serde_json::Value, String> {
+pub(crate) fn run_script(root: &Path, script: &str, args: &[String], stdin: Option<&str>, timeout: Duration) -> Result<serde_json::Value, String> {
     let path = resolve_portfolio_file(root, "bin", script).map_err(|e| format!("~/portfolio/bin/{}: {}", script, e))?;
     let python = PYTHON_CANDIDATES.iter().find(|p| Path::new(p).is_file()).ok_or("python3 not found")?;
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
