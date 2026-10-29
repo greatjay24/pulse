@@ -1,0 +1,17 @@
+{
+  "owner": "Sam",
+  "groups": ["Companies", "Family", "Personal"],
+  "entities": [
+    {"id": "acme", "name": "Acme Studio", "group": "companies",
+     "description": "A small design studio building websites for local businesses.", "color": "#3B5BDB"},
+    {"id": "northwind", "name": "Northwind Supply", "group": "companies",
+     "description": "An online shop selling outdoor gear.", "color": "#2B8A3E"},
+    {"id": "globex", "name": "Globex Rentals", "group": "family",
+     "description": "The family's two rental properties.", "color": "#E8590C"},
+    {"id": "personal", "name": "Personal", "group": "personal",
+     "description": "Side projects, writing and personal admin.", "color": "#5C7CFA"},
+    {"id": "initech", "name": "Initech", "group": "personal", "parent": "personal",
+     "description": "A newsletter idea, not launched yet.", "color": "#9C36B5",
+     "schedule": "on-call", "stage": "idea"}
+  ]
+}
