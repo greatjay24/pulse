@@ -4,9 +4,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use tauri::{
-    menu::{Menu, MenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager,
+    image::Image,
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::TrayIconBuilder,
+    AppHandle, Emitter, Manager,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1130,8 +1131,16 @@ async fn fetch_supabase_metrics(
 // These are embedded at compile time from environment variables
 // For local dev: create .env file with GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET
 // For CI builds: set as GitHub Actions secrets
-const GOOGLE_CLIENT_ID: &str = env!("GOOGLE_CLIENT_ID");
-const GOOGLE_CLIENT_SECRET: &str = env!("GOOGLE_CLIENT_SECRET");
+// A build without them still compiles; Google sign-in (SaaS metrics only) then says so.
+const GOOGLE_CLIENT_ID: Option<&str> = option_env!("GOOGLE_CLIENT_ID");
+const GOOGLE_CLIENT_SECRET: Option<&str> = option_env!("GOOGLE_CLIENT_SECRET");
+
+fn google_client() -> Result<(&'static str, &'static str), String> {
+    match (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET) {
+        (Some(id), Some(secret)) => Ok((id, secret)),
+        _ => Err("Google sign-in is not configured in this build (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET were not set at compile time)".to_string()),
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct GoogleCalendarEvent {
@@ -1162,6 +1171,8 @@ async fn start_google_oauth() -> Result<String, String> {
     use tokio::net::TcpListener;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    let (client_id, client_secret) = google_client()?;
+
     // Bind to a random available port on localhost
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -1178,7 +1189,7 @@ async fn start_google_oauth() -> Result<String, String> {
     // Build the auth URL
     let auth_url = format!(
         "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent",
-        GOOGLE_CLIENT_ID,
+        client_id,
         urlencoding::encode(&redirect_uri),
         urlencoding::encode(scopes)
     );
@@ -1244,8 +1255,8 @@ async fn start_google_oauth() -> Result<String, String> {
     // Exchange the code for tokens
     let client = reqwest::Client::new();
     let params = [
-        ("client_id", GOOGLE_CLIENT_ID),
-        ("client_secret", GOOGLE_CLIENT_SECRET),
+        ("client_id", client_id),
+        ("client_secret", client_secret),
         ("code", code.as_str()),
         ("grant_type", "authorization_code"),
         ("redirect_uri", redirect_uri.as_str()),
@@ -1270,11 +1281,12 @@ async fn start_google_oauth() -> Result<String, String> {
 
 #[tauri::command]
 async fn refresh_google_token(refresh_token: String) -> Result<String, String> {
+    let (client_id, client_secret) = google_client()?;
     let client = reqwest::Client::new();
 
     let params = [
-        ("client_id", GOOGLE_CLIENT_ID),
-        ("client_secret", GOOGLE_CLIENT_SECRET),
+        ("client_id", client_id),
+        ("client_secret", client_secret),
         ("refresh_token", &refresh_token),
         ("grant_type", "refresh_token"),
     ];
@@ -1899,20 +1911,91 @@ struct PortfolioEntityReport {
     id: String,
     status: Option<serde_json::Value>,
     error: Option<String>,
+    logo: Option<String>,      // data: URL of the registry's `logo`
+    logo_dark: Option<String>, // data: URL of `logo_dark`, for dark themes
+    logo_error: Option<String>,
+}
+
+// Logos live in ~/portfolio/assets/ so the board's reads never leave ~/portfolio.
+const LOGO_DIR: &str = "assets";
+const LOGO_TYPES: &[(&str, &str)] = &[
+    ("svg", "image/svg+xml"),
+    ("png", "image/png"),
+    ("jpg", "image/jpeg"),
+    ("jpeg", "image/jpeg"),
+    ("webp", "image/webp"),
+];
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = (chunk[0] as u32) << 16 | (*chunk.get(1).unwrap_or(&0) as u32) << 8 | *chunk.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ABC[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+// Reads a registry logo path (relative to ~/portfolio, inside assets/) as a data: URL.
+// Same guard as status files: no absolute paths, no `..`, no symlinks out of the root.
+fn read_portfolio_logo(root: &Path, rel: &str) -> Result<String, String> {
+    let rel_path = Path::new(rel);
+    let (Some(dir), Some(name)) = (rel_path.parent(), rel_path.file_name().and_then(|n| n.to_str())) else {
+        return Err(format!("{}: not a file path", rel));
+    };
+    if !rel_path.starts_with(LOGO_DIR) {
+        return Err(format!("{}: logos must live in ~/portfolio/{}/", rel, LOGO_DIR));
+    }
+    let ext = Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    let Some((_, mime)) = LOGO_TYPES.iter().find(|(e, _)| *e == ext) else {
+        return Err(format!("{}: not an svg, png, jpg or webp", rel));
+    };
+    let dir = dir.to_str().ok_or_else(|| format!("{}: not a file path", rel))?;
+    let path = resolve_portfolio_file(root, dir, name).map_err(|e| format!("{}: {}", rel, e))?;
+    if !path.starts_with(root.join(LOGO_DIR)) {
+        return Err(format!("{}: logos must live in ~/portfolio/{}/", rel, LOGO_DIR));
+    }
+    let meta = fs::metadata(&path).map_err(|_| format!("{}: missing", rel))?;
+    if meta.len() > PORTFOLIO_MAX_FILE_BYTES {
+        return Err(format!("{}: file too large (1 MB max)", rel));
+    }
+    let bytes = fs::read(&path).map_err(|e| format!("{}: unreadable: {}", rel, e))?;
+    Ok(format!("data:{};base64,{}", mime, base64_encode(&bytes)))
 }
 
 #[derive(Serialize)]
 struct PortfolioSnapshot {
     registry: Option<serde_json::Value>,
     registry_error: Option<String>,
+    // No ~/portfolio or no portfolio.json in it: the owner hasn't run setup yet, so Pulse
+    // shows its welcome screen instead of an empty board.
+    setup_needed: bool,
     entities: Vec<PortfolioEntityReport>,
     week: Option<String>,
     read_at: String,
 }
 
-fn get_portfolio_dir() -> Result<PathBuf, String> {
+// ~/<name>, or in a debug build only, the folder named by `debug_env`. The override lets the
+// first-run screen and a fresh org be tried against a scratch folder without touching the real
+// ~/portfolio; a release build ignores it and always reads the fixed folder.
+fn home_subdir(name: &str, debug_env: &str) -> Result<PathBuf, String> {
+    if cfg!(debug_assertions) {
+        if let Some(dir) = std::env::var_os(debug_env).filter(|v| !v.is_empty()) {
+            return Ok(PathBuf::from(dir));
+        }
+    }
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    home.join("portfolio")
+    Ok(home.join(name))
+}
+
+fn get_portfolio_dir() -> Result<PathBuf, String> {
+    home_subdir("portfolio", "PULSE_PORTFOLIO_DIR")?
         .canonicalize()
         .map_err(|_| "~/portfolio not found".to_string())
 }
@@ -1933,11 +2016,15 @@ fn resolve_portfolio_file(root: &Path, rel_dir: &str, file_name: &str) -> Result
 }
 
 fn read_portfolio_text(path: &Path) -> Result<String, String> {
+    read_text_capped(path, PORTFOLIO_MAX_FILE_BYTES)
+}
+
+fn read_text_capped(path: &Path, max_bytes: u64) -> Result<String, String> {
     let meta = fs::metadata(path).map_err(|_| "missing".to_string())?;
     if !meta.is_file() {
         return Err("missing".to_string());
     }
-    if meta.len() > PORTFOLIO_MAX_FILE_BYTES {
+    if meta.len() > max_bytes {
         return Err("file too large".to_string());
     }
     fs::read_to_string(path).map_err(|e| format!("unreadable: {}", e))
@@ -1962,6 +2049,7 @@ fn read_portfolio() -> Result<String, String> {
             let snapshot = PortfolioSnapshot {
                 registry: None,
                 registry_error: Some(e),
+                setup_needed: true,
                 entities: vec![],
                 week: None,
                 read_at,
@@ -1981,20 +2069,29 @@ fn read_portfolio() -> Result<String, String> {
     if let Some(list) = registry.as_ref().and_then(|r| r.get("entities")).and_then(|e| e.as_array()) {
         for entity in list {
             let Some(id) = entity.get("id").and_then(|v| v.as_str()) else { continue };
-            let report = match entity.get("path").and_then(|v| v.as_str()) {
+            let (status, error) = match entity.get("path").and_then(|v| v.as_str()) {
                 Some(rel) => match resolve_portfolio_file(&root, rel, "status.json")
                     .and_then(|p| read_portfolio_json(&p))
                 {
-                    Ok(status) => PortfolioEntityReport { id: id.to_string(), status: Some(status), error: None },
-                    Err(e) => PortfolioEntityReport { id: id.to_string(), status: None, error: Some(e) },
+                    Ok(status) => (Some(status), None),
+                    Err(e) => (None, Some(e)),
                 },
-                None => PortfolioEntityReport {
-                    id: id.to_string(),
-                    status: None,
-                    error: Some("no path in portfolio.json".to_string()),
-                },
+                None => (None, Some("no path in portfolio.json".to_string())),
             };
-            entities.push(report);
+            let mut logo_errors = Vec::new();
+            let mut logo = |key: &str| {
+                let rel = entity.get(key).and_then(|v| v.as_str())?;
+                read_portfolio_logo(&root, rel).map_err(|e| logo_errors.push(e)).ok()
+            };
+            let (logo, logo_dark) = (logo("logo"), logo("logo_dark"));
+            entities.push(PortfolioEntityReport {
+                id: id.to_string(),
+                status,
+                error,
+                logo,
+                logo_dark,
+                logo_error: (!logo_errors.is_empty()).then(|| logo_errors.join("; ")),
+            });
         }
     }
 
@@ -2002,13 +2099,1319 @@ fn read_portfolio() -> Result<String, String> {
         .and_then(|p| read_portfolio_text(&p))
         .ok();
 
-    let snapshot = PortfolioSnapshot { registry, registry_error, entities, week, read_at };
+    let setup_needed = registry_error.as_deref() == Some("missing");
+    let snapshot = PortfolioSnapshot { registry, registry_error, setup_needed, entities, week, read_at };
     serde_json::to_string(&snapshot).map_err(|e| e.to_string())
+}
+
+// ==========================================
+// First run: what the welcome screen checks before the owner runs setup
+// ==========================================
+// Existence checks only (nothing is read or run), at fixed paths: a GUI app's PATH is not
+// something to rely on.
+
+// The agent CLIs the org can run on (kit/org/bin/runners.py). Setup needs any one of them.
+const RUNNERS: &[(&str, &str, &str)] = &[
+    ("claude-code", "Claude Code", "claude"),
+    ("codex", "Codex (ChatGPT)", "codex"),
+    ("opencode", "opencode (any provider)", "opencode"),
+];
+
+#[derive(Serialize)]
+struct RunnerFound {
+    id: &'static str,
+    label: &'static str,
+    path: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SetupCheck {
+    setup_needed: bool,
+    runners: Vec<RunnerFound>,
+    python3: Option<String>,
+    tracker: bool,
+}
+
+fn runner_candidates(home: &Path, binary: &str) -> Vec<PathBuf> {
+    let mut v = vec![home.join(".local/bin").join(binary)];
+    match binary {
+        "claude" => v.push(home.join(".claude/local/claude")),
+        "opencode" => v.push(home.join(".opencode/bin/opencode")),
+        _ => {}
+    }
+    v.push(Path::new("/opt/homebrew/bin").join(binary));
+    v.push(Path::new("/usr/local/bin").join(binary));
+    v
+}
+
+fn first_file(paths: impl IntoIterator<Item = PathBuf>) -> Option<String> {
+    paths.into_iter().find(|p| p.is_file()).map(|p| p.to_string_lossy().into_owned())
+}
+
+fn setup_check_at(portfolio: Option<&Path>, tracker: Option<&Path>, home: &Path) -> SetupCheck {
+    SetupCheck {
+        setup_needed: !portfolio.is_some_and(|p| p.join("portfolio.json").is_file()),
+        runners: RUNNERS
+            .iter()
+            .map(|(id, label, binary)| RunnerFound { id, label, path: first_file(runner_candidates(home, binary)) })
+            .collect(),
+        python3: first_file(PYTHON_CANDIDATES.iter().map(PathBuf::from)),
+        tracker: tracker.is_some_and(|t| t.is_dir()),
+    }
+}
+
+#[tauri::command]
+fn setup_check() -> Result<String, String> {
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    let portfolio = get_portfolio_dir().ok();
+    let tracker = get_tracker_dir().ok();
+    serde_json::to_string(&setup_check_at(portfolio.as_deref(), tracker.as_deref(), &home)).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn set_tv_fullscreen(window: tauri::WebviewWindow, enabled: bool) -> Result<(), String> {
     window.set_fullscreen(enabled).map_err(|e| e.to_string())
+}
+
+// ==========================================
+// Decisions: the owner's answers go to ~/portfolio/bin/act.py, the only thing Pulse runs
+// ==========================================
+// act.py validates again against portfolio.json and status.json, appends to the entity's
+// decisions.jsonl under a lock, and starts the lead in the background. Pulse never writes
+// ~/portfolio itself and has no other way to run a program.
+
+const ACT_ACTIONS: &[&str] = &["approve", "reject", "discuss"];
+const ACT_NOTE_MAX: usize = 2000;
+const ACT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+// Fixed interpreter paths: a GUI app's PATH is not something to trust or rely on.
+const PYTHON_CANDIDATES: &[&str] = &["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"];
+
+// Entity and decision ids: lowercase slugs, so an argument can never read as a flag or a path.
+fn is_slug(s: &str) -> bool {
+    let mut chars = s.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit())
+        && s.len() <= 100
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
+
+// The argv after the script path, or why the request is refused. The note rides as a single
+// `--note=` argument, so its contents never become separate arguments.
+fn act_args(entity_id: &str, decision_id: &str, action: &str, note: Option<&str>) -> Result<Vec<String>, String> {
+    if !is_slug(entity_id) {
+        return Err("invalid entity id".to_string());
+    }
+    if !is_slug(decision_id) {
+        return Err("invalid decision id".to_string());
+    }
+    if !ACT_ACTIONS.contains(&action) {
+        return Err("action must be approve, reject or discuss".to_string());
+    }
+    let note = note.unwrap_or("").trim();
+    if note.chars().count() > ACT_NOTE_MAX {
+        return Err(format!("note is longer than {} characters", ACT_NOTE_MAX));
+    }
+    if note.contains('\0') {
+        return Err("note contains a NUL byte".to_string());
+    }
+    if action == "discuss" && note.is_empty() {
+        return Err("discuss needs a note".to_string());
+    }
+    let mut args = vec![entity_id.to_string(), decision_id.to_string(), action.to_string()];
+    if !note.is_empty() {
+        args.push(format!("--note={}", note));
+    }
+    Ok(args)
+}
+
+fn registry_has_entity(root: &Path, entity_id: &str) -> Result<(), String> {
+    let registry = resolve_portfolio_file(root, ".", "portfolio.json").and_then(|p| read_portfolio_json(&p))?;
+    let known = registry
+        .get("entities")
+        .and_then(|e| e.as_array())
+        .is_some_and(|list| list.iter().any(|e| e.get("id").and_then(|v| v.as_str()) == Some(entity_id)));
+    if known { Ok(()) } else { Err(format!("unknown entity: {}", entity_id)) }
+}
+
+#[tauri::command]
+async fn act_on_decision(entity_id: String, decision_id: String, action: String, note: Option<String>) -> Result<String, String> {
+    let args = act_args(&entity_id, &decision_id, &action, note.as_deref())?;
+    let root = get_portfolio_dir()?;
+    registry_has_entity(&root, &entity_id)?;
+    let script = resolve_portfolio_file(&root, "bin", "act.py").map_err(|e| format!("~/portfolio/bin/act.py: {}", e))?;
+    let python = PYTHON_CANDIDATES
+        .iter()
+        .find(|p| Path::new(p).is_file())
+        .ok_or("python3 not found")?;
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+
+    // act.py appends and hands the lead run to a detached worker, so it exits in well under
+    // a second; the timeout only guards against a hung interpreter.
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut child = std::process::Command::new(python)
+            .arg(&script)
+            .args(&args)
+            .current_dir(home)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("could not start act.py: {}", e))?;
+        let started = std::time::Instant::now();
+        while child.try_wait().map_err(|e| e.to_string())?.is_none() {
+            if started.elapsed() > ACT_TIMEOUT {
+                let _ = child.kill();
+                return Err("act.py did not answer in time".to_string());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let out = child.wait_with_output().map_err(|e| e.to_string())?;
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let line = stdout.lines().last().unwrap_or("").trim().to_string();
+        // act.py prints one JSON line either way; a refusal carries {"ok": false, "error"}.
+        match serde_json::from_str::<serde_json::Value>(&line) {
+            Ok(v) if v.get("ok").and_then(|o| o.as_bool()) == Some(true) => Ok(line),
+            Ok(v) => Err(v.get("error").and_then(|e| e.as_str()).unwrap_or("act.py refused").to_string()),
+            Err(_) => Err(format!("act.py failed: {}", String::from_utf8_lossy(&out.stderr).trim().chars().take(300).collect::<String>())),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// ==========================================
+// Activity: what the organization did. Read-only.
+// ==========================================
+
+const ACTIVITY_MAX_RUN_FILES: usize = 150;
+const ACTIVITY_MAX_ROWS: usize = 500;
+const JSONL_MAX_BYTES: u64 = 4 * 1024 * 1024;
+// Only these ledger fields leave Rust: no recipients, no bodies.
+const DRAFT_FIELDS: &[&str] = &["date", "entity", "prospect", "vertical", "subject", "variant", "source"];
+
+#[derive(Serialize)]
+struct ActivityRunFile {
+    file: String,
+    data: serde_json::Value,
+}
+
+#[derive(Serialize)]
+struct ActivityEntityRows {
+    entity: String,
+    rows: Vec<serde_json::Value>,
+}
+
+#[derive(Serialize)]
+struct ActivityCommit {
+    hash: String,
+    at: String,
+    subject: String,
+}
+
+#[derive(Serialize)]
+struct ActivitySnapshot {
+    runs: Vec<ActivityRunFile>,
+    decisions: Vec<ActivityEntityRows>,
+    drafts: Vec<serde_json::Value>,
+    commits: Vec<ActivityCommit>,
+    errors: Vec<String>,
+    read_at: String,
+}
+
+// The last `max` JSON-object lines of a .jsonl file; bad lines are skipped, not fatal.
+fn read_jsonl_tail(path: &Path, max: usize) -> Result<Vec<serde_json::Value>, String> {
+    let text = read_text_capped(path, JSONL_MAX_BYTES)?;
+    let rows: Vec<serde_json::Value> = text
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|v| v.is_object())
+        .collect();
+    let skip = rows.len().saturating_sub(max);
+    Ok(rows.into_iter().skip(skip).collect())
+}
+
+fn pick_fields(row: &serde_json::Value, fields: &[&str]) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    for f in fields {
+        if let Some(v) = row.get(*f) {
+            out.insert(f.to_string(), v.clone());
+        }
+    }
+    serde_json::Value::Object(out)
+}
+
+// Parses `git log --format=%H%x1f%aI%x1f%s` output.
+fn parse_git_log(text: &str) -> Vec<ActivityCommit> {
+    text.lines()
+        .filter_map(|l| {
+            let mut parts = l.splitn(3, '\u{1f}');
+            Some(ActivityCommit {
+                hash: parts.next()?.to_string(),
+                at: parts.next()?.to_string(),
+                subject: parts.next()?.to_string(),
+            })
+        })
+        .collect()
+}
+
+fn read_activity_at(root: &Path) -> ActivitySnapshot {
+    let mut errors = Vec::new();
+
+    // logs/*.json: nightly runs (an array of agent results) and act runs (one object).
+    let mut runs = Vec::new();
+    if let Ok(dir) = fs::read_dir(root.join("logs")) {
+        let mut names: Vec<String> = dir
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.file_name().to_str().map(String::from))
+            .filter(|n| n.ends_with(".json") && !n.starts_with('.'))
+            .collect();
+        // Names start with a timestamp (act runs after "act-"), so sort by that.
+        names.sort_by_key(|n| std::cmp::Reverse(n.trim_start_matches("act-").to_string()));
+        for name in names.into_iter().take(ACTIVITY_MAX_RUN_FILES) {
+            match resolve_portfolio_file(root, "logs", &name)
+                .and_then(|p| read_portfolio_text(&p))
+                .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).map_err(|e| format!("malformed: {}", e)))
+            {
+                Ok(data) => runs.push(ActivityRunFile { file: name, data }),
+                Err(e) => errors.push(format!("logs/{}: {}", name, e)),
+            }
+        }
+    }
+
+    // Per entity: decisions.jsonl (the owner's answers and the lead's replies) and the sales ledger.
+    let mut decisions = Vec::new();
+    let mut drafts = Vec::new();
+    let registry = resolve_portfolio_file(root, ".", "portfolio.json").and_then(|p| read_portfolio_json(&p));
+    let entities = registry.as_ref().ok().and_then(|r| r.get("entities")).and_then(|e| e.as_array()).cloned().unwrap_or_default();
+    for entity in &entities {
+        let (Some(id), Some(rel)) = (entity.get("id").and_then(|v| v.as_str()), entity.get("path").and_then(|v| v.as_str())) else {
+            continue;
+        };
+        match resolve_portfolio_file(root, rel, "decisions.jsonl").and_then(|p| read_jsonl_tail(&p, ACTIVITY_MAX_ROWS)) {
+            Ok(rows) => decisions.push(ActivityEntityRows { entity: id.to_string(), rows }),
+            Err(e) if e == "missing" => {}
+            Err(e) => errors.push(format!("{}/decisions.jsonl: {}", rel, e)),
+        }
+        let sales = format!("{}/sales", rel.trim_end_matches('/'));
+        match resolve_portfolio_file(root, &sales, "ledger.jsonl").and_then(|p| read_jsonl_tail(&p, ACTIVITY_MAX_ROWS)) {
+            Ok(rows) => drafts.extend(rows.iter().map(|r| {
+                let mut d = pick_fields(r, DRAFT_FIELDS);
+                if let Some(o) = d.as_object_mut() {
+                    o.entry("entity").or_insert_with(|| id.into());
+                }
+                d
+            })),
+            Err(e) if e == "missing" => {}
+            Err(e) => errors.push(format!("{}/ledger.jsonl: {}", sales, e)),
+        }
+    }
+
+    // git log, fixed arguments, read-only.
+    let commits = match std::process::Command::new("/usr/bin/git")
+        .arg("-C")
+        .arg(root)
+        .args(["log", "-n", "300", "--since=30.days", "--format=%H%x1f%aI%x1f%s"])
+        .stdin(std::process::Stdio::null())
+        .output()
+    {
+        Ok(out) if out.status.success() => parse_git_log(&String::from_utf8_lossy(&out.stdout)),
+        Ok(out) => {
+            errors.push(format!("git log: {}", String::from_utf8_lossy(&out.stderr).trim()));
+            vec![]
+        }
+        Err(e) => {
+            errors.push(format!("git log: {}", e));
+            vec![]
+        }
+    };
+
+    ActivitySnapshot { runs, decisions, drafts, commits, errors, read_at: chrono::Local::now().to_rfc3339() }
+}
+
+#[tauri::command]
+async fn read_activity() -> Result<String, String> {
+    let root = get_portfolio_dir()?;
+    let snapshot = tauri::async_runtime::spawn_blocking(move || read_activity_at(&root))
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_string(&snapshot).map_err(|e| e.to_string())
+}
+
+// ==========================================
+// Live runs and transcripts: who is working now, and what they said. Read-only.
+// ==========================================
+// ~/portfolio/bin/live.py writes logs/live/<run_id>.json while a run works and
+// logs/transcripts/<run_id>.jsonl as it goes (already redacted). Pulse only reads them.
+
+const LIVE_MAX_FILES: usize = 200;
+const LIVE_MAX_FILE_BYTES: u64 = 64 * 1024;
+const TRANSCRIPT_MAX_BYTES: u64 = 8 * 1024 * 1024;
+const TRANSCRIPT_MAX_LINES: usize = 3000;
+const TRANSCRIPT_INDEX_MAX: usize = 400;
+// The longest a headless run may last (nightly.py's timeout is 30 min); past this a run
+// still marked running is treated as stopped even if its pid was reused.
+const HEADLESS_MAX_SECS: i64 = 3 * 3600;
+
+// Run ids: lowercase slugs (live.py's RUN_ID), so one can never name a path.
+fn is_run_id(s: &str) -> bool {
+    let mut chars = s.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit())
+        && s.len() <= 120
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
+
+#[cfg(unix)]
+fn pid_alive(pid: i64) -> bool {
+    extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+    if pid <= 0 || pid > i32::MAX as i64 {
+        return false;
+    }
+    // Signal 0 checks the process exists without touching it; EPERM still means it exists.
+    let ok = unsafe { kill(pid as i32, 0) } == 0;
+    ok || std::io::Error::last_os_error().raw_os_error() == Some(1)
+}
+
+#[cfg(not(unix))]
+fn pid_alive(_pid: i64) -> bool {
+    true
+}
+
+// A run that says it is working but whose process is gone stopped unexpectedly.
+fn live_state(run: &serde_json::Value, now: chrono::DateTime<chrono::FixedOffset>, alive: impl Fn(i64) -> bool) -> String {
+    let state = run.get("state").and_then(|s| s.as_str()).unwrap_or("running").to_string();
+    if state != "running" && state != "idle" {
+        return state;
+    }
+    let pid = run.get("pid").and_then(|p| p.as_i64()).unwrap_or(0);
+    let headless = run.get("kind").and_then(|k| k.as_str()) != Some("interactive");
+    let too_old = run
+        .get("started")
+        .and_then(|s| s.as_str())
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .is_some_and(|t| (now - t).num_seconds() > HEADLESS_MAX_SECS);
+    if !alive(pid) || (headless && too_old) {
+        "stopped".to_string()
+    } else {
+        state
+    }
+}
+
+#[derive(Serialize)]
+struct LiveSnapshot {
+    runs: Vec<serde_json::Value>,
+    errors: Vec<String>,
+    read_at: String,
+}
+
+fn read_live_at(root: &Path, alive: impl Fn(i64) -> bool) -> LiveSnapshot {
+    let now = chrono::Local::now().fixed_offset();
+    let mut runs = Vec::new();
+    let mut errors = Vec::new();
+    let Ok(dir) = fs::read_dir(root.join("logs/live")) else {
+        return LiveSnapshot { runs, errors, read_at: now.to_rfc3339() };
+    };
+    let mut names: Vec<String> = dir
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().to_str().map(String::from))
+        .filter(|n| n.ends_with(".json") && is_run_id(n.trim_end_matches(".json")))
+        .collect();
+    names.sort_by(|a, b| b.cmp(a));
+    for name in names.into_iter().take(LIVE_MAX_FILES) {
+        let read = resolve_portfolio_file(root, "logs/live", &name)
+            .and_then(|p| read_text_capped(&p, LIVE_MAX_FILE_BYTES))
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).map_err(|e| format!("malformed: {}", e)));
+        match read {
+            Ok(mut run) if run.is_object() => {
+                let state = live_state(&run, now, &alive);
+                run["state"] = state.into();
+                runs.push(run);
+            }
+            Ok(_) => errors.push(format!("logs/live/{}: not an object", name)),
+            // A writer replaces the file atomically, so a read mid-write is rare; skip it quietly.
+            Err(e) if e == "missing" => {}
+            Err(e) => errors.push(format!("logs/live/{}: {}", name, e)),
+        }
+    }
+    LiveSnapshot { runs, errors, read_at: now.to_rfc3339() }
+}
+
+#[tauri::command]
+async fn read_live() -> Result<String, String> {
+    let root = get_portfolio_dir()?;
+    let snapshot = tauri::async_runtime::spawn_blocking(move || read_live_at(&root, pid_alive))
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_string(&snapshot).map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+struct Transcript {
+    run_id: String,
+    lines: Vec<serde_json::Value>,
+    truncated: bool,
+}
+
+fn read_transcript_at(root: &Path, run_id: &str) -> Result<Transcript, String> {
+    if !is_run_id(run_id) {
+        return Err("invalid run id".to_string());
+    }
+    let path = resolve_portfolio_file(root, "logs/transcripts", &format!("{}.jsonl", run_id))?;
+    let text = read_text_capped(&path, TRANSCRIPT_MAX_BYTES)?;
+    let all: Vec<serde_json::Value> = text
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|v| v.is_object())
+        .collect();
+    // Keep the start line (who, what was asked) when a long run is cut to its tail.
+    let truncated = all.len() > TRANSCRIPT_MAX_LINES;
+    let lines = if truncated {
+        let mut v = vec![all[0].clone()];
+        v.extend(all[all.len() - (TRANSCRIPT_MAX_LINES - 1)..].iter().cloned());
+        v
+    } else {
+        all
+    };
+    Ok(Transcript { run_id: run_id.to_string(), lines, truncated })
+}
+
+#[tauri::command]
+async fn read_transcript(run_id: String) -> Result<String, String> {
+    let root = get_portfolio_dir()?;
+    let t = tauri::async_runtime::spawn_blocking(move || read_transcript_at(&root, &run_id))
+        .await
+        .map_err(|e| e.to_string())??;
+    serde_json::to_string(&t).map_err(|e| e.to_string())
+}
+
+// One transcript in the Conversations index: its start line and its last line.
+#[derive(Serialize)]
+struct TranscriptSummary {
+    run_id: String,
+    start: Option<serde_json::Value>,
+    last: Option<serde_json::Value>,
+    modified: String,
+}
+
+fn first_and_last_lines(path: &Path) -> std::io::Result<(Option<serde_json::Value>, Option<serde_json::Value>)> {
+    use std::io::{BufRead, Read, Seek, SeekFrom};
+    const TAIL: u64 = 64 * 1024;
+    let mut f = fs::File::open(path)?;
+    let len = f.metadata()?.len();
+    let mut first = String::new();
+    std::io::BufReader::new((&f).take(TAIL)).read_line(&mut first)?;
+    f.seek(SeekFrom::Start(len.saturating_sub(TAIL)))?;
+    let mut tail = String::new();
+    f.take(TAIL).read_to_string(&mut tail).ok();
+    let parse = |l: &str| serde_json::from_str::<serde_json::Value>(l.trim()).ok().filter(|v| v.is_object());
+    let last = tail.lines().rev().find(|l| !l.trim().is_empty()).and_then(parse);
+    Ok((parse(&first), last))
+}
+
+fn list_transcripts_at(root: &Path) -> Vec<TranscriptSummary> {
+    let Ok(dir) = fs::read_dir(root.join("logs/transcripts")) else { return vec![] };
+    let mut files: Vec<(std::time::SystemTime, String)> = dir
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().to_str()?.to_string();
+            let id = name.strip_suffix(".jsonl")?;
+            if !is_run_id(id) {
+                return None;
+            }
+            let meta = e.metadata().ok()?;
+            meta.is_file().then(|| (meta.modified().unwrap_or(std::time::UNIX_EPOCH), id.to_string()))
+        })
+        .collect();
+    files.sort_by(|a, b| b.0.cmp(&a.0));
+    files
+        .into_iter()
+        .take(TRANSCRIPT_INDEX_MAX)
+        .filter_map(|(modified, id)| {
+            let path = resolve_portfolio_file(root, "logs/transcripts", &format!("{}.jsonl", id)).ok()?;
+            let (start, last) = first_and_last_lines(&path).ok()?;
+            Some(TranscriptSummary {
+                run_id: id,
+                start,
+                last,
+                modified: chrono::DateTime::<chrono::Local>::from(modified).to_rfc3339(),
+            })
+        })
+        .collect()
+}
+
+#[tauri::command]
+async fn list_transcripts() -> Result<String, String> {
+    let root = get_portfolio_dir()?;
+    let list = tauri::async_runtime::spawn_blocking(move || list_transcripts_at(&root))
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_string(&list).map_err(|e| e.to_string())
+}
+
+// ==========================================
+// Tracker (~/project-tracker): read-only, a fixed allowlist of files
+// ==========================================
+
+// tasks.json keeps every task ever seen, so it is allowed to be bigger than a status report.
+const TRACKER_MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
+const TRACKER_DATA_FILES: &[&str] = &[
+    "tasks.json",
+    "email.json",
+    "scan.json",
+    "stripe.json",
+    "bank.json",
+    "payments_email.json",
+];
+const TRACKER_ROOT_FILES: &[&str] = &["projects.json", "notes.json"];
+
+fn get_tracker_dir() -> Result<PathBuf, String> {
+    home_subdir("project-tracker", "PULSE_TRACKER_DIR")?
+        .canonicalize()
+        .map_err(|_| "~/project-tracker not found".to_string())
+}
+
+// Only the named files can be read: the data files in ~/project-tracker/data and the two
+// registry files at the root. Anything else (todos.json, accounts.json, ../) is refused, and a
+// symlink that resolves outside its expected directory is refused too.
+fn resolve_tracker_file(root: &Path, name: &str) -> Result<PathBuf, String> {
+    let dir = if TRACKER_DATA_FILES.contains(&name) {
+        root.join("data")
+    } else if TRACKER_ROOT_FILES.contains(&name) {
+        root.to_path_buf()
+    } else {
+        return Err("not an allowed tracker file".to_string());
+    };
+    let resolved = dir.join(name).canonicalize().map_err(|_| "missing".to_string())?;
+    if resolved.parent() != Some(dir.as_path()) {
+        return Err("path is outside ~/project-tracker".to_string());
+    }
+    Ok(resolved)
+}
+
+fn read_tracker_json(root: &Path, name: &str) -> Result<serde_json::Value, String> {
+    let path = resolve_tracker_file(root, name)?;
+    let text = read_text_capped(&path, TRACKER_MAX_FILE_BYTES)?;
+    let value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("malformed: {}", e))?;
+    if !value.is_object() {
+        return Err("malformed: not a JSON object".to_string());
+    }
+    Ok(value)
+}
+
+// Each struct below names only the fields Pulse shows. serde drops everything else
+// (email snippets, task evidence, repo paths, payer names, account ids) before the webview sees it.
+
+#[derive(Deserialize, Serialize)]
+struct TrackerTask {
+    id: String,
+    title: String,
+    #[serde(default)]
+    detail: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    project: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    urgency: Option<String>,
+    status: String,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    first_seen: Option<f64>,
+    #[serde(default)]
+    show_from: Option<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct TrackerEmail {
+    #[serde(default)]
+    account_label: Option<String>,
+    #[serde(default)]
+    sender: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    subject: Option<String>,
+    #[serde(default)]
+    date: Option<String>,
+    #[serde(default)]
+    age_days: Option<f64>,
+    #[serde(default)]
+    project: Option<String>,
+    #[serde(default)]
+    urgency: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+}
+
+#[derive(Serialize)]
+struct TrackerEmailSummary {
+    collected_at: Option<f64>,
+    stale: bool,
+    age_hours: Option<f64>,
+    needs_reply: Vec<TrackerEmail>,
+    replied_count: usize,
+    accounts_not_fetching: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct TrackerRepo {
+    id: String,
+    name: String,
+    exists: bool,
+    is_git: bool,
+    branch: Option<String>,
+    dirty_count: Option<i64>,
+    days_idle: Option<f64>,
+    last_commit_ts: Option<f64>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct TrackerProject {
+    id: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    area: Option<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct TrackerNote {
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    goal: Option<String>,
+    #[serde(default)]
+    next: Option<String>,
+    #[serde(default)]
+    blocked_on: Option<String>,
+}
+
+#[derive(Serialize)]
+struct TrackerSnapshot {
+    // The tracker is optional: false when ~/project-tracker doesn't exist, and Pulse hides
+    // everything that reads it (tasks, inbox, money) instead of showing an error.
+    installed: bool,
+    error: Option<String>,
+    file_errors: HashMap<String, String>,
+    tasks: Vec<TrackerTask>,
+    tasks_updated_at: Option<f64>,
+    email: Option<TrackerEmailSummary>,
+    repos: Vec<TrackerRepo>,
+    scanned_at: Option<f64>,
+    money: MoneySummary,
+    projects: Vec<TrackerProject>,
+    notes: HashMap<String, TrackerNote>,
+    read_at: String,
+}
+
+// Open and scheduled tasks only; done and stale history stays in the tracker.
+fn tracker_tasks(doc: &serde_json::Value) -> Vec<TrackerTask> {
+    let Some(map) = doc.get("tasks").and_then(|t| t.as_object()) else { return vec![] };
+    map.values()
+        .filter_map(|v| serde_json::from_value::<TrackerTask>(v.clone()).ok())
+        .filter(|t| t.status == "open" || t.status == "scheduled")
+        .collect()
+}
+
+fn tracker_email(doc: &serde_json::Value) -> TrackerEmailSummary {
+    let needs_reply = doc
+        .get("needs_reply")
+        .and_then(|v| v.as_array())
+        .map(|list| list.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect())
+        .unwrap_or_default();
+    let accounts_not_fetching = doc
+        .get("accounts")
+        .and_then(|v| v.as_object())
+        .map(|accts| {
+            accts.iter()
+                .filter(|(_, a)| !a.get("ok").and_then(|v| v.as_bool()).unwrap_or(false))
+                .map(|(id, a)| a.get("label").and_then(|v| v.as_str()).unwrap_or(id).to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    TrackerEmailSummary {
+        collected_at: doc.get("collected_at").and_then(|v| v.as_f64()),
+        stale: doc.get("stale").and_then(|v| v.as_bool()).unwrap_or(true),
+        age_hours: doc.get("age_hours").and_then(|v| v.as_f64()),
+        needs_reply,
+        replied_count: doc.get("replied_to").and_then(|v| v.as_array()).map_or(0, |a| a.len()),
+        accounts_not_fetching,
+    }
+}
+
+fn tracker_repos(doc: &serde_json::Value) -> Vec<TrackerRepo> {
+    let Some(list) = doc.get("projects").and_then(|v| v.as_array()) else { return vec![] };
+    list.iter()
+        .filter_map(|p| {
+            let id = p.get("id")?.as_str()?.to_string();
+            let git = p.get("git");
+            let git_str = |k: &str| git.and_then(|g| g.get(k)).and_then(|v| v.as_str()).map(String::from);
+            Some(TrackerRepo {
+                name: p.get("name").and_then(|v| v.as_str()).unwrap_or(&id).to_string(),
+                id,
+                exists: p.get("exists").and_then(|v| v.as_bool()).unwrap_or(false),
+                is_git: git.and_then(|g| g.get("is_git")).and_then(|v| v.as_bool()).unwrap_or(false),
+                branch: git_str("branch"),
+                dirty_count: git.and_then(|g| g.get("dirty_count")).and_then(|v| v.as_i64()),
+                days_idle: p.get("days_idle").and_then(|v| v.as_f64()),
+                last_commit_ts: git.and_then(|g| g.get("last_commit_ts")).and_then(|v| v.as_f64()),
+            })
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn read_tracker() -> Result<String, String> {
+    let read_at = chrono::Local::now().to_rfc3339();
+    let now = chrono::Local::now().timestamp() as f64;
+    let mut snapshot = TrackerSnapshot {
+        installed: false,
+        error: None,
+        file_errors: HashMap::new(),
+        tasks: vec![],
+        tasks_updated_at: None,
+        email: None,
+        repos: vec![],
+        scanned_at: None,
+        money: build_money(&serde_json::Value::Null, &serde_json::Value::Null, &serde_json::Value::Null, now),
+        projects: vec![],
+        notes: HashMap::new(),
+        read_at,
+    };
+    let root = match get_tracker_dir() {
+        Ok(root) => root,
+        Err(e) => {
+            snapshot.error = Some(e);
+            return serde_json::to_string(&snapshot).map_err(|e| e.to_string());
+        }
+    };
+    snapshot.installed = true;
+
+    let mut read = |name: &str| match read_tracker_json(&root, name) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            snapshot.file_errors.insert(name.to_string(), e);
+            None
+        }
+    };
+    let tasks = read("tasks.json");
+    let email = read("email.json");
+    let scan = read("scan.json");
+    let stripe = read("stripe.json").unwrap_or_default();
+    let bank = read("bank.json").unwrap_or_default();
+    let payments = read("payments_email.json").unwrap_or_default();
+    let projects = read("projects.json");
+    let notes = read("notes.json");
+
+    if let Some(doc) = tasks {
+        snapshot.tasks = tracker_tasks(&doc);
+        snapshot.tasks_updated_at = doc.get("updated_at").and_then(|v| v.as_f64());
+    }
+    snapshot.email = email.as_ref().map(tracker_email);
+    if let Some(doc) = scan {
+        snapshot.repos = tracker_repos(&doc);
+        snapshot.scanned_at = doc.get("generated_at").and_then(|v| v.as_f64());
+    }
+    snapshot.money = build_money(&stripe, &payments, &bank, now);
+    if let Some(list) = projects.as_ref().and_then(|d| d.get("projects")).and_then(|v| v.as_array()) {
+        snapshot.projects = list.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect();
+    }
+    if let Some(map) = notes.as_ref().and_then(|d| d.get("notes")).and_then(|v| v.as_object()) {
+        snapshot.notes = map
+            .iter()
+            .filter_map(|(k, v)| serde_json::from_value(v.clone()).ok().map(|n| (k.clone(), n)))
+            .collect();
+    }
+    serde_json::to_string(&snapshot).map_err(|e| e.to_string())
+}
+
+// ------------------------------------------
+// Money: a port of ~/project-tracker/money.py so Pulse shows the same totals as the brief.
+// The same dollars often arrive three ways (Stripe charge, its payout, the bank deposit), so
+// sightings are matched and only one is counted. Totals and per-project breakdowns (with
+// payer names, for the owner's own screen) leave this module; raw events and descriptions do not.
+// ------------------------------------------
+
+const DAY_SECS: f64 = 86400.0;
+const PAYOUT_RAILS: &[&str] = &["stripe", "venmo", "paypal", "square", "cashapp"];
+const FEE_RAILS: &[&str] = &["paypal", "square", "stripe", "venmo", "cashapp"];
+const NOT_INCOME_RAILS: &[&str] = &["transfer", "refund"];
+
+#[derive(Clone, Debug)]
+struct MoneyEvent {
+    id: String,
+    channel: &'static str,
+    source: String,
+    kind: String,
+    amount: f64,
+    net: Option<f64>,
+    currency: String,
+    created: f64,
+    payer: String,
+    project: Option<String>,
+    dup_of: Option<String>,
+    counted: bool,
+}
+
+struct MoneyFlag {
+    kind: &'static str,
+    amount: f64,
+    created: f64,
+}
+
+#[derive(Serialize, Default, Debug, PartialEq)]
+struct MoneyTotals {
+    today: f64,
+    d7: f64,
+    d30: f64,
+}
+
+#[derive(Serialize)]
+struct MoneySource {
+    ok: bool,
+}
+
+#[derive(Serialize)]
+struct MoneySummary {
+    configured: bool,
+    sources: HashMap<String, MoneySource>,
+    totals: MoneyTotals,
+    counts: HashMap<String, usize>,
+    failed_30d: usize,
+    refunds_30d: f64,
+    mrr_total: f64,
+    finance: MoneyFinance,
+}
+
+// Breakdowns for Pulse's finance views, built from the same counted events as the totals,
+// so every breakdown adds up to the brief's numbers. Pulse sums tracker projects per entity.
+#[derive(Serialize, Default)]
+struct MoneyFinance {
+    coverage: Vec<MoneyCoverage>,
+    projects: Vec<ProjectFinance>,
+    stripe_accounts: Vec<StripeAccount>,
+    bank_accounts: Vec<BankAccount>,
+}
+
+// How far back a source's file reaches: each collector keeps `window_days` before `collected_at`.
+#[derive(Serialize)]
+struct MoneyCoverage {
+    source: String,
+    ok: bool,
+    reason: Option<String>,
+    collected_at: Option<f64>,
+    window_days: Option<f64>,
+}
+
+#[derive(Serialize, Default)]
+struct ProjectFinance {
+    project: String, // tracker project id, or "unsorted"
+    d30: f64,
+    d90: f64,
+    months: Vec<(String, f64)>,      // [YYYY-MM local, total], oldest first, every month on file
+    by_channel: Vec<(String, f64)>,  // 90 days: stripe | bank | email, largest first
+    by_rail: Vec<(String, String, f64)>, // 90 days: [channel, rail (zelle, venmo...), total], largest first
+    payers: Vec<PayerTotal>,         // 90 days, largest first
+    no_payer_90d: f64,               // counted with no payer name (payouts, bank deposits)
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+struct PayerTotal {
+    name: String,
+    total: f64,
+    payments: usize,
+}
+
+#[derive(Serialize)]
+struct StripeAccount {
+    project: String,
+    ok: bool,
+    error: Option<String>,
+    active: u64,
+    mrr: f64,
+}
+
+#[derive(Serialize)]
+struct BankAccount {
+    name: String,
+    org: String,
+    project: Option<String>,
+    balance: Option<f64>,
+    currency: String,
+}
+
+fn sorted_desc(m: HashMap<String, f64>) -> Vec<(String, f64)> {
+    let mut v: Vec<(String, f64)> = m.into_iter().map(|(k, a)| (k, round_cents(a))).collect();
+    v.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    v
+}
+
+fn local_month(ts: f64) -> String {
+    chrono::DateTime::from_timestamp(ts as i64, 0)
+        .map(|t| t.with_timezone(&chrono::Local).format("%Y-%m").to_string())
+        .unwrap_or_default()
+}
+
+fn money_finance(counted: &[&MoneyEvent], stripe: &serde_json::Value, mail: &serde_json::Value, bank: &serde_json::Value, now: f64) -> MoneyFinance {
+    let (d30, d90) = (now - 30.0 * DAY_SECS, now - 90.0 * DAY_SECS);
+    let mut by_project: HashMap<String, Vec<&MoneyEvent>> = HashMap::new();
+    for e in counted {
+        by_project.entry(e.project.clone().unwrap_or_else(|| "unsorted".into())).or_default().push(e);
+    }
+    let mut projects: Vec<ProjectFinance> = by_project
+        .into_iter()
+        .map(|(project, events)| {
+            let recent: Vec<&&MoneyEvent> = events.iter().filter(|e| e.created >= d90).collect();
+            let mut months: HashMap<String, f64> = HashMap::new();
+            for e in &events {
+                *months.entry(local_month(e.created)).or_default() += e.amount;
+            }
+            let mut months: Vec<(String, f64)> = months.into_iter().map(|(k, a)| (k, round_cents(a))).collect();
+            months.sort_by(|a, b| a.0.cmp(&b.0));
+            let mut channel = HashMap::new();
+            let mut rail: HashMap<(String, String), f64> = HashMap::new();
+            // Payers match case-insensitively; the first spelling seen is the one shown.
+            let mut payers: Vec<PayerTotal> = Vec::new();
+            let mut no_payer = 0.0;
+            for e in &recent {
+                *channel.entry(e.channel.to_string()).or_default() += e.amount;
+                *rail.entry((e.channel.to_string(), e.source.clone())).or_default() += e.amount;
+                let name = e.payer.trim();
+                if name.is_empty() {
+                    no_payer += e.amount;
+                } else if let Some(p) = payers.iter_mut().find(|p| p.name.to_lowercase() == name.to_lowercase()) {
+                    p.total += e.amount;
+                    p.payments += 1;
+                } else {
+                    payers.push(PayerTotal { name: name.to_string(), total: e.amount, payments: 1 });
+                }
+            }
+            for p in &mut payers {
+                p.total = round_cents(p.total);
+            }
+            payers.sort_by(|a, b| b.total.total_cmp(&a.total).then_with(|| a.name.cmp(&b.name)));
+            ProjectFinance {
+                project,
+                d30: round_cents(events.iter().filter(|e| e.created >= d30).map(|e| e.amount).sum()),
+                d90: round_cents(recent.iter().map(|e| e.amount).sum()),
+                months,
+                by_channel: sorted_desc(channel),
+                by_rail: {
+                    let mut v: Vec<(String, String, f64)> = rail.into_iter().map(|((c, r), a)| (c, r, round_cents(a))).collect();
+                    v.sort_by(|a, b| b.2.total_cmp(&a.2).then_with(|| a.1.cmp(&b.1)));
+                    v
+                },
+                payers,
+                no_payer_90d: round_cents(no_payer),
+            }
+        })
+        .collect();
+    projects.sort_by(|a, b| b.d90.total_cmp(&a.d90).then_with(|| a.project.cmp(&b.project)));
+
+    let coverage = [("stripe", stripe), ("email", mail), ("bank", bank)]
+        .into_iter()
+        .map(|(source, d)| MoneyCoverage {
+            source: source.to_string(),
+            ok: is_ok(d),
+            reason: d.get("reason").and_then(|v| v.as_str()).map(String::from),
+            collected_at: jf64(d, "collected_at"),
+            window_days: jf64(d, "window_days"),
+        })
+        .collect();
+
+    let mut stripe_accounts = Vec::new();
+    if is_ok(stripe) {
+        if let Some(accounts) = stripe.get("accounts").and_then(|a| a.as_object()) {
+            for (pid, a) in accounts {
+                let sub = stripe.get("subscriptions").and_then(|s| s.get(pid));
+                stripe_accounts.push(StripeAccount {
+                    project: pid.clone(),
+                    ok: is_ok(a),
+                    error: a.get("error").and_then(|v| v.as_str()).map(String::from),
+                    active: sub.and_then(|s| s.get("active")).and_then(|v| v.as_u64()).unwrap_or(0),
+                    mrr: round_cents(sub.and_then(|s| jf64(s, "mrr")).unwrap_or(0.0)),
+                });
+            }
+        }
+    }
+
+    let bank_accounts = if is_ok(bank) {
+        jlist(bank, "accounts")
+            .map(|a| BankAccount {
+                name: jstr(a, "name"),
+                org: jstr(a, "org"),
+                project: jproject(a),
+                balance: jf64(a, "balance"),
+                currency: {
+                    let c = jstr(a, "currency");
+                    if c.is_empty() { "usd".to_string() } else { c }
+                },
+            })
+            .collect()
+    } else {
+        vec![]
+    };
+
+    MoneyFinance { coverage, projects, stripe_accounts, bank_accounts }
+}
+
+fn jstr(v: &serde_json::Value, k: &str) -> String {
+    v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string()
+}
+fn jf64(v: &serde_json::Value, k: &str) -> Option<f64> {
+    v.get(k).and_then(|x| x.as_f64())
+}
+fn jproject(v: &serde_json::Value) -> Option<String> {
+    v.get("project").and_then(|x| x.as_str()).map(String::from)
+}
+fn jlist<'a>(v: &'a serde_json::Value, k: &str) -> impl Iterator<Item = &'a serde_json::Value> {
+    v.get(k).and_then(|x| x.as_array()).into_iter().flatten()
+}
+fn is_ok(v: &serde_json::Value) -> bool {
+    v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn money_event(
+    id: String, channel: &'static str, source: String, kind: &str, amount: f64,
+    net: Option<f64>, currency: String, created: f64, payer: String, project: Option<String>,
+) -> MoneyEvent {
+    MoneyEvent {
+        id, channel, source, kind: kind.to_string(), amount, net, currency, created, payer, project,
+        dup_of: None, counted: false,
+    }
+}
+
+fn money_normalize(stripe: &serde_json::Value, mail: &serde_json::Value, bank: &serde_json::Value) -> (Vec<MoneyEvent>, Vec<MoneyFlag>) {
+    let mut ev = Vec::new();
+    let mut flags = Vec::new();
+    let currency = |v: &serde_json::Value| {
+        let c = jstr(v, "currency");
+        if c.is_empty() { "usd".to_string() } else { c }
+    };
+    if is_ok(stripe) {
+        for c in jlist(stripe, "charges") {
+            let (Some(amount), Some(created)) = (jf64(c, "amount"), jf64(c, "created")) else { continue };
+            ev.push(money_event(jstr(c, "id"), "stripe", "stripe".into(), "payment", amount,
+                jf64(c, "net"), currency(c), created, jstr(c, "payer"), jproject(c)));
+        }
+        for p in jlist(stripe, "payouts") {
+            let Some(amount) = jf64(p, "amount") else { continue };
+            let created = jf64(p, "arrival").or_else(|| jf64(p, "created")).unwrap_or(0.0);
+            let status = jstr(p, "status");
+            if status == "canceled" || status == "failed" {
+                flags.push(MoneyFlag { kind: "payout failed", amount, created });
+                continue;
+            }
+            ev.push(money_event(jstr(p, "id"), "stripe", "stripe".into(), "payout", amount, None,
+                currency(p), created, String::new(), jproject(p)));
+        }
+        for c in jlist(stripe, "failed") {
+            flags.push(MoneyFlag { kind: "failed", amount: jf64(c, "amount").unwrap_or(0.0), created: jf64(c, "created").unwrap_or(0.0) });
+        }
+        for r in jlist(stripe, "refunds") {
+            flags.push(MoneyFlag { kind: "refund", amount: jf64(r, "amount").unwrap_or(0.0), created: jf64(r, "created").unwrap_or(0.0) });
+        }
+    }
+    if is_ok(mail) {
+        for m in jlist(mail, "items") {
+            let (Some(amount), Some(created)) = (jf64(m, "amount"), jf64(m, "created")) else { continue };
+            ev.push(money_event(format!("mail:{}", jstr(m, "id")), "email", jstr(m, "source"),
+                &jstr(m, "kind"), amount, None, "usd".into(), created, jstr(m, "payer"), jproject(m)));
+        }
+    }
+    if is_ok(bank) {
+        for b in jlist(bank, "inflows") {
+            let (Some(amount), Some(created)) = (jf64(b, "amount"), jf64(b, "created")) else { continue };
+            let rail = jstr(b, "rail");
+            ev.push(money_event(format!("bank:{}", jstr(b, "id")), "bank",
+                if rail.is_empty() { "deposit".into() } else { rail }, "deposit", amount, None,
+                currency(b), created, String::new(), jproject(b)));
+        }
+    }
+    ev.sort_by(|a, b| a.created.total_cmp(&b.created));
+    (ev, flags)
+}
+
+fn money_amount_match(primary: &MoneyEvent, secondary: &MoneyEvent, fee_ok: bool) -> bool {
+    let (a, b) = (primary.amount, secondary.amount);
+    (a - b).abs() < 0.011
+        || primary.net.is_some_and(|n| (n - b).abs() < 0.011)
+        || (fee_ok && a * 0.955 - 0.50 <= b && b < a)
+}
+
+fn money_within(primary: &MoneyEvent, secondary: &MoneyEvent, before_days: f64, after_days: f64) -> bool {
+    let d = (secondary.created - primary.created) / DAY_SECS;
+    -before_days <= d && d <= after_days
+}
+
+// Labels duplicates in place. `covered` = sources whose individual payments are already
+// visible. A sighting absorbs at most one duplicate per channel and kind.
+fn money_dedupe(events: &mut [MoneyEvent], covered: &std::collections::HashSet<String>) {
+    let mut used: std::collections::HashSet<(String, &'static str, String)> = Default::default();
+
+    fn find(events: &[MoneyEvent], used: &std::collections::HashSet<(String, &'static str, String)>,
+            e: usize, cands: &[usize], before: f64, after: f64, fee_ok: bool) -> Option<usize> {
+        cands.iter().copied().find(|&p| {
+            p != e
+                && events[p].dup_of.is_none()
+                && !used.contains(&(events[p].id.clone(), events[e].channel, events[e].kind.clone()))
+                && money_amount_match(&events[p], &events[e], fee_ok)
+                && money_within(&events[p], &events[e], before, after)
+        })
+    }
+    fn link(events: &mut [MoneyEvent], used: &mut std::collections::HashSet<(String, &'static str, String)>, dup: usize, prim: usize) {
+        events[dup].dup_of = Some(events[prim].id.clone());
+        used.insert((events[prim].id.clone(), events[dup].channel, events[dup].kind.clone()));
+    }
+
+    let idx = |ch: &str| -> Vec<usize> { (0..events.len()).filter(|&i| events[i].channel == ch).collect() };
+    let (api, mail, bank) = (idx("stripe"), idx("email"), idx("bank"));
+
+    // 1. Stripe emails vs the Stripe API (same object seen twice).
+    for &e in &mail {
+        if events[e].source == "stripe" {
+            let cands: Vec<usize> = api.iter().copied().filter(|&a| events[a].kind == events[e].kind).collect();
+            if let Some(p) = find(events, &used, e, &cands, 3.0, 3.0, false) {
+                link(events, &mut used, e, p);
+            }
+        }
+    }
+    // 2. The same notification in two inboxes / two alerts for one Zelle.
+    for (i, &e) in mail.iter().enumerate() {
+        if events[e].dup_of.is_some() {
+            continue;
+        }
+        for &p in &mail[..i] {
+            let (pe, ee) = (&events[p], &events[e]);
+            let zelle_bank = |s: &str| s == "zelle" || s == "bank";
+            if pe.dup_of.is_none()
+                && pe.kind == ee.kind
+                && (pe.amount - ee.amount).abs() < 0.011
+                && (pe.created - ee.created).abs() < 2.0 * DAY_SECS
+                && ((zelle_bank(&pe.source) && zelle_bank(&ee.source)) || pe.source == ee.source)
+                && (pe.payer.is_empty() || ee.payer.is_empty() || pe.payer.to_lowercase() == ee.payer.to_lowercase())
+            {
+                link(events, &mut used, e, p);
+                break;
+            }
+        }
+    }
+    let payouts: Vec<usize> = api.iter().chain(&mail).copied()
+        .filter(|&i| events[i].kind == "payout" && events[i].dup_of.is_none()).collect();
+    // A bank's email about a platform deposit is a bank line that arrived by email.
+    let landed: Vec<usize> = mail.iter().copied()
+        .filter(|&i| events[i].kind == "deposit" && PAYOUT_RAILS.contains(&events[i].source.as_str()) && events[i].dup_of.is_none())
+        .collect();
+    let payments: Vec<usize> = mail.iter().copied()
+        .filter(|&i| (events[i].kind == "payment" || events[i].kind == "deposit") && events[i].dup_of.is_none() && !landed.contains(&i))
+        .collect();
+    for e in landed.iter().chain(&bank).copied() {
+        let src = events[e].source.clone();
+        // 3. Bank line for a platform payout (arrives 0-5 days after).
+        let rail_payouts: Vec<usize> = payouts.iter().copied()
+            .filter(|&p| events[p].source == src || src == "ach" || src == "deposit").collect();
+        if let Some(p) = find(events, &used, e, &rail_payouts, 1.0, 5.0, false) {
+            link(events, &mut used, e, p);
+            continue;
+        }
+        // 4. Bank line for an emailed payment (Zelle alert, bank deposit alert, PayPal...).
+        let cands: Vec<usize> = payments.iter().copied()
+            .filter(|&p| {
+                let ps = events[p].source.as_str();
+                ps == src || (["zelle", "bank", "quickbooks"].contains(&ps) && ["zelle", "ach", "deposit", "check"].contains(&src.as_str()))
+            })
+            .collect();
+        if let Some(p) = find(events, &used, e, &cands, 1.0, 4.0, FEE_RAILS.contains(&src.as_str())) {
+            link(events, &mut used, e, p);
+            continue;
+        }
+        // 5. A Stripe charge paid out alone (no payout data): bank = net of fee.
+        if src == "stripe" {
+            let charges: Vec<usize> = api.iter().copied().filter(|&a| events[a].kind == "payment").collect();
+            if let Some(p) = find(events, &used, e, &charges, 0.0, 7.0, true) {
+                link(events, &mut used, e, p);
+                continue;
+            }
+        }
+        // 6. A platform cash-out whose individual payments are already counted.
+        if PAYOUT_RAILS.contains(&src.as_str()) && covered.contains(&src) {
+            events[e].dup_of = Some("source".to_string());
+        }
+    }
+}
+
+fn money_classify(events: &mut [MoneyEvent], covered: &std::collections::HashSet<String>) {
+    for e in events.iter_mut().filter(|e| e.dup_of.is_none()) {
+        e.counted = if e.kind == "payout" && covered.contains(&e.source) {
+            false
+        } else if e.kind == "payout" && e.currency == "usd" {
+            true // the payout is the only record of that income
+        } else if e.channel == "bank" && NOT_INCOME_RAILS.contains(&e.source.as_str()) {
+            false
+        } else {
+            e.currency == "usd"
+        };
+    }
+}
+
+fn round_cents(v: f64) -> f64 {
+    // + 0.0 turns the -0.0 of an empty f64 sum into 0.0
+    (v * 100.0).round() / 100.0 + 0.0
+}
+
+fn build_money(stripe: &serde_json::Value, mail: &serde_json::Value, bank: &serde_json::Value, now: f64) -> MoneySummary {
+    let (mut events, flags) = money_normalize(stripe, mail, bank);
+    let mut covered = std::collections::HashSet::new();
+    if is_ok(stripe) {
+        covered.insert("stripe".to_string());
+    }
+    if is_ok(mail) {
+        covered.extend(events.iter().filter(|e| e.channel == "email" && e.kind == "payment").map(|e| e.source.clone()));
+    }
+    money_dedupe(&mut events, &covered);
+    money_classify(&mut events, &covered);
+
+    let midnight = chrono::DateTime::from_timestamp(now as i64, 0)
+        .map(|t| t.with_timezone(&chrono::Local).date_naive())
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .and_then(|d| d.and_local_timezone(chrono::Local).earliest())
+        .map_or(now - DAY_SECS, |t| t.timestamp() as f64);
+    let (d7, d30) = (now - 7.0 * DAY_SECS, now - 30.0 * DAY_SECS);
+    let counted: Vec<&MoneyEvent> = events.iter().filter(|e| e.counted).collect();
+    let sum_since = |s: f64| round_cents(counted.iter().filter(|e| e.created >= s).map(|e| e.amount).sum());
+    let count_since = |s: f64| counted.iter().filter(|e| e.created >= s).count();
+    let recent_flags: Vec<&MoneyFlag> = flags.iter().filter(|f| f.created >= d30).collect();
+    let mrr_total = if is_ok(stripe) {
+        stripe.get("subscriptions").and_then(|s| s.as_object()).map_or(0.0, |subs| {
+            subs.values()
+                .filter(|s| s.get("active").and_then(|v| v.as_f64()).unwrap_or(0.0) > 0.0)
+                .map(|s| s.get("mrr").and_then(|v| v.as_f64()).unwrap_or(0.0))
+                .sum()
+        })
+    } else {
+        0.0
+    };
+    let sources: HashMap<String, MoneySource> = [("stripe", stripe), ("email", mail), ("bank", bank)]
+        .into_iter()
+        .map(|(k, d)| (k.to_string(), MoneySource { ok: is_ok(d) }))
+        .collect();
+
+    MoneySummary {
+        configured: sources.values().any(|s| s.ok),
+        sources,
+        totals: MoneyTotals { today: sum_since(midnight), d7: sum_since(d7), d30: sum_since(d30) },
+        counts: [("today", count_since(midnight)), ("d7", count_since(d7)), ("d30", count_since(d30))]
+            .into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+        failed_30d: recent_flags.iter().filter(|f| f.kind == "failed").count(),
+        refunds_30d: round_cents(recent_flags.iter().filter(|f| f.kind == "refund").map(|f| f.amount).sum()),
+        mrr_total: round_cents(mrr_total),
+        finance: money_finance(&counted, stripe, mail, bank, now),
+    }
 }
 
 // ==========================================
@@ -2091,50 +3494,126 @@ fn set_auto_launch_enabled(enabled: bool) -> Result<(), String> {
 // Tauri App Entry Point
 // ==========================================
 
+// ==========================================
+// Menu bar item: decisions waiting on the owner, and a way back in
+// ==========================================
+
+const TRAY_ID: &str = "pulse";
+
+// The count beside the menu bar mark, then how many agents are working; nothing when both are zero.
+fn tray_title(count: u32, working: usize) -> Option<String> {
+    let mut parts = Vec::new();
+    if count > 0 {
+        parts.push(count.to_string());
+    }
+    if working > 0 {
+        parts.push(format!("● {}", working));
+    }
+    (!parts.is_empty()).then(|| parts.join("  "))
+}
+
+fn tray_tooltip(count: u32, working: usize) -> String {
+    let decisions = match count {
+        0 => "Pulse: no decisions waiting".to_string(),
+        1 => "Pulse: 1 decision needs you".to_string(),
+        n => format!("Pulse: {} decisions need you", n),
+    };
+    match working {
+        0 => decisions,
+        1 => format!("{} · 1 agent working", decisions),
+        n => format!("{} · {} agents working", decisions, n),
+    }
+}
+
+// One working agent in the menu; choosing it opens its conversation.
+#[derive(Deserialize)]
+struct TrayRun {
+    run_id: String,
+    label: String,
+}
+
+const TRAY_RUN_PREFIX: &str = "run:";
+const TRAY_RUNS_SHOWN: usize = 8;
+
+fn tray_menu(app: &AppHandle, working: &[TrayRun]) -> tauri::Result<Menu<tauri::Wry>> {
+    let menu = Menu::new(app)?;
+    if !working.is_empty() {
+        menu.append(&MenuItem::with_id(app, "working", "Working now", false, None::<&str>)?)?;
+        for r in working.iter().filter(|r| is_run_id(&r.run_id)).take(TRAY_RUNS_SHOWN) {
+            let label: String = r.label.chars().take(70).collect();
+            menu.append(&MenuItem::with_id(app, format!("{}{}", TRAY_RUN_PREFIX, r.run_id), format!("● {}", label), true, None::<&str>)?)?;
+        }
+        menu.append(&PredefinedMenuItem::separator(app)?)?;
+    }
+    menu.append(&MenuItem::with_id(app, "open", "Open Pulse", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(app, "today", "Today", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(app, "conversations", "Conversations", true, None::<&str>)?)?;
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+    menu.append(&MenuItem::with_id(app, "quit", "Quit Pulse", true, Some("CmdOrCtrl+Q"))?)?;
+    Ok(menu)
+}
+
+// The webview computes the decision count from the same data as Today, and the working
+// list from read_live, and sends both here.
+#[tauri::command]
+fn set_tray_status(app: AppHandle, count: u32, working: Vec<TrayRun>) -> Result<(), String> {
+    let tray = app.tray_by_id(TRAY_ID).ok_or("menu bar item not created")?;
+    tray.set_title(tray_title(count, working.len())).map_err(|e| e.to_string())?;
+    tray.set_tooltip(Some(tray_tooltip(count, working.len()))).map_err(|e| e.to_string())?;
+    let menu = tray_menu(&app, &working).map_err(|e| e.to_string())?;
+    tray.set_menu(Some(menu)).map_err(|e| e.to_string())
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
-            // Create tray menu
-            let quit = MenuItem::with_id(app, "quit", "Quit Pulse", true, None::<&str>)?;
-            let show = MenuItem::with_id(app, "show", "Show Dashboard", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let menu = tray_menu(app.handle(), &[])?;
 
-            // Create tray icon
-            let _tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+            // A template image: macOS tints it for light and dark menu bars.
+            let icon = Image::from_bytes(include_bytes!("../icons/tray-template@2x.png"))?;
+            TrayIconBuilder::with_id(TRAY_ID)
+                .icon(icon)
+                .icon_as_template(true)
+                .tooltip(tray_tooltip(0, 0))
                 .menu(&menu)
-                .show_menu_on_left_click(false)
+                .show_menu_on_left_click(true)
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "quit" => {
-                        app.exit(0);
+                    "open" => show_main_window(app),
+                    "today" | "conversations" => {
+                        show_main_window(app);
+                        let _ = app.emit("pulse://navigate", event.id.as_ref());
                     }
-                    "show" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
-                    }
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
+                    "quit" => app.exit(0),
+                    id => {
+                        if let Some(run_id) = id.strip_prefix(TRAY_RUN_PREFIX).filter(|r| is_run_id(r)) {
+                            show_main_window(app);
+                            let _ = app.emit("pulse://open-run", run_id);
                         }
                     }
                 })
                 .build(app)?;
 
             Ok(())
+        })
+        // Closing the window keeps Pulse in the menu bar; Quit (menu or Cmd+Q) exits.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_settings,
@@ -2150,10 +3629,136 @@ pub fn run() {
             get_auto_launch_enabled,
             set_auto_launch_enabled,
             read_portfolio,
-            set_tv_fullscreen
+            set_tv_fullscreen,
+            read_tracker,
+            set_tray_status,
+            act_on_decision,
+            read_activity,
+            read_live,
+            read_transcript,
+            list_transcripts,
+            setup_check
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app, event| {
+        // Clicking the Dock icon brings the hidden window back.
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Reopen { .. } = event {
+            show_main_window(app);
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (app, event);
+    });
+}
+
+#[cfg(test)]
+mod tray_tests {
+    use super::*;
+
+    #[test]
+    fn titles_and_tooltips_count_decisions() {
+        assert_eq!(tray_title(0, 0), None);
+        assert_eq!(tray_title(7, 0).as_deref(), Some("7"));
+        assert_eq!(tray_tooltip(0, 0), "Pulse: no decisions waiting");
+        assert_eq!(tray_tooltip(1, 0), "Pulse: 1 decision needs you");
+        assert_eq!(tray_tooltip(22, 0), "Pulse: 22 decisions need you");
+    }
+
+    #[test]
+    fn titles_and_tooltips_show_working_agents() {
+        assert_eq!(tray_title(0, 2).as_deref(), Some("● 2"));
+        assert_eq!(tray_title(3, 1).as_deref(), Some("3  ● 1"));
+        assert_eq!(tray_tooltip(3, 1), "Pulse: 3 decisions need you · 1 agent working");
+        assert_eq!(tray_tooltip(0, 2), "Pulse: no decisions waiting · 2 agents working");
+    }
+}
+
+#[cfg(test)]
+mod decision_tests {
+    use super::*;
+
+    #[test]
+    fn slugs_are_strict() {
+        assert!(is_slug("acme-90-day-offer"));
+        assert!(is_slug("a_b-1"));
+        for bad in ["", "-x", "--worker", "--record", "Acme", "a b", "a/b", "../x", "a;rm", "a\0", "é"] {
+            assert!(!is_slug(bad), "{bad}");
+        }
+        assert!(!is_slug(&"a".repeat(101)));
+    }
+
+    #[test]
+    fn act_args_validate_every_input() {
+        assert_eq!(
+            act_args("acme", "acme-offer", "approve", None).unwrap(),
+            vec!["acme", "acme-offer", "approve"]
+        );
+        assert!(act_args("acme", "x", "done", None).is_err()); // leads' actions are not Pulse's
+        assert!(act_args("acme", "x", "reply", None).is_err());
+        assert!(act_args("acme", "x", "--record", None).is_err());
+        assert!(act_args("acme", "x", "approve;ls", None).is_err());
+        assert!(act_args("--worker", "x", "approve", None).is_err());
+        assert!(act_args("acme", "--dry-run", "approve", None).is_err());
+        assert!(act_args("acme", "x", "discuss", None).is_err());
+        assert!(act_args("acme", "x", "discuss", Some("   ")).is_err());
+        assert!(act_args("acme", "x", "discuss", Some(&"n".repeat(2001))).is_err());
+        assert!(act_args("acme", "x", "discuss", Some("a\0b")).is_err());
+    }
+
+    #[test]
+    fn note_is_one_argument_even_when_it_looks_like_flags() {
+        let args = act_args("acme", "x", "discuss", Some("--record acme x done; $(rm -rf ~)\n--worker")).unwrap();
+        assert_eq!(args.len(), 4);
+        assert_eq!(args[3], "--note=--record acme x done; $(rm -rf ~)\n--worker");
+    }
+
+    #[test]
+    fn registry_check_rejects_unknown_entities() {
+        let root = std::env::temp_dir().join(format!("pulse-act-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        fs::write(root.join("portfolio.json"), r#"{"entities":[{"id":"acme","path":"companies/acme"}]}"#).unwrap();
+        assert!(registry_has_entity(&root, "acme").is_ok());
+        assert!(registry_has_entity(&root, "other").is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn parses_git_log() {
+        let c = parse_git_log("abc\u{1f}2026-10-28T05:30:00-04:00\u{1f}nightly: acme-lead\nbad line\n");
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].subject, "nightly: acme-lead");
+    }
+
+    #[test]
+    fn activity_reads_logs_decisions_and_strips_drafts() {
+        let root = std::env::temp_dir().join(format!("pulse-activity-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("companies/acme/sales")).unwrap();
+        fs::create_dir_all(root.join("logs")).unwrap();
+        let root = root.canonicalize().unwrap();
+        fs::write(root.join("portfolio.json"), r#"{"entities":[{"id":"acme","path":"companies/acme"}]}"#).unwrap();
+        fs::write(root.join("logs/2026-10-28_0530.json"), r#"[{"agent":"acme-lead","ok":true,"cost_usd":0.2}]"#).unwrap();
+        fs::write(root.join("logs/act-2026-10-28_120000-acme.json"), r#"{"kind":"act","entity":"acme"}"#).unwrap();
+        fs::write(root.join("logs/2026-10-28_0531_sales_learn.log"), "x").unwrap();
+        fs::write(root.join("companies/acme/decisions.jsonl"), "{\"id\":\"a\",\"action\":\"approve\"}\nnot json\n").unwrap();
+        fs::write(
+            root.join("companies/acme/sales/ledger.jsonl"),
+            r#"{"date":"2026-10-28","prospect":"p","subject":"Hi","to":"x@y.com","body":"secret"}"#,
+        )
+        .unwrap();
+        let a = read_activity_at(&root);
+        assert_eq!(a.runs.len(), 2);
+        assert_eq!(a.runs[0].file, "act-2026-10-28_120000-acme.json");
+        assert_eq!(a.decisions[0].rows.len(), 1);
+        assert_eq!(a.drafts.len(), 1);
+        assert!(a.drafts[0].get("to").is_none() && a.drafts[0].get("body").is_none());
+        assert_eq!(a.drafts[0]["entity"], "acme");
+        let _ = fs::remove_dir_all(&root);
+    }
 }
 
 #[cfg(test)]
@@ -2188,6 +3793,285 @@ mod portfolio_tests {
 
         fs::write(&path, r#"{"entity":"acme","health":"green"}"#).unwrap();
         assert_eq!(read_portfolio_json(&resolved).unwrap()["health"], "green");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn encodes_base64() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn reads_logos_only_from_assets() {
+        let root = temp_root("logos");
+        fs::create_dir_all(root.join("assets/logos")).unwrap();
+        fs::write(root.join("assets/logos/acme.svg"), "<svg/>").unwrap();
+        fs::write(root.join("companies/acme/logo.svg"), "<svg/>").unwrap();
+        fs::write(root.join("assets/logos/notes.txt"), "x").unwrap();
+        assert_eq!(read_portfolio_logo(&root, "assets/logos/acme.svg").unwrap(), "data:image/svg+xml;base64,PHN2Zy8+");
+        assert!(read_portfolio_logo(&root, "companies/acme/logo.svg").is_err());
+        assert!(read_portfolio_logo(&root, "assets/logos/notes.txt").is_err());
+        assert!(read_portfolio_logo(&root, "assets/../companies/acme/logo.svg").is_err());
+        assert!(read_portfolio_logo(&root, "/etc/hosts.svg").is_err());
+        assert!(read_portfolio_logo(&root, "assets/logos/missing.png").unwrap_err().ends_with("missing"));
+        // A symlink inside assets/ that points elsewhere in the root is refused too.
+        std::os::unix::fs::symlink(root.join("companies/acme/logo.svg"), root.join("assets/logos/link.svg")).unwrap();
+        assert!(read_portfolio_logo(&root, "assets/logos/link.svg").is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn setup_is_needed_until_portfolio_json_exists() {
+        let root = temp_root("setup");
+        let home = root.join("home");
+        fs::create_dir_all(home.join(".local/bin")).unwrap();
+        let check = setup_check_at(None, None, &home);
+        assert!(check.setup_needed);
+        assert!(!check.tracker);
+        assert!(check.runners.iter().all(|r| r.path.is_none()));
+        assert_eq!(check.runners.iter().map(|r| r.id).collect::<Vec<_>>(), ["claude-code", "codex", "opencode"]);
+        assert!(setup_check_at(Some(&root), None, &home).setup_needed);
+
+        fs::write(root.join("portfolio.json"), "{}").unwrap();
+        fs::write(home.join(".local/bin/codex"), "").unwrap();
+        let check = setup_check_at(Some(&root), Some(&root), &home);
+        assert!(!check.setup_needed);
+        assert!(check.tracker);
+        let codex = check.runners.iter().find(|r| r.id == "codex").unwrap();
+        assert_eq!(codex.path.as_deref(), Some(home.join(".local/bin/codex").to_str().unwrap()));
+        let _ = fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod tracker_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn temp_root(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("pulse-tracker-test-{}-{}", name, std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("data")).unwrap();
+        dir.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn reads_only_allowlisted_files() {
+        let root = temp_root("allow");
+        fs::write(root.join("data/tasks.json"), r#"{"tasks":{}}"#).unwrap();
+        fs::write(root.join("notes.json"), r#"{"notes":{}}"#).unwrap();
+        fs::write(root.join("todos.json"), "[]").unwrap();
+        fs::write(root.join("accounts.json"), "{}").unwrap();
+        fs::write(root.join("data/accounts.json"), "{}").unwrap();
+
+        assert!(resolve_tracker_file(&root, "tasks.json").is_ok());
+        assert!(resolve_tracker_file(&root, "notes.json").is_ok());
+        assert_eq!(resolve_tracker_file(&root, "email.json").unwrap_err(), "missing");
+        for name in ["todos.json", "accounts.json", "../tasks.json", "data/tasks.json", "/etc/passwd", ""] {
+            assert_eq!(resolve_tracker_file(&root, name).unwrap_err(), "not an allowed tracker file", "{}", name);
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rejects_symlinks_that_escape() {
+        let root = temp_root("symlink");
+        let outside = temp_root("symlink-outside");
+        fs::write(outside.join("secret.json"), r#"{"token":"x"}"#).unwrap();
+        std::os::unix::fs::symlink(outside.join("secret.json"), root.join("data/email.json")).unwrap();
+        // A data file pointing at the root-level copy is outside data/ too.
+        fs::write(root.join("scan.json"), "{}").unwrap();
+        std::os::unix::fs::symlink(root.join("scan.json"), root.join("data/scan.json")).unwrap();
+
+        assert_eq!(resolve_tracker_file(&root, "email.json").unwrap_err(), "path is outside ~/project-tracker");
+        assert_eq!(resolve_tracker_file(&root, "scan.json").unwrap_err(), "path is outside ~/project-tracker");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn drops_closed_tasks_and_email_bodies() {
+        let tasks = json!({"tasks": {
+            "a": {"id": "a", "title": "Decide: price", "status": "open", "urgency": "now", "evidence": {"type": "manual"}},
+            "b": {"id": "b", "title": "Old", "status": "done"},
+            "c": {"id": "c", "title": "Later", "status": "scheduled", "show_from": "2026-11-06"},
+            "d": {"id": "d", "title": "Gone", "status": "stale"}
+        }});
+        let out = serde_json::to_value(tracker_tasks(&tasks)).unwrap();
+        let ids: Vec<&str> = out.as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["a", "c"]);
+        assert!(out[0].get("evidence").is_none());
+
+        let email = json!({"stale": false, "replied_to": ["x@y.z"], "accounts": {"v": {"label": "Acme", "ok": false}},
+            "needs_reply": [{"subject": "Hi", "sender": "a@b.c", "snippet": "private body", "message_id": "m"}]});
+        let out = serde_json::to_value(tracker_email(&email)).unwrap();
+        assert_eq!(out["needs_reply"][0]["subject"], "Hi");
+        assert!(out["needs_reply"][0].get("snippet").is_none());
+        assert!(out["needs_reply"][0].get("message_id").is_none());
+        assert_eq!(out["replied_count"], 1);
+        assert_eq!(out["accounts_not_fetching"][0], "Acme");
+    }
+
+    // Same fixture as `python3 money.py --test`, so both report identical totals.
+    #[test]
+    fn money_matches_python_fixture() {
+        use chrono::TimeZone;
+        let now = chrono::Local.with_ymd_and_hms(2026, 10, 25, 15, 0, 0).unwrap().timestamp() as f64;
+        let t = |days_ago: f64| now - days_ago * DAY_SECS;
+        let stripe = json!({"ok": true, "collected_at": now, "accounts": {"northwind": {"ok": true}},
+            "charges": [
+                {"id": "ch_a", "amount": 120.0, "fee": 3.78, "net": 116.22, "created": t(6.0), "project": "northwind", "payer": "Ana", "currency": "usd"},
+                {"id": "ch_b", "amount": 1000.0, "fee": null, "net": null, "created": t(0.0), "project": "northwind", "payer": "Ben", "currency": "usd"}],
+            "payouts": [{"id": "po_a", "amount": 116.22, "status": "paid", "created": t(6.0), "arrival": t(4.0), "project": "northwind"}],
+            "failed": [{"id": "ch_f", "amount": 50.0, "created": t(2.0), "project": "northwind"}],
+            "refunds": [{"id": "re_1", "amount": 20.0, "created": t(1.0), "project": "northwind"}],
+            "subscriptions": {"northwind": {"active": 3, "mrr": 40.0}}});
+        let mail = json!({"ok": true, "collected_at": now, "items": [
+            {"id": "m1", "source": "stripe", "kind": "payout", "amount": 116.22, "created": t(5.0), "payer": "", "project": "northwind"},
+            {"id": "m2", "source": "zelle", "kind": "payment", "amount": 350.0, "created": t(3.0), "payer": "CARLA", "project": null},
+            {"id": "m3", "source": "venmo", "kind": "payment", "amount": 25.0, "created": t(10.0), "payer": "Dee", "project": null},
+            {"id": "m2b", "source": "zelle", "kind": "payment", "amount": 350.0, "created": t(3.0) + 60.0, "payer": "CARLA", "project": null},
+            {"id": "m4", "source": "paypal", "kind": "payment", "amount": 200.0, "created": t(8.0), "payer": "Eve", "project": "acme"},
+            {"id": "m5", "source": "stripe", "kind": "deposit", "amount": 116.22, "created": t(3.0) + 300.0, "payer": "", "project": "northwind"}]});
+        let bank = json!({"ok": true, "collected_at": now, "inflows": [
+            {"id": "b1", "amount": 116.22, "rail": "stripe", "created": t(3.0), "project": "northwind"},
+            {"id": "b2", "amount": 350.0, "rail": "zelle", "created": t(2.0)},
+            {"id": "b3", "amount": 500.0, "rail": "transfer", "created": t(1.0)},
+            {"id": "b4", "amount": 80.0, "rail": "check", "created": t(1.0)},
+            {"id": "b5", "amount": 25.0, "rail": "venmo", "created": t(9.0)},
+            {"id": "b6", "amount": 193.90, "rail": "paypal", "created": t(7.0)}]});
+
+        let m = build_money(&stripe, &mail, &bank, now);
+        assert_eq!(m.totals, MoneyTotals { today: 1000.0, d7: 1550.0, d30: 1775.0 });
+        assert_eq!((m.failed_30d, m.refunds_30d, m.mrr_total), (1, 20.0, 40.0));
+
+        let off = json!({"ok": false, "reason": "not configured"});
+        let no_api = build_money(&off, &json!({"ok": true, "items": [mail["items"][0]]}), &json!({"ok": false}), now);
+        assert_eq!(no_api.totals.d30, 116.22);
+
+        // Breakdowns add up to the totals and keep payers per project.
+        let f = &m.finance;
+        let northwind = f.projects.iter().find(|p| p.project == "northwind").unwrap();
+        assert_eq!((northwind.d30, northwind.d90), (1120.0, 1120.0));
+        assert_eq!(northwind.by_channel, vec![("stripe".to_string(), 1120.0)]);
+        assert_eq!(northwind.payers[0], PayerTotal { name: "Ben".into(), total: 1000.0, payments: 1 });
+        let d30: f64 = f.projects.iter().map(|p| p.d30).sum();
+        assert!((d30 - m.totals.d30).abs() < 0.001);
+        let months: f64 = f.projects.iter().flat_map(|p| p.months.iter().map(|(_, v)| v)).sum();
+        assert!((months - 1775.0).abs() < 0.001);
+        let unsorted = f.projects.iter().find(|p| p.project == "unsorted").unwrap();
+        // CARLA's two Zelle alerts are one payment; the check deposit has no payer.
+        assert_eq!(unsorted.payers.iter().find(|p| p.name == "CARLA").unwrap().payments, 1);
+        assert_eq!(unsorted.no_payer_90d, 80.0);
+        assert_eq!((f.stripe_accounts[0].project.as_str(), f.stripe_accounts[0].active, f.stripe_accounts[0].mrr), ("northwind", 3, 40.0));
+        assert!(f.coverage.iter().all(|c| c.ok));
+
+        let empty = build_money(&off, &json!({}), &off, now);
+        assert!(empty.finance.projects.is_empty() && empty.finance.stripe_accounts.is_empty());
+        assert_eq!(empty.finance.coverage[0].reason.as_deref(), Some("not configured"));
+        assert!(!empty.configured);
+        assert_eq!(empty.totals.d30, 0.0);
+    }
+}
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+
+    fn temp_root(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("pulse-live-test-{}-{}", name, std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("logs/live")).unwrap();
+        fs::create_dir_all(dir.join("logs/transcripts")).unwrap();
+        dir.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn run_ids_are_strict() {
+        assert!(is_run_id("20261028-225759-acme-lead-326d"));
+        assert!(is_run_id("session-e19175e6-7bfd-4ad0-9664-1b96d8620dec"));
+        for bad in ["", "-x", "../x", "a/b", "A", "a.json", "a b", "a\0"] {
+            assert!(!is_run_id(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn dead_and_stale_runs_read_as_stopped() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-28T12:00:00-04:00").unwrap();
+        let run = |state: &str, kind: &str, started: &str| serde_json::json!({"state": state, "kind": kind, "pid": 42, "started": started});
+        let alive = |_| true;
+        let dead = |_| false;
+        assert_eq!(live_state(&run("running", "act", "2026-10-28T11:50:00-04:00"), now, alive), "running");
+        assert_eq!(live_state(&run("running", "act", "2026-10-28T11:50:00-04:00"), now, dead), "stopped");
+        assert_eq!(live_state(&run("idle", "interactive", "2026-10-28T11:50:00-04:00"), now, dead), "stopped");
+        assert_eq!(live_state(&run("finished", "act", "2026-10-28T11:50:00-04:00"), now, dead), "finished");
+        // A headless run older than any timeout is stopped even if its pid was reused…
+        assert_eq!(live_state(&run("running", "nightly", "2026-10-28T06:00:00-04:00"), now, alive), "stopped");
+        // …but an interactive session may stay open all day.
+        assert_eq!(live_state(&run("idle", "interactive", "2026-10-28T06:00:00-04:00"), now, alive), "idle");
+    }
+
+    #[test]
+    fn this_process_is_alive() {
+        assert!(pid_alive(std::process::id() as i64));
+        assert!(!pid_alive(0));
+        assert!(!pid_alive(-1));
+    }
+
+    #[test]
+    fn reads_live_files_and_skips_bad_names() {
+        let root = temp_root("read");
+        fs::write(root.join("logs/live/20261028-1-acme-lead-aaaa.json"), r#"{"run_id":"20261028-1-acme-lead-aaaa","state":"running","pid":1}"#).unwrap();
+        fs::write(root.join("logs/live/20261028-2-acme-lead-bbbb.json"), r#"{"state":"finished"}"#).unwrap();
+        fs::write(root.join("logs/live/.20261028-3.json.123.tmp"), "{").unwrap();
+        fs::write(root.join("logs/live/Bad Name.json"), "{}").unwrap();
+        fs::write(root.join("logs/live/20261028-4-broken.json"), "{").unwrap();
+        let snap = read_live_at(&root, |_| false);
+        assert_eq!(snap.runs.len(), 2);
+        assert_eq!(snap.runs[1]["state"], "stopped"); // pid gone
+        assert_eq!(snap.runs[0]["state"], "finished");
+        assert_eq!(snap.errors.len(), 1);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn transcripts_read_by_id_only_and_keep_the_start_line() {
+        let root = temp_root("transcript");
+        let mut body = String::from("{\"t\":\"start\",\"agent\":\"acme-lead\"}\nnot json\n");
+        for i in 0..(TRANSCRIPT_MAX_LINES + 10) {
+            body.push_str(&format!("{{\"t\":\"text\",\"text\":\"{}\"}}\n", i));
+        }
+        body.push_str("{\"t\":\"result\",\"ok\":true}\n");
+        fs::write(root.join("logs/transcripts/run-a.jsonl"), &body).unwrap();
+        let t = read_transcript_at(&root, "run-a").unwrap();
+        assert!(t.truncated);
+        assert_eq!(t.lines.len(), TRANSCRIPT_MAX_LINES);
+        assert_eq!(t.lines[0]["t"], "start");
+        assert_eq!(t.lines.last().unwrap()["t"], "result");
+        assert!(read_transcript_at(&root, "../portfolio").is_err());
+        assert!(read_transcript_at(&root, "missing").is_err());
+
+        let index = list_transcripts_at(&root);
+        assert_eq!(index.len(), 1);
+        assert_eq!(index[0].start.as_ref().unwrap()["agent"], "acme-lead");
+        assert_eq!(index[0].last.as_ref().unwrap()["t"], "result");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn transcript_symlinks_cannot_escape() {
+        let root = temp_root("symlink");
+        let outside = std::env::temp_dir().join(format!("pulse-live-outside-{}.jsonl", std::process::id()));
+        fs::write(&outside, "{\"t\":\"start\"}\n").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("logs/transcripts/evil.jsonl")).unwrap();
+        assert!(read_transcript_at(&root, "evil").is_err());
+        assert!(list_transcripts_at(&root).is_empty());
+        let _ = fs::remove_file(&outside);
         let _ = fs::remove_dir_all(&root);
     }
 }

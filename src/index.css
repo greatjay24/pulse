@@ -19,6 +19,7 @@
   --warning-muted: rgba(245, 158, 11, 0.15);
   --danger: #ef4444;
   --danger-muted: rgba(239, 68, 68, 0.15);
+  --accent-ink: #ffffff;
 
   /* Border radius */
   --radius-sm: 8px;
@@ -45,7 +46,7 @@ html, body, #root {
 }
 
 body {
-  font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+  font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
   background-color: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
@@ -83,7 +84,7 @@ body {
 .btn-primary {
   background: var(--accent);
   border: none;
-  color: white;
+  color: var(--accent-ink);
 }
 
 .btn-primary:hover {
@@ -99,6 +100,11 @@ body {
 .btn-secondary:hover {
   border-color: var(--border-hover);
   color: var(--text);
+}
+
+/* An Activity row that opens its conversation */
+.activity-row-link:hover {
+  background: var(--bg-card-hover);
 }
 
 /* Custom scrollbar */
@@ -175,7 +181,13 @@ input::placeholder, textarea::placeholder {
 
 /* Monospace text */
 .mono {
-  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+  font-family: ui-monospace, 'SF Mono', 'JetBrains Mono', monospace;
+}
+
+/* Keyboard focus is always visible, in the theme's accent */
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* Animation utilities */

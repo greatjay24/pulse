@@ -482,6 +482,8 @@ export interface Settings {
   googleCalendar?: GoogleCalendarConfig;
   historyRetentionDays?: number;
   dashboardLayout?: GridLayoutItem[]; // User's custom grid layout
+  saasMetrics?: boolean; // show the original SaaS-metrics pages (Overview, Analytics, Calendar); off by default
+  notifications?: boolean; // native alerts for new urgent items; on unless turned off
 }
 
 // ==========================================
@@ -599,6 +601,11 @@ export interface PortfolioEntity {
   path: string;
   lead?: string;
   schedule?: string;
+  tracker_projects?: string[]; // ~/project-tracker project ids that roll up into this entity
+  logo?: string; // path under ~/portfolio/assets/, for light backgrounds
+  logo_dark?: string; // the same mark for dark backgrounds
+  color?: string; // hex; tints the initial when there is no logo
+  runner?: string | { name: string; [k: string]: unknown }; // overrides the org's agent CLI for this entity
 }
 
 export interface PortfolioRegistry {
@@ -619,11 +626,13 @@ export interface EntityLane {
 }
 
 export interface EntityDecision {
+  id?: string; // stable slug, same decision = same id every run (older reports omit it)
   ask: string;
   recommend?: string;
   why?: string;
   gate?: Gate;
   due?: string | null;
+  on_approve?: string; // what the lead does the moment the owner approves
 }
 
 export interface EntityStatus {
@@ -634,6 +643,7 @@ export interface EntityStatus {
   stage?: string;
   updated?: string;
   health?: Health;
+  health_why?: string; // one line: which health rule set the color
   headline?: string;
   metrics?: EntityMetric[];
   lanes?: Record<string, EntityLane>;
@@ -648,12 +658,276 @@ export interface PortfolioEntityReport {
   id: string;
   status: EntityStatus | null;
   error: string | null; // "missing", "malformed: …", etc. Either way the UI shows "no report yet".
+  logo: string | null; // data: URL read by Rust from the registry's `logo`
+  logo_dark: string | null;
+  logo_error: string | null;
 }
 
 export interface PortfolioSnapshot {
   registry: PortfolioRegistry | null;
   registry_error: string | null;
+  setup_needed?: boolean; // no ~/portfolio/portfolio.json yet: Pulse shows the welcome screen
   entities: PortfolioEntityReport[];
   week: string | null;
+  read_at: string;
+}
+
+// ==========================================
+// Decisions and activity: what the Rust `act_on_decision` / `read_activity` commands pass
+// ==========================================
+
+// approve | reject | discuss are the owner's (via act.py); done | reply are the lead's.
+export type DecisionAction = 'approve' | 'reject' | 'discuss' | 'done' | 'reply';
+
+export interface DecisionRow {
+  id: string;
+  action: DecisionAction;
+  note?: string;
+  at: string;
+  ask?: string; // act.py copies these so an answer still reads after the decision leaves status.json
+  recommend?: string;
+}
+
+export interface RunTokens {
+  input: number;
+  output: number;
+}
+
+// One agent run: an item of a nightly log (an array) or a whole act log (one object).
+export interface AgentRun {
+  agent: string;
+  run_id?: string; // its transcript in logs/transcripts/ (runs from before transcripts have none)
+  agents?: number; // subagents it deployed; 0 = worked solo (absent on runs from before tracking)
+  ok?: boolean;
+  result?: string;
+  cost_usd?: number | null; // only when the runner reports it; never estimated
+  tokens?: RunTokens; // runners that report tokens but not cost (Codex)
+  runner?: string; // claude-code (absent on its runs) | codex | opencode
+  secs?: number;
+  models?: string[];
+  // act runs only
+  kind?: 'act';
+  entity?: string;
+  decision?: string;
+  action?: 'approve' | 'reject' | 'discuss';
+  running?: boolean;
+  started?: string;
+  finished?: string;
+}
+
+export interface DraftRow {
+  date: string;
+  entity: string;
+  prospect?: string;
+  vertical?: string;
+  subject?: string;
+  variant?: string;
+  source?: string;
+}
+
+export interface ActivitySnapshot {
+  runs: { file: string; data: AgentRun[] | AgentRun }[];
+  decisions: { entity: string; rows: DecisionRow[] }[];
+  drafts: DraftRow[];
+  commits: { hash: string; at: string; subject: string }[];
+  errors: string[];
+  read_at: string;
+}
+
+// ==========================================
+// Live runs and transcripts (~/portfolio/bin/live.py writes them; Rust `read_live`,
+// `read_transcript` and `list_transcripts` read them)
+// ==========================================
+
+// `stopped` is Pulse's word for a run that says it is working but whose process is gone.
+export type LiveState = 'running' | 'idle' | 'finished' | 'failed' | 'stopped';
+
+export interface LiveRun {
+  run_id: string;
+  kind: string; // nightly | weekly | act | check | interactive
+  entity: string | null; // null = the whole org (chief of staff, a manager)
+  agent: string;
+  doing: string;
+  started: string;
+  pid: number;
+  transcript: string;
+  state: LiveState;
+  step: string;
+  step_at: string;
+  updated: string;
+  finished?: string;
+  ok?: boolean;
+  result?: string;
+  cost_usd?: number | null;
+  tokens?: RunTokens;
+  runner?: string;
+  secs?: number | null;
+  last?: string; // interactive: the agent's last message
+  team?: TeamMember[]; // subagents this run deployed
+  deployments?: number;
+}
+
+// A subagent a lead deployed. Agents deployed within a few seconds share a batch.
+export interface TeamMember {
+  id: string;
+  type: string;
+  description: string;
+  prompt: string;
+  background?: boolean;
+  by?: string | null; // set when another subagent deployed it
+  batch: number;
+  started: string;
+  status: 'running' | 'completed' | 'failed' | 'unfinished' | string;
+  finished?: string;
+  summary?: string;
+  secs?: number | null;
+}
+
+export interface LiveSnapshot {
+  runs: LiveRun[];
+  errors: string[];
+  read_at: string;
+}
+
+export type TranscriptLine =
+  | { t: 'start'; at: string; run_id: string; kind: string; entity: string | null; agent: string; doing: string; prompt: string }
+  | { t: 'user'; at: string; text: string }
+  | { t: 'text'; at: string; text: string; sub?: boolean }
+  | { t: 'tool'; at: string; name: string; summary: string; sub?: boolean }
+  | { t: 'error'; at: string; text: string }
+  | { t: 'deploy'; at: string; agents: Omit<TeamMember, 'batch' | 'started' | 'status'>[]; sub?: boolean }
+  | { t: 'agent_done'; at: string; id: string; status: string; summary: string; secs: number | null; tools: number | null }
+  | { t: 'result'; at: string; ok: boolean; result: string; cost_usd: number | null; secs: number | null; turns?: number; models?: string[]; agents?: number; tokens?: RunTokens; runner?: string };
+
+export interface Transcript {
+  run_id: string;
+  lines: TranscriptLine[];
+  truncated: boolean;
+}
+
+export interface TranscriptSummary {
+  run_id: string;
+  start: TranscriptLine | null;
+  last: TranscriptLine | null;
+  modified: string;
+}
+
+// What the welcome screen checks (Rust `setup_check`): existence only, at fixed paths.
+export interface SetupCheck {
+  setup_needed: boolean;
+  runners: { id: string; label: string; path: string | null }[]; // agent CLIs; setup needs one
+  python3: string | null;
+  tracker: boolean;
+}
+
+// ==========================================
+// Tracker (~/project-tracker): what the Rust `read_tracker` command passes through
+// ==========================================
+
+export type Urgency = 'now' | 'soon' | 'whenever';
+
+export interface TrackerTask {
+  id: string;
+  title: string;
+  detail: string | null;
+  url: string | null;
+  project: string | null;
+  kind: string | null;
+  urgency: Urgency | null;
+  status: 'open' | 'scheduled';
+  source: string | null; // manual | email | github | git
+  first_seen: number | null; // unix seconds
+  show_from: string | null;
+}
+
+export interface TrackerEmail {
+  account_label: string | null;
+  sender: string | null;
+  name: string | null;
+  subject: string | null;
+  date: string | null;
+  age_days: number | null;
+  project: string | null;
+  urgency: Urgency | null;
+  url: string | null;
+}
+
+export interface TrackerEmailSummary {
+  collected_at: number | null;
+  stale: boolean;
+  age_hours: number | null;
+  needs_reply: TrackerEmail[];
+  replied_count: number;
+  accounts_not_fetching: string[];
+}
+
+export interface TrackerRepo {
+  id: string;
+  name: string;
+  exists: boolean;
+  is_git: boolean;
+  branch: string | null;
+  dirty_count: number | null;
+  days_idle: number | null;
+  last_commit_ts: number | null;
+}
+
+export interface TrackerMoney {
+  configured: boolean;
+  sources: Record<'stripe' | 'email' | 'bank', { ok: boolean }>;
+  totals: { today: number; d7: number; d30: number };
+  counts: { today: number; d7: number; d30: number };
+  failed_30d: number;
+  refunds_30d: number;
+  mrr_total: number;
+  finance: MoneyFinance;
+}
+
+export type MoneySourceId = 'stripe' | 'email' | 'bank';
+
+// Breakdowns from the Rust money port: the same counted events as the totals, per tracker project.
+export interface MoneyFinance {
+  coverage: {
+    source: MoneySourceId;
+    ok: boolean;
+    reason: string | null;
+    collected_at: number | null; // unix seconds
+    window_days: number | null; // how far back the collector reaches
+  }[];
+  projects: ProjectFinance[];
+  stripe_accounts: { project: string; ok: boolean; error: string | null; active: number; mrr: number }[];
+  bank_accounts: { name: string; org: string; project: string | null; balance: number | null; currency: string }[];
+}
+
+export interface ProjectFinance {
+  project: string; // tracker project id, or "unsorted"
+  d30: number;
+  d90: number;
+  months: [string, number][]; // [YYYY-MM, total], oldest first
+  by_channel: [MoneySourceId, number][]; // last 90 days
+  by_rail: [MoneySourceId, string, number][]; // last 90 days: [channel, rail (zelle, venmo...), total]
+  payers: { name: string; total: number; payments: number }[]; // last 90 days
+  no_payer_90d: number;
+}
+
+export interface TrackerNote {
+  status: string | null;
+  goal: string | null;
+  next: string | null;
+  blocked_on: string | null;
+}
+
+export interface TrackerSnapshot {
+  installed?: boolean; // false when there is no ~/project-tracker: the tracker is optional
+  error: string | null; // ~/project-tracker missing
+  file_errors: Record<string, string>;
+  tasks: TrackerTask[];
+  tasks_updated_at: number | null;
+  email: TrackerEmailSummary | null;
+  repos: TrackerRepo[];
+  scanned_at: number | null;
+  money: TrackerMoney;
+  projects: { id: string; name: string | null; area: string | null }[];
+  notes: Record<string, TrackerNote>;
   read_at: string;
 }

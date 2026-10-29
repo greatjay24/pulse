@@ -33,3 +33,7 @@ src-tauri/target/
 
 # Local screenshots of the org board show private portfolio data; never commit them
 docs/screenshots/
+
+# Python (kit/)
+__pycache__/
+*.pyc

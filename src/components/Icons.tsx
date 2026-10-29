@@ -441,6 +441,45 @@ export function EyeIcon({ size = 18, color }: IconProps) {
   );
 }
 
+// Line icons for Pulse's own chrome, drawn on the same 24px grid and 2px stroke as the rest.
+const STROKES: Record<string, string[]> = {
+  'arrow-left': ['M19 12H5', 'M12 19l-7-7 7-7'],
+  'arrow-right': ['M5 12h14', 'M12 5l7 7-7 7'],
+  'trend-flat': ['M5 12h14', 'M15 8l4 4-4 4'],
+  'chevron-down': ['M6 9l6 6 6-6'],
+  today: ['M12 3v2', 'M5.6 5.6l1.4 1.4', 'M3 13h2', 'M19 13h2', 'M17 7l1.4-1.4', 'M7 17a5 5 0 0 1 10 0', 'M3 21h18'],
+  board: ['M3 3h7v9H3z', 'M14 3h7v5h-7z', 'M14 12h7v9h-7z', 'M3 16h7v5H3z'],
+  wallet: ['M20 7H5a2 2 0 0 1 0-4h13v4', 'M3 5v14a2 2 0 0 0 2 2h15V7', 'M16 14h.01'],
+  list: ['M8 6h13', 'M8 12h13', 'M8 18h13', 'M3 6h.01', 'M3 12h.01', 'M3 18h.01'],
+  tv: ['M2 7h20v12H2z', 'M17 2l-5 5-5-5'],
+  bell: ['M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9', 'M13.7 21a2 2 0 0 1-3.4 0'],
+  chat: ['M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'],
+  inbox: ['M22 12h-6l-2 3h-4l-2-3H2', 'M5.5 5.1L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.1z'],
+};
+
+export function StrokeIcon({ name, size = 18, color }: { name: string; size?: number; color?: string }) {
+  const { tokens } = useTheme();
+  const paths = STROKES[name];
+  if (!paths) return null;
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color || tokens.colors.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      {paths.map((d) => <path key={d} d={d} />)}
+    </svg>
+  );
+}
+
+// Health shapes, so status never depends on color alone: circle, triangle, square, ring.
+export function HealthMark({ health, size = 10, color }: { health: string | undefined; size?: number; color: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 10 10" aria-hidden style={{ flexShrink: 0 }}>
+      {health === 'green' && <circle cx="5" cy="5" r="4.5" fill={color} />}
+      {health === 'yellow' && <path d="M5 0.6 L9.6 9.2 H0.4 Z" fill={color} />}
+      {health === 'red' && <rect x="1" y="1" width="8" height="8" rx="1" fill={color} />}
+      {health !== 'green' && health !== 'yellow' && health !== 'red' && <circle cx="5" cy="5" r="4" fill="none" stroke={color} strokeWidth="1.4" />}
+    </svg>
+  );
+}
+
 // Helper to render icon by name
 export function Icon({ name, size = 18, color }: { name: string; size?: number; color?: string }) {
   switch (name) {
@@ -482,6 +521,6 @@ export function Icon({ name, size = 18, color }: { name: string; size?: number; 
     case 'diamond': return <DiamondIcon size={size} color={color} />;
     case 'trending-up': return <TrendingUpIcon size={size} color={color} />;
     case 'eye': return <EyeIcon size={size} color={color} />;
-    default: return null;
+    default: return <StrokeIcon name={name} size={size} color={color} />;
   }
 }

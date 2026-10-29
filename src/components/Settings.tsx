@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { useTheme, fontOptions, ThemeMode, FontChoice } from '../contexts/ThemeContext';
+import { useTheme, fontOptions, presets, PresetId, ThemeMode, FontChoice } from '../contexts/ThemeContext';
 import { App, IntegrationType, PROJECT_COLORS, GoogleCalendarConfig } from '../types';
 import { Icon } from './Icons';
 
@@ -12,6 +12,55 @@ interface SettingsProps {
   onSave: (apps: App[]) => void;
   onClose: () => void;
   inline?: boolean; // Render inline instead of as overlay
+  saasMetrics: boolean;
+  onSaasMetricsChange: (on: boolean) => void;
+  notifications: boolean;
+  onNotificationsChange: (on: boolean) => void;
+}
+
+// An on/off switch with its label and one line of explanation.
+function ToggleRow({ label, note, on, onChange, disabled = false }: { label: string; note: string; on: boolean; onChange: () => void; disabled?: boolean }) {
+  const { tokens } = useTheme();
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '24px' }}>
+      <div>
+        <div style={{ color: tokens.colors.text, fontSize: tokens.type.body, fontWeight: 500, marginBottom: '4px' }}>{label}</div>
+        <p style={{ color: tokens.colors.textDim, fontSize: tokens.type.small, margin: 0, lineHeight: 1.5, maxWidth: '56ch' }}>{note}</p>
+      </div>
+      <button
+        role="switch"
+        aria-checked={on}
+        aria-label={label}
+        onClick={onChange}
+        disabled={disabled}
+        style={{
+          position: 'relative',
+          width: '44px',
+          height: '24px',
+          flexShrink: 0,
+          borderRadius: '12px',
+          border: `1px solid ${on ? 'transparent' : tokens.colors.borderHover}`,
+          background: on ? tokens.colors.accent : tokens.colors.bgElevated,
+          cursor: disabled ? 'wait' : 'pointer',
+          transition: 'background 0.2s ease',
+          opacity: disabled ? 0.5 : 1,
+        }}
+      >
+        <span
+          style={{
+            position: 'absolute',
+            top: '2px',
+            left: on ? '21px' : '2px',
+            width: '18px',
+            height: '18px',
+            borderRadius: '9px',
+            background: on ? tokens.colors.accentInk : tokens.colors.textMuted,
+            transition: 'left 0.2s ease',
+          }}
+        />
+      </button>
+    </div>
+  );
 }
 
 const INTEGRATION_LABELS: Partial<Record<IntegrationType, string>> = {
@@ -53,11 +102,13 @@ const INTEGRATION_LABELS: Partial<Record<IntegrationType, string>> = {
   github: 'GitHub',
 };
 
-export function Settings({ apps, onSave, onClose, inline = false }: SettingsProps) {
-  const { tokens, themeMode, setThemeMode, fontChoice, setFontChoice } = useTheme();
+export function Settings({ apps, onSave, onClose, inline = false, saasMetrics, onSaasMetricsChange, notifications, onNotificationsChange }: SettingsProps) {
+  const { tokens, themeMode, setThemeMode, fontChoice, setFontChoice, preset, setPreset, customAccent, setCustomAccent, resolvedTheme } = useTheme();
   const [editedApps, setEditedApps] = useState<App[]>(apps);
   const [activeAppId, setActiveAppId] = useState<string | null>(apps[0]?.id || null);
-  const [activeTab, setActiveTab] = useState<'appearance' | 'apps'>('appearance');
+  const [activeTab, setActiveTab] = useState<'general' | 'appearance' | 'apps'>('general');
+  // The Apps tab configures the SaaS-metrics pages, so it goes away with them.
+  const tab = activeTab === 'apps' && !saasMetrics ? 'general' : activeTab;
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'idle'>('idle');
   const isFirstRender = useRef(true);
   const isSyncingFromProps = useRef(false);
@@ -263,12 +314,12 @@ export function Settings({ apps, onSave, onClose, inline = false }: SettingsProp
         }}
       >
         <div>
-          <h2 style={{ fontSize: '24px', fontWeight: 600, color: tokens.colors.text, marginBottom: inline ? '4px' : '0' }}>
+          <h1 style={{ fontFamily: tokens.fonts.display, fontSize: tokens.type.title, fontWeight: 500, letterSpacing: '-0.015em', lineHeight: 1.1, color: tokens.colors.text }}>
             Settings
-          </h2>
+          </h1>
           {inline && (
-            <p style={{ color: tokens.colors.textMuted, fontSize: '14px' }}>
-              Manage your preferences and integrations.
+            <p style={{ color: tokens.colors.textMuted, fontSize: tokens.type.small, marginTop: '8px' }}>
+              How Pulse looks, what it tells you, and the original SaaS pages.
             </p>
           )}
         </div>
@@ -339,12 +390,13 @@ export function Settings({ apps, onSave, onClose, inline = false }: SettingsProp
           }}
         >
           {[
-            { id: 'appearance', label: 'Appearance', icon: 'settings' },
-            { id: 'apps', label: 'Apps', icon: 'mobile' },
-          ].map((tab) => (
+            { id: 'general', label: 'General', icon: 'bell' },
+            { id: 'appearance', label: 'Appearance', icon: 'eye' },
+            ...(saasMetrics ? [{ id: 'apps', label: 'SaaS apps', icon: 'mobile' }] : []),
+          ].map((item) => (
             <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id as typeof activeTab)}
+              key={item.id}
+              onClick={() => setActiveTab(item.id as typeof activeTab)}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -353,8 +405,8 @@ export function Settings({ apps, onSave, onClose, inline = false }: SettingsProp
                 padding: '10px 12px',
                 fontSize: '14px',
                 fontWeight: 500,
-                color: activeTab === tab.id ? tokens.colors.text : tokens.colors.textMuted,
-                background: activeTab === tab.id ? tokens.colors.bgCard : 'transparent',
+                color: tab === item.id ? tokens.colors.text : tokens.colors.textMuted,
+                background: tab === item.id ? tokens.colors.bgCard : 'transparent',
                 border: 'none',
                 borderRadius: tokens.radius.sm,
                 cursor: 'pointer',
@@ -363,17 +415,39 @@ export function Settings({ apps, onSave, onClose, inline = false }: SettingsProp
                 marginBottom: '4px',
               }}
             >
-              <Icon name={tab.icon} size={16} color={activeTab === tab.id ? tokens.colors.text : tokens.colors.textMuted} />
-              {tab.label}
+              <Icon name={item.icon} size={16} color={tab === item.id ? tokens.colors.text : tokens.colors.textMuted} />
+              {item.label}
             </button>
           ))}
         </div>
 
         {/* Content */}
         <div style={{ flex: 1, padding: '24px 32px' }}>
+          {/* General Tab */}
+          {tab === 'general' && (
+            <div style={{ maxWidth: '760px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+              <div style={{ background: tokens.colors.bgCard, border: `1px solid ${tokens.colors.border}`, borderRadius: tokens.radius.lg, padding: '24px' }}>
+                <ToggleRow
+                  label="Notifications"
+                  note="A native alert when a new urgent item appears: a Decide item marked now, or a business turning red. Each one is announced once."
+                  on={notifications}
+                  onChange={() => onNotificationsChange(!notifications)}
+                />
+              </div>
+              <div style={{ background: tokens.colors.bgCard, border: `1px solid ${tokens.colors.border}`, borderRadius: tokens.radius.lg, padding: '24px' }}>
+                <ToggleRow
+                  label="SaaS metrics"
+                  note="The original Pulse pages: Overview, Analytics and Calendar, per-app integrations and Total MRR. Off keeps them out of the sidebar; their settings and data stay as they are."
+                  on={saasMetrics}
+                  onChange={() => onSaasMetricsChange(!saasMetrics)}
+                />
+              </div>
+            </div>
+          )}
+
           {/* Appearance Tab */}
-          {activeTab === 'appearance' && (
-            <div style={{ maxWidth: '600px' }}>
+          {tab === 'appearance' && (
+            <div style={{ maxWidth: '760px' }}>
               <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '24px', color: tokens.colors.text }}>
                 Appearance
               </h3>
@@ -397,7 +471,7 @@ export function Settings({ apps, onSave, onClose, inline = false }: SettingsProp
                     fontWeight: 500,
                   }}
                 >
-                  Theme
+                  Light or dark
                 </label>
                 <div style={{ display: 'flex', gap: '8px' }}>
                   {[
@@ -431,6 +505,82 @@ export function Settings({ apps, onSave, onClose, inline = false }: SettingsProp
                 </div>
               </div>
 
+              {/* Color theme presets */}
+              <div
+                style={{
+                  background: tokens.colors.bgCard,
+                  border: `1px solid ${tokens.colors.border}`,
+                  borderRadius: tokens.radius.lg,
+                  padding: '24px',
+                  marginBottom: '24px',
+                }}
+              >
+                <label style={{ display: 'block', color: tokens.colors.textMuted, fontSize: '13px', marginBottom: '4px', fontWeight: 500 }}>
+                  Color theme
+                </label>
+                <p style={{ color: tokens.colors.textDim, fontSize: '12px', marginBottom: '16px' }}>
+                  After the films in your taste guide. Each has a light and a dark version.
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: '10px' }}>
+                  {(Object.entries(presets) as [PresetId, (typeof presets)[string]][]).map(([id, p]) => {
+                    const pal = p[resolvedTheme];
+                    const selected = preset === id;
+                    return (
+                      <button
+                        key={id}
+                        onClick={() => setPreset(id)}
+                        aria-pressed={selected}
+                        style={{
+                          textAlign: 'left',
+                          padding: 0,
+                          overflow: 'hidden',
+                          borderRadius: tokens.radius.md,
+                          border: `2px solid ${selected ? tokens.colors.accent : tokens.colors.border}`,
+                          background: pal.bg,
+                          cursor: 'pointer',
+                          fontFamily: 'inherit',
+                        }}
+                      >
+                        <div style={{ padding: '14px 14px 12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                          <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-end', height: '28px' }}>
+                            <span style={{ width: '22px', height: '28px', borderRadius: '4px', background: pal.accent }} />
+                            <span style={{ width: '10px', height: '18px', borderRadius: '3px 3px 0 0', background: pal.chart }} />
+                            <span style={{ width: '10px', height: '26px', borderRadius: '3px 3px 0 0', background: pal.chart }} />
+                            <span style={{ width: '10px', height: '12px', borderRadius: '3px 3px 0 0', background: pal.chart }} />
+                            <span style={{ flex: 1, height: '28px', borderRadius: '4px', background: pal.bgCard, border: `1px solid ${pal.border}` }} />
+                          </div>
+                          <div>
+                            <div style={{ color: pal.text, fontSize: '13px', fontWeight: 600 }}>{p.label}</div>
+                            <div style={{ color: pal.textMuted, fontSize: '11px', marginTop: '2px' }}>{p.note}</div>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '20px', flexWrap: 'wrap' }}>
+                  <label htmlFor="pulse-accent" style={{ color: tokens.colors.textMuted, fontSize: '13px', fontWeight: 500 }}>
+                    Custom accent
+                  </label>
+                  <input
+                    id="pulse-accent"
+                    type="color"
+                    value={customAccent ?? presets[preset][resolvedTheme].accent}
+                    onChange={(e) => setCustomAccent(e.target.value)}
+                    style={{ width: '44px', height: '32px', padding: '2px', cursor: 'pointer' }}
+                  />
+                  <span style={{ color: tokens.colors.textDim, fontSize: '12px', fontFamily: tokens.fonts.mono }}>
+                    {customAccent ?? 'from the theme'}
+                  </span>
+                  {customAccent && (
+                    <button className="btn btn-secondary" onClick={() => setCustomAccent(null)} style={{ padding: '6px 12px', fontSize: '12px' }}>
+                      Use the theme's accent
+                    </button>
+                  )}
+                </div>
+              </div>
+
               {/* Font Toggle */}
               <div
                 style={{
@@ -451,8 +601,8 @@ export function Settings({ apps, onSave, onClose, inline = false }: SettingsProp
                 >
                   Font
                 </label>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  {(Object.entries(fontOptions) as [FontChoice, typeof fontOptions.inter][]).map(([id, font]) => (
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  {(Object.entries(fontOptions) as [FontChoice, typeof fontOptions.editorial][]).map(([id, font]) => (
                     <button
                       key={id}
                       onClick={() => setFontChoice(id)}
@@ -465,7 +615,7 @@ export function Settings({ apps, onSave, onClose, inline = false }: SettingsProp
                         fontSize: '13px',
                         fontWeight: 500,
                         cursor: 'pointer',
-                        fontFamily: font.sans,
+                        fontFamily: font.display,
                         transition: 'all 0.15s ease',
                       }}
                     >
@@ -560,7 +710,7 @@ export function Settings({ apps, onSave, onClose, inline = false }: SettingsProp
           )}
 
           {/* Apps Tab */}
-          {activeTab === 'apps' && (
+          {tab === 'apps' && (
             <div style={{ display: 'flex', gap: '24px' }}>
               {/* App List */}
               <div style={{ width: '180px', flexShrink: 0 }}>

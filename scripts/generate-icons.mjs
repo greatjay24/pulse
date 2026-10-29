@@ -1,15 +1,17 @@
+// Renders the app icon and the menu bar template from icon-concepts/ into src-tauri/icons/.
+// Run: node scripts/generate-icons.mjs   (macOS: builds icon.icns with iconutil)
 import sharp from 'sharp';
 import { promises as fs } from 'fs';
+import { execFileSync } from 'child_process';
+import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const appSvg = join(root, 'icon-concepts', 'concept6-signal.svg');
+const traySvg = join(root, 'icon-concepts', 'tray-template.svg');
+const iconsDir = join(root, 'src-tauri', 'icons');
 
-const svgPath = join(__dirname, '..', 'icon-concepts', 'concept1-pulse-wave.svg');
-const iconsDir = join(__dirname, '..', 'src-tauri', 'icons');
-
-// All sizes needed for Tauri
 const sizes = [
   { name: '32x32.png', size: 32 },
   { name: '128x128.png', size: 128 },
@@ -28,26 +30,34 @@ const sizes = [
   { name: 'StoreLogo.png', size: 50 },
 ];
 
-async function generateIcons() {
-  const svg = await fs.readFile(svgPath);
+const render = (svg, size) => sharp(svg, { density: Math.max(72, (72 * size) / 1024 * 4) }).resize(size, size).png().toBuffer();
 
+async function main() {
+  const svg = await fs.readFile(appSvg);
   for (const { name, size } of sizes) {
-    const outputPath = join(iconsDir, name);
-    await sharp(svg)
-      .resize(size, size)
-      .png()
-      .toFile(outputPath);
-    console.log(`Generated ${name} (${size}x${size})`);
+    await fs.writeFile(join(iconsDir, name), await render(svg, size));
+  }
+  await fs.writeFile(join(iconsDir, 'icon.ico'), await render(svg, 256));
+
+  // macOS .icns from a full iconset
+  const set = join(await fs.mkdtemp(join(tmpdir(), 'pulse-icon-')), 'icon.iconset');
+  await fs.mkdir(set);
+  for (const s of [16, 32, 128, 256, 512]) {
+    await fs.writeFile(join(set, `icon_${s}x${s}.png`), await render(svg, s));
+    await fs.writeFile(join(set, `icon_${s}x${s}@2x.png`), await render(svg, s * 2));
+  }
+  if (process.platform === 'darwin') {
+    execFileSync('iconutil', ['-c', 'icns', set, '-o', join(iconsDir, 'icon.icns')]);
+  } else {
+    console.warn('Skipped icon.icns: iconutil is macOS only.');
   }
 
-  // Generate icon.ico for Windows (use 256x256 as source)
-  const ico256 = await sharp(svg).resize(256, 256).png().toBuffer();
-  await fs.writeFile(join(iconsDir, 'icon.ico'), ico256);
-  console.log('Generated icon.ico');
-
-  console.log('\nDone! Icons generated in src-tauri/icons/');
-  console.log('\nNote: For macOS, you\'ll need to generate icon.icns separately.');
-  console.log('You can use: iconutil -c icns iconset_folder');
+  const tray = await fs.readFile(traySvg);
+  await fs.writeFile(join(iconsDir, 'tray-template@2x.png'), await sharp(tray, { density: 144 }).resize(44, 44).png().toBuffer());
+  console.log('Icons written to src-tauri/icons/');
 }
 
-generateIcons().catch(console.error);
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

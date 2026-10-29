@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { Sidebar } from './components/Sidebar';
 import { StatCard } from './components/StatCard';
@@ -23,12 +24,36 @@ import { CardRect } from './components/StatCard';
 import { useHistory } from './hooks/useHistory';
 import { usePortfolio } from './hooks/usePortfolio';
 import { OrgBoard, boardEntities } from './components/OrgBoard';
-import { EntityDashboard } from './components/EntityDashboard';
+import { EntityDashboard, EntityTab } from './components/EntityDashboard';
+import { TodayView } from './components/TodayView';
+import { MoneyView } from './components/MoneyView';
+import { decisionQueue, urgentSignals } from './utils/today';
+import { useDesktopSignals } from './hooks/useDesktopSignals';
+import { ActivityPage } from './components/ActivityPage';
+import { ConversationFocus, ConversationsPage } from './components/ConversationsPage';
+import { useLive } from './hooks/useLive';
+import { liveSignals, trayRuns } from './utils/live';
 import { migrateApps } from './utils/platforms';
+import { DEMO } from './utils/orgSource';
+import { DemoBadge, Toast, Welcome } from './components/Welcome';
 import './index.css';
 
 // Check if running in Tauri environment (Tauri v2 uses __TAURI_INTERNALS__)
 const IS_TAURI = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
+
+const SAAS_PAGES = ['overview', 'project', 'analytics', 'calendar'];
+const ENTITY_HOSTS = ['today', 'board', 'money'];
+const COMPACT_BELOW = 960;
+
+function useWindowWidth() {
+  const [width, setWidth] = useState(() => window.innerWidth);
+  useEffect(() => {
+    const onResize = () => setWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  return width;
+}
 
 function DashboardContent() {
   const { tokens } = useTheme();
@@ -43,8 +68,10 @@ function DashboardContent() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
-  const [activeNav, setActiveNav] = useState('board');
+  const [activeNav, setActiveNav] = useState('today');
+  const [conversationFocus, setConversationFocus] = useState<ConversationFocus | null>(null);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const [entityTab, setEntityTab] = useState<EntityTab>('overview');
   const [tvMode, setTvMode] = useState(false);
   const portfolio = usePortfolio();
   const [detailPanel, setDetailPanel] = useState<{ isOpen: boolean; type: DetailPanelType; originRect: CardRect | null }>({
@@ -699,22 +726,41 @@ function DashboardContent() {
     handleOpenPanel
   ]);
 
-  // Returning to the board from the sidebar always lands on the board, not a stale entity.
+  // The SaaS-metrics pages only exist while their Settings toggle is on.
+  const saasMetrics = settings.saasMetrics ?? false;
+  const notificationsOn = settings.notifications ?? true;
+  const page = !saasMetrics && SAAS_PAGES.includes(activeNav) ? 'today' : activeNav;
+
+  const setSaasMetrics = (on: boolean) => {
+    const next = { ...settings, saasMetrics: on };
+    setSettings(next);
+    saveSettingsToStore(next);
+  };
+  const setNotificationsOn = (on: boolean) => {
+    const next = { ...settings, notifications: on };
+    setSettings(next);
+    saveSettingsToStore(next);
+  };
+
+  // A sidebar click always lands on that page itself, not a stale entity.
   const handleNavChange = useCallback((nav: string) => {
-    if (nav === 'board') setSelectedEntityId(null);
+    setSelectedEntityId(null);
     setActiveNav(nav);
   }, []);
 
   // TV mode: board only, no chrome, larger type, native fullscreen.
   const setTv = useCallback((enabled: boolean) => {
     setTvMode(enabled);
-    if (enabled) setActiveNav('board');
+    if (enabled) {
+      setActiveNav('board');
+      setSelectedEntityId(null);
+    }
     if (IS_TAURI) {
       invoke('set_tv_fullscreen', { enabled }).catch((e) => console.error('Failed to toggle fullscreen:', e));
     }
   }, []);
 
-  // T toggles TV mode, Esc leaves it, Backspace goes from an entity back to the board.
+  // T toggles TV mode, Esc leaves it, Backspace goes from an entity back to where it opened.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -725,17 +771,85 @@ function DashboardContent() {
         setTv(!tvMode);
       } else if (e.key === 'Escape' && tvMode) {
         setTv(false);
-      } else if (e.key === 'Backspace' && activeNav === 'board' && selectedEntityId) {
+      } else if (e.key === 'Backspace' && selectedEntityId) {
         e.preventDefault();
         setSelectedEntityId(null);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [tvMode, setTv, activeNav, selectedEntityId]);
+  }, [tvMode, setTv, selectedEntityId]);
 
-  const boardItems = boardEntities(portfolio.snapshot);
-  const selectedEntity = boardItems.find((i) => i.entity.id === selectedEntityId) ?? null;
+  // The menu bar's "Today" item brings the window forward on Today.
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    const off = listen<string>('pulse://navigate', (e) => {
+      setTv(false);
+      handleNavChange(e.payload);
+    });
+    return () => {
+      off.then((unlisten) => unlisten());
+    };
+  }, [setTv, handleNavChange]);
+
+  // Conversations opened on one run or one entity's thread (Activity, Working now, the menu bar).
+  const openConversation = useCallback((focus: { runId?: string; entity?: string }) => {
+    setTv(false);
+    setSelectedEntityId(null);
+    setConversationFocus({ ...focus, nonce: Date.now() });
+    setActiveNav('conversations');
+  }, [setTv]);
+  const openRun = useCallback((runId: string) => openConversation({ runId }), [openConversation]);
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    const off = listen<string>('pulse://open-run', (e) => openRun(e.payload));
+    return () => {
+      off.then((unlisten) => unlisten());
+    };
+  }, [openRun]);
+
+  const boardItems = boardEntities(portfolio.snapshot, portfolio.tracker);
+  const queue = decisionQueue(boardItems);
+
+  // Menu bar count and native notifications, from the same data as Today.
+  const { signals, cleared } = urgentSignals(boardItems, portfolio.tracker);
+  const { live } = useLive();
+  // The demo org never reaches the menu bar or notifications: they are for the owner's real org.
+  // Without a tracker the picture is complete once ~/portfolio has been read.
+  useDesktopSignals({
+    working: live && !DEMO ? trayRuns(live) : null,
+    liveSignals: DEMO ? [] : liveSignals(live),
+    ready: !DEMO && !!portfolio.snapshot?.registry && (portfolio.trackerAbsent || (!!portfolio.tracker && !portfolio.tracker.error)) && settingsLoaded,
+    decisions: portfolio.snapshot?.registry && !DEMO ? queue.length : null,
+    signals,
+    cleared,
+    notificationsOn,
+  });
+
+  // An entity opens over the page it was opened from (Today, Board or Money), so the back
+  // button and Backspace return there, on the tab asked for.
+  const openEntity = useCallback((id: string, tab: EntityTab = 'overview') => {
+    setEntityTab(tab);
+    setSelectedEntityId(id);
+  }, []);
+  const entityPage = ENTITY_HOSTS.includes(page);
+  const selectedEntity = entityPage ? boardItems.find((i) => i.entity.id === selectedEntityId) ?? null : null;
+  const pageLabel: Record<string, string> = { today: 'Today', board: 'Board', money: 'Money' };
+
+  // Narrow windows get an icon rail instead of the full sidebar.
+  const compact = useWindowWidth() < COMPACT_BELOW;
+
+  // <main> is the scroll container, so a new page or entity would otherwise open at the
+  // previous page's scroll position.
+  const mainRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    mainRef.current?.scrollTo(0, 0);
+  }, [activeNav, selectedEntityId, entityTab]);
+
+  // First run: no org yet (or a browser preview, which has no files to read).
+  if (!DEMO && (!IS_TAURI || portfolio.snapshot?.setup_needed)) {
+    return <Welcome onRecheck={portfolio.refresh} />;
+  }
 
   return (
     <div
@@ -754,37 +868,83 @@ function DashboardContent() {
         apps={settings.apps}
         selectedAppId={selectedAppId}
         onSelectApp={setSelectedAppId}
-        onSettingsClick={() => setShowSettings(true)}
-        activeNav={activeNav}
+        activeNav={page}
         onNavChange={handleNavChange}
         totalMRR={displayMRR}
         mrrChange={mrrChange}
         onAddProject={() => setShowAddProjectModal(true)}
         onDeleteApp={handleDeleteApp}
+        saasMetrics={saasMetrics}
+        decisions={portfolio.snapshot?.registry ? queue.length : null}
+        compact={compact}
+        hideMoney={portfolio.trackerAbsent}
       />}
 
       {/* Main Content */}
-      <main style={{ flex: 1, padding: tvMode ? '40px 56px' : '32px 40px', overflow: 'auto' }}>
-        {/* Org board: the home view (zoomed up for the office TV) */}
-        {activeNav === 'board' && (
+      <main ref={mainRef} style={{ flex: 1, minWidth: 0, padding: tvMode ? '40px 56px' : compact ? '28px 24px' : '36px 48px', overflow: 'auto' }}>
+        {/* An entity's dashboard, over the page it was opened from */}
+        {selectedEntity && (
+          <EntityDashboard
+            key={`${selectedEntity.entity.id}-${entityTab}`}
+            item={selectedEntity}
+            entities={portfolio.snapshot?.registry?.entities ?? []}
+            money={portfolio.tracker && !portfolio.tracker.error ? portfolio.tracker.money : null}
+            trackerAbsent={portfolio.trackerAbsent}
+            initialTab={entityTab}
+            onBack={() => setSelectedEntityId(null)}
+            backLabel={pageLabel[page]}
+          />
+        )}
+
+        {/* Board: the whole portfolio (zoomed up for the office TV) */}
+        {page === 'board' && !selectedEntity && (
           <div style={{ zoom: tvMode ? 1.4 : 1 }}>
-            {selectedEntity ? (
-              <EntityDashboard item={selectedEntity} onBack={() => setSelectedEntityId(null)} />
-            ) : (
-              <OrgBoard
-                snapshot={portfolio.snapshot}
-                error={portfolio.error}
-                onOpenEntity={setSelectedEntityId}
-                onRefresh={portfolio.refresh}
-                tvMode={tvMode}
-                onToggleTv={() => setTv(!tvMode)}
-              />
-            )}
+            <OrgBoard
+              snapshot={portfolio.snapshot}
+              tracker={portfolio.tracker}
+              error={portfolio.error}
+              trackerError={portfolio.trackerError}
+              onOpenEntity={(id) => openEntity(id)}
+              onRefresh={portfolio.refresh}
+              tvMode={tvMode}
+              onToggleTv={() => setTv(!tvMode)}
+            />
           </div>
         )}
 
+        {/* Today: the home view. The headline line, the decision queue, then each business. */}
+        {page === 'today' && !selectedEntity && (
+          <TodayView
+            snapshot={portfolio.snapshot}
+            tracker={portfolio.tracker}
+            error={portfolio.error}
+            trackerError={portfolio.trackerError}
+            onOpenEntity={openEntity}
+            onOpenActivity={() => handleNavChange('activity')}
+            onOpenRun={openRun}
+            onRefresh={portfolio.refresh}
+          />
+        )}
+
+        {page === 'money' && !selectedEntity && (
+          <MoneyView
+            snapshot={portfolio.snapshot}
+            tracker={portfolio.tracker}
+            trackerError={portfolio.trackerError}
+            trackerAbsent={portfolio.trackerAbsent}
+            onOpenFinance={(id) => openEntity(id, 'finance')}
+          />
+        )}
+
+        {/* Activity: what the organization did (read-only) */}
+        {page === 'activity' && !selectedEntity && <ActivityPage snapshot={portfolio.snapshot} onOpenConversation={openConversation} />}
+
+        {/* Conversations: the owner and the leads, run by run (read-only) */}
+        {page === 'conversations' && !selectedEntity && <ConversationsPage snapshot={portfolio.snapshot} focus={conversationFocus} />}
+
+        {/* SaaS metrics pages: kept behind the Settings toggle */}
         {/* Overview Page */}
-        {(activeNav === 'overview' || activeNav === 'project') && (
+        {(page === 'overview' || page === 'project') && (
           <>
             {/* Header */}
             <header
@@ -1021,12 +1181,12 @@ function DashboardContent() {
         )}
 
         {/* Analytics Page */}
-        {activeNav === 'analytics' && (
+        {page === 'analytics' && (
           <AnalyticsPage apps={settings.apps} metrics={metrics} />
         )}
 
         {/* Calendar Page */}
-        {activeNav === 'calendar' && (
+        {page === 'calendar' && (
           <CalendarPage
             apps={settings.apps}
             events={Object.fromEntries(
@@ -1040,18 +1200,25 @@ function DashboardContent() {
         )}
 
         {/* Settings Page (inline) */}
-        {activeNav === 'settings' && (
+        {page === 'settings' && (
           <Settings
             apps={settings.apps}
             onSave={saveSettings}
             onClose={() => {
-              setActiveNav('overview');
+              setActiveNav('today');
               refreshMetrics();
             }}
             inline
+            saasMetrics={saasMetrics}
+            onSaasMetricsChange={setSaasMetrics}
+            notifications={notificationsOn}
+            onNotificationsChange={setNotificationsOn}
           />
         )}
       </main>
+
+      {DEMO && !tvMode && <DemoBadge />}
+      <Toast />
 
       {/* Settings Modal */}
       {showSettings && (
@@ -1059,6 +1226,10 @@ function DashboardContent() {
           apps={settings.apps}
           onSave={saveSettings}
           onClose={closeSettings}
+          saasMetrics={saasMetrics}
+          onSaasMetricsChange={setSaasMetrics}
+          notifications={notificationsOn}
+          onNotificationsChange={setNotificationsOn}
         />
       )}
 
