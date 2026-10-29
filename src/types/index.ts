@@ -899,7 +899,15 @@ export interface MoneyFinance {
   }[];
   projects: ProjectFinance[];
   stripe_accounts: { project: string; ok: boolean; error: string | null; active: number; mrr: number }[];
-  bank_accounts: { name: string; org: string; project: string | null; balance: number | null; currency: string }[];
+  bank_accounts: {
+    name: string;
+    org: string;
+    project: string | null;
+    balance: number | null;
+    currency: string;
+    balance_series: [string, number][]; // [YYYY-MM-DD, end-of-day balance], oldest first; empty unless the bank gives history
+  }[];
+  payout_weeks: [string, string, number][]; // [project, week (Monday YYYY-MM-DD), total]: Stripe payouts by arrival
 }
 
 export interface ProjectFinance {
@@ -907,6 +915,7 @@ export interface ProjectFinance {
   d30: number;
   d90: number;
   months: [string, number][]; // [YYYY-MM, total], oldest first
+  weeks: [string, MoneySourceId, number][]; // [week (Monday YYYY-MM-DD), channel, total], oldest first
   by_channel: [MoneySourceId, number][]; // last 90 days
   by_rail: [MoneySourceId, string, number][]; // last 90 days: [channel, rail (zelle, venmo...), total]
   payers: { name: string; total: number; payments: number }[]; // last 90 days

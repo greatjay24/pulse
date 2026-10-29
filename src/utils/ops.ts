@@ -1,4 +1,4 @@
-import { Goal } from '../types/ops';
+import { Goal, OutboxEdit, OutboxKind, OutboxMessage } from '../types/ops';
 
 export type Pace = 'on-track' | 'at-risk' | 'done' | 'missed' | 'no-date' | 'unmeasured';
 
@@ -83,3 +83,83 @@ export function parseAmount(s: string): number | null | 'invalid' {
 export function splitAddresses(s: string): string[] {
   return s.split(/[,;\n]/).map((a) => a.trim()).filter(Boolean);
 }
+
+// ---------- Outbox kinds ----------
+
+export function kindOf(m: OutboxMessage): OutboxKind {
+  return m.kind ?? 'email';
+}
+
+export const PUBLISH_KINDS: OutboxKind[] = ['post', 'text', 'dm', 'slack'];
+export const isMoneyKind = (k: OutboxKind) => k.startsWith('stripe_');
+
+const CHANNEL_LABEL: Record<string, string> = {
+  instagram: 'Instagram',
+  linkedin: 'LinkedIn',
+  x: 'X',
+  newsletter: 'Newsletter',
+  site: 'Website',
+  facebook: 'Facebook',
+  whatsapp: 'WhatsApp',
+  other: 'DM',
+};
+
+export function channelLabel(c: string | null | undefined): string {
+  return (c && CHANNEL_LABEL[c]) || c || '';
+}
+
+export function kindLabel(m: OutboxMessage): string {
+  const k = kindOf(m);
+  switch (k) {
+    case 'email':
+      return 'Email';
+    case 'post':
+      return m.channel === 'newsletter' ? 'Newsletter' : m.channel === 'site' ? 'Site post' : `${channelLabel(m.channel)} post`;
+    case 'text':
+      return 'Text';
+    case 'dm':
+      return `${channelLabel(m.channel)} DM`;
+    case 'slack':
+      return 'Slack';
+    case 'stripe_send_invoice':
+      return 'Invoice';
+    case 'stripe_send_quote':
+      return 'Quote';
+    case 'stripe_refund':
+      return 'Refund';
+    case 'stripe_subscription':
+      return m.action === 'update' ? 'Subscription change' : 'New subscription';
+  }
+}
+
+// The one button each kind leads with.
+export function primaryLabel(k: OutboxKind): 'Send' | 'Publish' | 'Approve' {
+  if (k === 'post') return 'Publish';
+  if (isMoneyKind(k)) return 'Approve';
+  return 'Send';
+}
+
+// Which fields Pulse's Edit offers, by kind (mirrors bin/outbox.py EDITABLE).
+export const EDITABLE: Partial<Record<OutboxKind, (keyof OutboxEdit)[]>> = {
+  email: ['to', 'cc', 'subject', 'body'],
+  post: ['title', 'body', 'link'],
+  text: ['to', 'body'],
+  dm: ['to', 'body', 'link'],
+  slack: ['body', 'link'],
+};
+
+const ZERO_DECIMAL = new Set(['bif', 'clp', 'djf', 'gnf', 'jpy', 'kmf', 'krw', 'mga', 'pyg', 'rwf', 'ugx', 'vnd', 'vuv', 'xaf', 'xof', 'xpf']);
+
+// Stripe amounts are in minor units (cents).
+export function formatMinor(amount: number | null | undefined, currency: string | null | undefined): string {
+  if (amount == null) return '?';
+  const cur = (currency || 'usd').toLowerCase();
+  const major = ZERO_DECIMAL.has(cur) ? amount : amount / 100;
+  try {
+    return major.toLocaleString(undefined, { style: 'currency', currency: cur.toUpperCase() });
+  } catch {
+    return `${major.toFixed(2)} ${cur.toUpperCase()}`;
+  }
+}
+
+export const isWebLink = (u: string | null | undefined): u is string => !!u && /^https:\/\//i.test(u);

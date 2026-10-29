@@ -139,3 +139,67 @@ export function formatDay(unixSeconds: number): string {
 }
 
 export const CONNECT_CMD = 'python3 ~/project-tracker/connect_money.py';
+
+// ---------- weeks (the Money page's per-business charts) ----------
+
+function ymd(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// The last `n` weeks as their Mondays (YYYY-MM-DD, local), oldest first. Matches Rust local_week.
+export function trailingWeeks(n: number, now: Date): string[] {
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7));
+  return Array.from({ length: n }, (_, i) => ymd(new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() - 7 * (n - 1 - i))));
+}
+
+// A week is on file when any of it falls inside a connected source's window.
+export function weekOnFile(key: string, since: number | null): boolean {
+  if (since === null) return false;
+  const [y, m, d] = key.split('-').map(Number);
+  return new Date(y, m - 1, d + 7).getTime() / 1000 > since;
+}
+
+// Counted cash in by week (each dollar once, whichever channel saw it), with the channel split.
+export function weeksOf(projects: ProjectFinance[]): Map<string, { total: number; byChannel: Map<MoneySourceId, number> }> {
+  const out = new Map<string, { total: number; byChannel: Map<MoneySourceId, number> }>();
+  for (const p of projects) {
+    for (const [w, ch, v] of p.weeks ?? []) {
+      const slot = out.get(w) ?? { total: 0, byChannel: new Map() };
+      slot.total = cents(slot.total + v);
+      slot.byChannel.set(ch, cents((slot.byChannel.get(ch) ?? 0) + v));
+      out.set(w, slot);
+    }
+  }
+  return out;
+}
+
+export function payoutWeeksOf(entityId: string, finance: MoneyFinance, entities: PortfolioEntity[]): Map<string, number> {
+  const owners = projectOwners(entities);
+  const out = new Map<string, number>();
+  for (const [project, w, v] of finance.payout_weeks ?? []) {
+    const owner = project === 'unsorted' ? UNASSIGNED : ownerOf(project, owners);
+    if (owner === entityId) out.set(w, cents((out.get(w) ?? 0) + v));
+  }
+  return out;
+}
+
+// The entity's bank accounts, and their balances summed by day over the days every account reports.
+export function balanceOf(entityId: string, finance: MoneyFinance, entities: PortfolioEntity[]) {
+  const owners = projectOwners(entities);
+  const accounts = finance.bank_accounts.filter((a) => (a.project ? ownerOf(a.project, owners) : UNASSIGNED) === entityId);
+  const withSeries = accounts.filter((a) => a.balance_series?.length);
+  const days = new Map<string, { sum: number; n: number }>();
+  for (const a of withSeries) {
+    for (const [d, v] of a.balance_series) {
+      const s = days.get(d) ?? { sum: 0, n: 0 };
+      days.set(d, { sum: s.sum + v, n: s.n + 1 });
+    }
+  }
+  const series: [string, number][] = [...days.entries()]
+    .filter(([, s]) => s.n === withSeries.length)
+    .map(([d, s]): [string, number] => [d, cents(s.sum)])
+    .sort((a, b) => a[0].localeCompare(b[0]));
+  return { accounts, series };
+}
+
+export const MERCURY_CMD = 'python3 ~/project-tracker/connect_money.py mercury <business>';

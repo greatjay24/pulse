@@ -34,6 +34,27 @@ export function demoOutbox(): OutboxSnapshot {
         },
       },
       {
+        content: 'demo-4',
+        item: {
+          ...base, id: 'demo-northwind-invoice-1043', kind: 'stripe_send_invoice', entity: 'northwind', account: 'northwind', to: [],
+          stripe_id: 'in_demo000000', customer_id: 'cus_demo000000', customer: 'Harbor Foods <ap@example.org>',
+          amount: 248000, currency: 'usd', due_date: date(30), in_reply_to: null,
+          subject: 'Invoice $2,480.00 to Harbor Foods', body: 'Pallet racking install  $2,200.00\nSite visit  $280.00',
+          why: 'The install finished Tuesday and the client signed off; net-30 starts when this goes out.',
+          created_by: 'northwind-lead', created_at: iso(3 * 3_600_000), status: 'pending',
+        },
+      },
+      {
+        content: 'demo-5',
+        item: {
+          ...base, id: 'demo-acme-linkedin-launch', kind: 'post', entity: 'acme', account: 'acme', to: [], channel: 'linkedin',
+          title: null, link: null, media: ['menu-hero.jpg'], in_reply_to: null, subject: 'LinkedIn post',
+          body: 'New menus are live for three neighborhood restaurants this week. Photos, copy and print in ten days, start to finish.',
+          why: 'Three launches in one week is the proof point the pipeline asks about.',
+          created_by: 'acme-lead', created_at: iso(7 * 3_600_000), status: 'pending',
+        },
+      },
+      {
         content: 'demo-3',
         item: {
           ...base, id: 'demo-globex-roof-reply', entity: 'globex', account: 'personal', to: ['quotes@example.net'],

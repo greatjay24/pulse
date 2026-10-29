@@ -4,6 +4,7 @@ import {
   EntityStatus,
   LiveRun,
   LiveSnapshot,
+  MoneySourceId,
   PortfolioRegistry,
   PortfolioSnapshot,
   ProjectFinance,
@@ -349,8 +350,32 @@ function months(values: number[]): [string, number][] {
   });
 }
 
+// Monday of the week `n` weeks back, local time, as YYYY-MM-DD.
+function weekStart(n: number): string {
+  const d = new Date(NOW);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7) - 7 * n);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// Thirteen weeks per channel that add up to its 90-day total.
+// A fixed wave, not random, so the demo looks the same every time.
+const WAVE = [0.7, 1.1, 0.9, 1.3, 0.6, 1.0, 1.2, 0.8, 1.4, 0.9, 1.1, 0.7, 1.3];
+function weeks(channel: ProjectFinance['by_channel']): ProjectFinance['weeks'] {
+  const sum = WAVE.reduce((a, b) => a + b, 0);
+  return WAVE.flatMap((w, i) => channel.map(([c, v]): [string, MoneySourceId, number] => [weekStart(12 - i), c, Math.round((v * w) / sum)])).filter(([, , v]) => v > 0);
+}
+
+function balances(end: number, drift: number): [string, number][] {
+  return Array.from({ length: 90 }, (_, i) => {
+    const d = new Date(NOW - (89 - i) * DAY);
+    const v = end - drift * ((89 - i) / 89) + 900 * Math.sin(i / 6);
+    return [`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`, Math.round(v)];
+  });
+}
+
 const finance = (project: string, d30: number, d90: number, monthly: number[], channel: ProjectFinance['by_channel'], payers: ProjectFinance['payers']): ProjectFinance => ({
-  project, d30, d90, months: months(monthly), by_channel: channel,
+  project, d30, d90, months: months(monthly), weeks: weeks(channel), by_channel: channel,
   by_rail: channel.map(([c, v]) => [c, c === 'bank' ? 'ach' : c === 'email' ? 'zelle' : 'card', v]),
   payers, no_payer_90d: 0,
 });
@@ -403,9 +428,11 @@ function tracker(): TrackerSnapshot {
           { project: 'northwind', ok: true, error: null, active: 0, mrr: 0 },
         ],
         bank_accounts: [
-          { name: 'Operating', org: 'Demo Bank', project: 'northwind', balance: 22140, currency: 'USD' },
-          { name: 'Rentals', org: 'Demo Bank', project: 'globex', balance: 8310, currency: 'USD' },
+          { name: 'Operating', org: 'Demo Bank', project: 'northwind', balance: 22140, currency: 'USD', balance_series: balances(22140, 6000) },
+          { name: 'Rentals', org: 'Demo Bank', project: 'globex', balance: 8310, currency: 'USD', balance_series: balances(8310, -1500) },
         ],
+        payout_weeks: WAVE.map((w, i) => ['acme', weekStart(12 - i), Math.round(3300 * w)] as [string, string, number])
+          .concat(WAVE.map((w, i) => ['northwind', weekStart(12 - i), Math.round(1900 * (2.2 - w))] as [string, string, number])),
       },
     },
     projects: [
