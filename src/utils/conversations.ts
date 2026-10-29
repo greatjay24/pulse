@@ -1,4 +1,4 @@
-import { ActivitySnapshot, DecisionRow, LiveRun, LiveSnapshot, PortfolioSnapshot, TranscriptSummary } from '../types';
+import { ActivitySnapshot, DecisionRow, LiveRun, LiveSnapshot, PortfolioSnapshot, RunTokens, TranscriptSummary } from '../types';
 import { decisionId } from './decisions';
 import { leadOwners, shifts, stampOf } from './activity';
 import { ms } from './live';
@@ -22,6 +22,7 @@ export type ConvItem =
       doing: string;
       ok?: boolean;
       cost?: number | null;
+      tokens?: RunTokens;
       secs?: number | null;
       result?: string;
       agents?: number; // subagents deployed; 0 = worked solo
@@ -61,7 +62,7 @@ export function buildThreads(
     if (s.start?.t !== 'start') continue;
     const st = s.start;
     const item: RunItem = { type: 'run', key: `run-${s.run_id}`, at: ms(st.at), runId: s.run_id, agent: st.agent, kind: st.kind, doing: st.doing, live: null };
-    if (s.last?.t === 'result') Object.assign(item, { ok: s.last.ok, cost: s.last.cost_usd, secs: s.last.secs, result: s.last.result, agents: s.last.agents });
+    if (s.last?.t === 'result') Object.assign(item, { ok: s.last.ok, cost: s.last.cost_usd, tokens: s.last.tokens, secs: s.last.secs, result: s.last.result, agents: s.last.agents });
     runs.set(s.run_id, { thread: threadOf(st.entity), item });
   }
   for (const r of live?.runs ?? []) {
@@ -69,7 +70,7 @@ export function buildThreads(
     if (known) {
       known.item.live = r;
       if (r.state !== 'running' && r.state !== 'idle' && known.item.ok === undefined) {
-        Object.assign(known.item, { ok: r.ok ?? r.state === 'finished', cost: r.cost_usd, secs: r.secs, result: r.result });
+        Object.assign(known.item, { ok: r.ok ?? r.state === 'finished', cost: r.cost_usd, tokens: r.tokens, secs: r.secs, result: r.result });
       }
       if (r.kind !== 'interactive' && r.state !== 'running') known.item.agents ??= r.team?.length ?? 0;
     } else {
@@ -81,13 +82,14 @@ export function buildThreads(
   }
 
   // Run logs: fill in cost for transcripts, and keep older runs that have no transcript.
-  const legacy = (thread: string, key: string, at: number, agent: string, kind: string, doing: string, r: { ok?: boolean; cost_usd?: number | null; secs?: number; result?: string }) =>
-    add(thread, { type: 'run', key, at, runId: null, agent, kind, doing, ok: r.ok, cost: r.cost_usd, secs: r.secs, result: r.result, live: null });
+  const legacy = (thread: string, key: string, at: number, agent: string, kind: string, doing: string, r: { ok?: boolean; cost_usd?: number | null; tokens?: RunTokens; secs?: number; result?: string }) =>
+    add(thread, { type: 'run', key, at, runId: null, agent, kind, doing, ok: r.ok, cost: r.cost_usd, tokens: r.tokens, secs: r.secs, result: r.result, live: null });
   for (const shift of shifts(activity)) {
     shift.runs.forEach((r, i) => {
       const known = r.run_id ? runs.get(r.run_id) : undefined;
       if (known) {
         known.item.cost ??= r.cost_usd;
+        known.item.tokens ??= r.tokens;
         known.item.agents ??= r.agents;
         return;
       }
@@ -108,6 +110,7 @@ export function buildThreads(
     const known = r.run_id ? runs.get(r.run_id) : undefined;
     if (known) {
       known.item.cost ??= r.cost_usd;
+      known.item.tokens ??= r.tokens;
       known.item.agents ??= r.agents;
       continue;
     }

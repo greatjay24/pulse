@@ -1,19 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { CAN_READ_ORG, orgRead } from '../utils/orgSource';
 import { useTheme } from '../contexts/ThemeContext';
 import { PortfolioSnapshot, TeamMember, Transcript, TranscriptLine, TranscriptSummary } from '../types';
 import { useOrgActivity } from '../hooks/useOrgActivity';
 import { useLive } from '../hooks/useLive';
 import { ConvItem, ORG_THREAD, Thread, buildThreads, threadOfRun, verbOf } from '../utils/conversations';
 import { deployedLine, elapsed, kindLabel, ms, stateLabel, teamLine } from '../utils/live';
-import { formatCost, formatSecs } from '../utils/activity';
+import { formatSecs, usage, usageLine } from '../utils/activity';
 import { firstUrl } from '../utils/decisions';
 import { openExternal } from '../utils/tracker';
 import { EntityMark, Notice, PageHeader } from './BoardUI';
 import { LiveDot, memberTone } from './WorkingNow';
 import { Icon } from './Icons';
 
-const IS_TAURI = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
 const INDEX_POLL_MS = 15_000;
 const LIVE_TRANSCRIPT_MS = 2_000;
 const AUTO_OPEN_RUNS = 6; // the newest runs in a thread show their conversation at once
@@ -39,10 +38,10 @@ function useTranscriptIndex(liveKey: string) {
   const [index, setIndex] = useState<TranscriptSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    if (!IS_TAURI) return;
+    if (!CAN_READ_ORG) return;
     let alive = true;
     const load = () =>
-      invoke<string>('list_transcripts')
+      orgRead('list_transcripts')
         .then((json) => alive && (setIndex(JSON.parse(json)), setError(null)))
         .catch((e) => alive && setError(String(e)));
     load();
@@ -62,7 +61,7 @@ function useTranscript(runId: string | null, open: boolean, running: boolean) {
   const [t, setT] = useState<Transcript | null>(runId ? finishedCache.get(runId) ?? null : null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    if (!runId || !open || !IS_TAURI) return;
+    if (!runId || !open || !CAN_READ_ORG) return;
     if (!running && finishedCache.has(runId)) {
       setT(finishedCache.get(runId)!);
       return;
@@ -70,7 +69,7 @@ function useTranscript(runId: string | null, open: boolean, running: boolean) {
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const load = () =>
-      invoke<string>('read_transcript', { runId })
+      orgRead('read_transcript', { runId })
         .then((json) => {
           if (!alive) return;
           const parsed: Transcript = JSON.parse(json);
@@ -284,7 +283,7 @@ function RunFooter({ item }: { item: RunItem }) {
   const parts = [
     stopped ? 'Stopped unexpectedly' : item.ok === false ? 'Failed' : item.ok ? 'Finished' : null,
     item.secs ? formatSecs(item.secs) : null,
-    item.cost ? formatCost(item.cost) : null,
+    usageLine(usage([item])),
     deployedLine(item.agents),
   ].filter(Boolean);
   if (!parts.length) return null;

@@ -605,6 +605,7 @@ export interface PortfolioEntity {
   logo?: string; // path under ~/portfolio/assets/, for light backgrounds
   logo_dark?: string; // the same mark for dark backgrounds
   color?: string; // hex; tints the initial when there is no logo
+  runner?: string | { name: string; [k: string]: unknown }; // overrides the org's agent CLI for this entity
 }
 
 export interface PortfolioRegistry {
@@ -665,6 +666,7 @@ export interface PortfolioEntityReport {
 export interface PortfolioSnapshot {
   registry: PortfolioRegistry | null;
   registry_error: string | null;
+  setup_needed?: boolean; // no ~/portfolio/portfolio.json yet: Pulse shows the welcome screen
   entities: PortfolioEntityReport[];
   week: string | null;
   read_at: string;
@@ -686,6 +688,11 @@ export interface DecisionRow {
   recommend?: string;
 }
 
+export interface RunTokens {
+  input: number;
+  output: number;
+}
+
 // One agent run: an item of a nightly log (an array) or a whole act log (one object).
 export interface AgentRun {
   agent: string;
@@ -693,7 +700,9 @@ export interface AgentRun {
   agents?: number; // subagents it deployed; 0 = worked solo (absent on runs from before tracking)
   ok?: boolean;
   result?: string;
-  cost_usd?: number | null;
+  cost_usd?: number | null; // only when the runner reports it; never estimated
+  tokens?: RunTokens; // runners that report tokens but not cost (Codex)
+  runner?: string; // claude-code (absent on its runs) | codex | opencode
   secs?: number;
   models?: string[];
   // act runs only
@@ -750,6 +759,8 @@ export interface LiveRun {
   ok?: boolean;
   result?: string;
   cost_usd?: number | null;
+  tokens?: RunTokens;
+  runner?: string;
   secs?: number | null;
   last?: string; // interactive: the agent's last message
   team?: TeamMember[]; // subagents this run deployed
@@ -786,7 +797,7 @@ export type TranscriptLine =
   | { t: 'error'; at: string; text: string }
   | { t: 'deploy'; at: string; agents: Omit<TeamMember, 'batch' | 'started' | 'status'>[]; sub?: boolean }
   | { t: 'agent_done'; at: string; id: string; status: string; summary: string; secs: number | null; tools: number | null }
-  | { t: 'result'; at: string; ok: boolean; result: string; cost_usd: number | null; secs: number | null; turns?: number; models?: string[]; agents?: number };
+  | { t: 'result'; at: string; ok: boolean; result: string; cost_usd: number | null; secs: number | null; turns?: number; models?: string[]; agents?: number; tokens?: RunTokens; runner?: string };
 
 export interface Transcript {
   run_id: string;
@@ -799,6 +810,14 @@ export interface TranscriptSummary {
   start: TranscriptLine | null;
   last: TranscriptLine | null;
   modified: string;
+}
+
+// What the welcome screen checks (Rust `setup_check`): existence only, at fixed paths.
+export interface SetupCheck {
+  setup_needed: boolean;
+  runners: { id: string; label: string; path: string | null }[]; // agent CLIs; setup needs one
+  python3: string | null;
+  tracker: boolean;
 }
 
 // ==========================================
@@ -899,6 +918,7 @@ export interface TrackerNote {
 }
 
 export interface TrackerSnapshot {
+  installed?: boolean; // false when there is no ~/project-tracker: the tracker is optional
   error: string | null; // ~/project-tracker missing
   file_errors: Record<string, string>;
   tasks: TrackerTask[];

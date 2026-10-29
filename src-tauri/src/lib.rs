@@ -1973,14 +1973,29 @@ fn read_portfolio_logo(root: &Path, rel: &str) -> Result<String, String> {
 struct PortfolioSnapshot {
     registry: Option<serde_json::Value>,
     registry_error: Option<String>,
+    // No ~/portfolio or no portfolio.json in it: the owner hasn't run setup yet, so Pulse
+    // shows its welcome screen instead of an empty board.
+    setup_needed: bool,
     entities: Vec<PortfolioEntityReport>,
     week: Option<String>,
     read_at: String,
 }
 
-fn get_portfolio_dir() -> Result<PathBuf, String> {
+// ~/<name>, or in a debug build only, the folder named by `debug_env`. The override lets the
+// first-run screen and a fresh org be tried against a scratch folder without touching the real
+// ~/portfolio; a release build ignores it and always reads the fixed folder.
+fn home_subdir(name: &str, debug_env: &str) -> Result<PathBuf, String> {
+    if cfg!(debug_assertions) {
+        if let Some(dir) = std::env::var_os(debug_env).filter(|v| !v.is_empty()) {
+            return Ok(PathBuf::from(dir));
+        }
+    }
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    home.join("portfolio")
+    Ok(home.join(name))
+}
+
+fn get_portfolio_dir() -> Result<PathBuf, String> {
+    home_subdir("portfolio", "PULSE_PORTFOLIO_DIR")?
         .canonicalize()
         .map_err(|_| "~/portfolio not found".to_string())
 }
@@ -2034,6 +2049,7 @@ fn read_portfolio() -> Result<String, String> {
             let snapshot = PortfolioSnapshot {
                 registry: None,
                 registry_error: Some(e),
+                setup_needed: true,
                 entities: vec![],
                 week: None,
                 read_at,
@@ -2083,8 +2099,73 @@ fn read_portfolio() -> Result<String, String> {
         .and_then(|p| read_portfolio_text(&p))
         .ok();
 
-    let snapshot = PortfolioSnapshot { registry, registry_error, entities, week, read_at };
+    let setup_needed = registry_error.as_deref() == Some("missing");
+    let snapshot = PortfolioSnapshot { registry, registry_error, setup_needed, entities, week, read_at };
     serde_json::to_string(&snapshot).map_err(|e| e.to_string())
+}
+
+// ==========================================
+// First run: what the welcome screen checks before the owner runs setup
+// ==========================================
+// Existence checks only (nothing is read or run), at fixed paths: a GUI app's PATH is not
+// something to rely on.
+
+// The agent CLIs the org can run on (kit/org/bin/runners.py). Setup needs any one of them.
+const RUNNERS: &[(&str, &str, &str)] = &[
+    ("claude-code", "Claude Code", "claude"),
+    ("codex", "Codex (ChatGPT)", "codex"),
+    ("opencode", "opencode (any provider)", "opencode"),
+];
+
+#[derive(Serialize)]
+struct RunnerFound {
+    id: &'static str,
+    label: &'static str,
+    path: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SetupCheck {
+    setup_needed: bool,
+    runners: Vec<RunnerFound>,
+    python3: Option<String>,
+    tracker: bool,
+}
+
+fn runner_candidates(home: &Path, binary: &str) -> Vec<PathBuf> {
+    let mut v = vec![home.join(".local/bin").join(binary)];
+    match binary {
+        "claude" => v.push(home.join(".claude/local/claude")),
+        "opencode" => v.push(home.join(".opencode/bin/opencode")),
+        _ => {}
+    }
+    v.push(Path::new("/opt/homebrew/bin").join(binary));
+    v.push(Path::new("/usr/local/bin").join(binary));
+    v
+}
+
+fn first_file(paths: impl IntoIterator<Item = PathBuf>) -> Option<String> {
+    paths.into_iter().find(|p| p.is_file()).map(|p| p.to_string_lossy().into_owned())
+}
+
+fn setup_check_at(portfolio: Option<&Path>, tracker: Option<&Path>, home: &Path) -> SetupCheck {
+    SetupCheck {
+        setup_needed: !portfolio.is_some_and(|p| p.join("portfolio.json").is_file()),
+        runners: RUNNERS
+            .iter()
+            .map(|(id, label, binary)| RunnerFound { id, label, path: first_file(runner_candidates(home, binary)) })
+            .collect(),
+        python3: first_file(PYTHON_CANDIDATES.iter().map(PathBuf::from)),
+        tracker: tracker.is_some_and(|t| t.is_dir()),
+    }
+}
+
+#[tauri::command]
+fn setup_check() -> Result<String, String> {
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    let portfolio = get_portfolio_dir().ok();
+    let tracker = get_tracker_dir().ok();
+    serde_json::to_string(&setup_check_at(portfolio.as_deref(), tracker.as_deref(), &home)).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -2584,8 +2665,7 @@ const TRACKER_DATA_FILES: &[&str] = &[
 const TRACKER_ROOT_FILES: &[&str] = &["projects.json", "notes.json"];
 
 fn get_tracker_dir() -> Result<PathBuf, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    home.join("project-tracker")
+    home_subdir("project-tracker", "PULSE_TRACKER_DIR")?
         .canonicalize()
         .map_err(|_| "~/project-tracker not found".to_string())
 }
@@ -2712,6 +2792,9 @@ struct TrackerNote {
 
 #[derive(Serialize)]
 struct TrackerSnapshot {
+    // The tracker is optional: false when ~/project-tracker doesn't exist, and Pulse hides
+    // everything that reads it (tasks, inbox, money) instead of showing an error.
+    installed: bool,
     error: Option<String>,
     file_errors: HashMap<String, String>,
     tasks: Vec<TrackerTask>,
@@ -2786,6 +2869,7 @@ fn read_tracker() -> Result<String, String> {
     let read_at = chrono::Local::now().to_rfc3339();
     let now = chrono::Local::now().timestamp() as f64;
     let mut snapshot = TrackerSnapshot {
+        installed: false,
         error: None,
         file_errors: HashMap::new(),
         tasks: vec![],
@@ -2805,6 +2889,7 @@ fn read_tracker() -> Result<String, String> {
             return serde_json::to_string(&snapshot).map_err(|e| e.to_string());
         }
     };
+    snapshot.installed = true;
 
     let mut read = |name: &str| match read_tracker_json(&root, name) {
         Ok(v) => Some(v),
@@ -3551,7 +3636,8 @@ pub fn run() {
             read_activity,
             read_live,
             read_transcript,
-            list_transcripts
+            list_transcripts,
+            setup_check
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -3735,6 +3821,28 @@ mod portfolio_tests {
         // A symlink inside assets/ that points elsewhere in the root is refused too.
         std::os::unix::fs::symlink(root.join("companies/acme/logo.svg"), root.join("assets/logos/link.svg")).unwrap();
         assert!(read_portfolio_logo(&root, "assets/logos/link.svg").is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn setup_is_needed_until_portfolio_json_exists() {
+        let root = temp_root("setup");
+        let home = root.join("home");
+        fs::create_dir_all(home.join(".local/bin")).unwrap();
+        let check = setup_check_at(None, None, &home);
+        assert!(check.setup_needed);
+        assert!(!check.tracker);
+        assert!(check.runners.iter().all(|r| r.path.is_none()));
+        assert_eq!(check.runners.iter().map(|r| r.id).collect::<Vec<_>>(), ["claude-code", "codex", "opencode"]);
+        assert!(setup_check_at(Some(&root), None, &home).setup_needed);
+
+        fs::write(root.join("portfolio.json"), "{}").unwrap();
+        fs::write(home.join(".local/bin/codex"), "").unwrap();
+        let check = setup_check_at(Some(&root), Some(&root), &home);
+        assert!(!check.setup_needed);
+        assert!(check.tracker);
+        let codex = check.runners.iter().find(|r| r.id == "codex").unwrap();
+        assert_eq!(codex.path.as_deref(), Some(home.join(".local/bin/codex").to_str().unwrap()));
         let _ = fs::remove_dir_all(&root);
     }
 }

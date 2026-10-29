@@ -1,9 +1,8 @@
 import { useSyncExternalStore } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { CAN_READ_ORG, orgRead } from '../utils/orgSource';
 import { LiveSnapshot } from '../types';
 import { refresh as refreshActivity } from './useOrgActivity';
 
-const IS_TAURI = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
 const POLL_MS = 2_000; // a start shows within two seconds
 
 // One poll of `read_live` for every view (Working now, Conversations) and for the menu bar
@@ -23,10 +22,10 @@ function emit() {
 }
 
 async function poll() {
-  if (inflight || !IS_TAURI) return;
+  if (inflight || !CAN_READ_ORG) return;
   inflight = true;
   try {
-    const next: LiveSnapshot = JSON.parse(await invoke<string>('read_live'));
+    const next: LiveSnapshot = JSON.parse(await orgRead('read_live'));
     const now = new Set(next.runs.filter((r) => r.state === 'running').map((r) => r.run_id));
     const ended = [...working].some((id) => !now.has(id));
     working = now;
@@ -51,7 +50,7 @@ async function poll() {
 function subscribe(l: () => void) {
   listeners.add(l);
   if (listeners.size === 1) {
-    if (!IS_TAURI) {
+    if (!CAN_READ_ORG) {
       error = 'Live runs are read from ~/portfolio and only show in the Pulse desktop app.';
     } else {
       poll();
