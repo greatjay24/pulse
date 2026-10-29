@@ -2110,21 +2110,38 @@ fn read_portfolio() -> Result<String, String> {
 // Existence checks only (nothing is read or run), at fixed paths: a GUI app's PATH is not
 // something to rely on.
 
+// The agent CLIs the org can run on (kit/org/bin/runners.py). Setup needs any one of them.
+const RUNNERS: &[(&str, &str, &str)] = &[
+    ("claude-code", "Claude Code", "claude"),
+    ("codex", "Codex (ChatGPT)", "codex"),
+    ("opencode", "opencode (any provider)", "opencode"),
+];
+
+#[derive(Serialize)]
+struct RunnerFound {
+    id: &'static str,
+    label: &'static str,
+    path: Option<String>,
+}
+
 #[derive(Serialize)]
 struct SetupCheck {
     setup_needed: bool,
-    claude: Option<String>,
+    runners: Vec<RunnerFound>,
     python3: Option<String>,
     tracker: bool,
 }
 
-fn claude_candidates(home: &Path) -> Vec<PathBuf> {
-    vec![
-        home.join(".local/bin/claude"),
-        home.join(".claude/local/claude"),
-        PathBuf::from("/opt/homebrew/bin/claude"),
-        PathBuf::from("/usr/local/bin/claude"),
-    ]
+fn runner_candidates(home: &Path, binary: &str) -> Vec<PathBuf> {
+    let mut v = vec![home.join(".local/bin").join(binary)];
+    match binary {
+        "claude" => v.push(home.join(".claude/local/claude")),
+        "opencode" => v.push(home.join(".opencode/bin/opencode")),
+        _ => {}
+    }
+    v.push(Path::new("/opt/homebrew/bin").join(binary));
+    v.push(Path::new("/usr/local/bin").join(binary));
+    v
 }
 
 fn first_file(paths: impl IntoIterator<Item = PathBuf>) -> Option<String> {
@@ -2134,7 +2151,10 @@ fn first_file(paths: impl IntoIterator<Item = PathBuf>) -> Option<String> {
 fn setup_check_at(portfolio: Option<&Path>, tracker: Option<&Path>, home: &Path) -> SetupCheck {
     SetupCheck {
         setup_needed: !portfolio.is_some_and(|p| p.join("portfolio.json").is_file()),
-        claude: first_file(claude_candidates(home)),
+        runners: RUNNERS
+            .iter()
+            .map(|(id, label, binary)| RunnerFound { id, label, path: first_file(runner_candidates(home, binary)) })
+            .collect(),
         python3: first_file(PYTHON_CANDIDATES.iter().map(PathBuf::from)),
         tracker: tracker.is_some_and(|t| t.is_dir()),
     }
@@ -3812,15 +3832,17 @@ mod portfolio_tests {
         let check = setup_check_at(None, None, &home);
         assert!(check.setup_needed);
         assert!(!check.tracker);
-        assert!(check.claude.is_none());
+        assert!(check.runners.iter().all(|r| r.path.is_none()));
+        assert_eq!(check.runners.iter().map(|r| r.id).collect::<Vec<_>>(), ["claude-code", "codex", "opencode"]);
         assert!(setup_check_at(Some(&root), None, &home).setup_needed);
 
         fs::write(root.join("portfolio.json"), "{}").unwrap();
-        fs::write(home.join(".local/bin/claude"), "").unwrap();
+        fs::write(home.join(".local/bin/codex"), "").unwrap();
         let check = setup_check_at(Some(&root), Some(&root), &home);
         assert!(!check.setup_needed);
         assert!(check.tracker);
-        assert_eq!(check.claude.as_deref(), Some(home.join(".local/bin/claude").to_str().unwrap()));
+        let codex = check.runners.iter().find(|r| r.id == "codex").unwrap();
+        assert_eq!(codex.path.as_deref(), Some(home.join(".local/bin/codex").to_str().unwrap()));
         let _ = fs::remove_dir_all(&root);
     }
 }

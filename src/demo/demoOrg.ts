@@ -43,6 +43,7 @@ const runId = (agent: string, tag: string) => `${ymd(shift).replace(/-/g, '')}-0
 
 const registry: PortfolioRegistry & Record<string, unknown> = {
   owner: { name: 'Sam' },
+  runner: 'claude-code', // the org's agent CLI; Personal overrides it below to show a Codex lead
   groups: [
     { id: 'companies', name: 'Operating companies' },
     { id: 'family', name: 'Family' },
@@ -52,7 +53,7 @@ const registry: PortfolioRegistry & Record<string, unknown> = {
     { id: 'acme', name: 'Acme Studio', group: 'companies', parent: null, path: 'companies/acme', lead: 'acme-lead', schedule: 'nightly', tracker_projects: ['acme'], color: '#7C3AED' },
     { id: 'northwind', name: 'Northwind Supply', group: 'companies', parent: null, path: 'companies/northwind', lead: 'northwind-lead', schedule: 'nightly', tracker_projects: ['northwind'], color: '#0E7490' },
     { id: 'globex', name: 'Globex Rentals', group: 'family', parent: null, path: 'family/globex', lead: 'globex-lead', schedule: 'nightly', tracker_projects: ['globex'], color: '#B45309' },
-    { id: 'personal', name: 'Personal', group: 'personal', parent: null, path: 'personal', lead: 'personal-lead', schedule: 'nightly', tracker_projects: ['personal'], color: '#4A5A78' },
+    { id: 'personal', name: 'Personal', group: 'personal', parent: null, path: 'personal', lead: 'personal-lead', schedule: 'nightly', tracker_projects: ['personal'], color: '#4A5A78', runner: 'codex' },
     { id: 'initech', name: 'Initech Labs', group: 'personal', parent: 'personal', path: 'personal/ventures/initech', lead: 'initech-lead', schedule: 'on-call', tracker_projects: ['initech'], color: '#15803D' },
   ],
   managers: ['sales-manager', 'marketing-manager', 'delivery-manager', 'finance-manager', 'admin-manager'],
@@ -244,13 +245,13 @@ const transcripts: Record<string, TranscriptLine[]> = {
     { t: 'result', at: iso(DAY - 3 * MIN), ok: true, result: 'Retainer offer drafted (in Drafts, not sent): 3 months, two deliverables a month. Decision recorded as done.', cost_usd: 0.21, secs: 174, turns: 8, models: ['claude-sonnet'], agents: 0 },
   ],
   [RUN_SESSION]: [
-    { t: 'start', at: iso(3 * HOUR), run_id: RUN_SESSION, kind: 'interactive', entity: 'personal', agent: 'personal-lead', doing: 'Session with the owner', prompt: '' },
-    { t: 'user', at: iso(3 * HOUR - 10_000), text: 'Which side projects should I archive this month?' },
-    { t: 'tool', at: iso(3 * HOUR - 30_000), name: 'Read', summary: 'Reading personal/BRIEF.md' },
-    { t: 'text', at: iso(3 * HOUR - 60_000), text: 'Archive the recipe scraper and the habit tracker: no commits in 60+ days and no users. Keep Initech; it has a waitlist of 38 and a working prototype.' },
+    { t: 'start', at: iso(3 * HOUR), run_id: RUN_SESSION, kind: 'interactive', entity: 'acme', agent: 'acme-lead', doing: 'Session with the owner', prompt: '' },
+    { t: 'user', at: iso(3 * HOUR - 10_000), text: 'Which proposal should I chase first?' },
+    { t: 'tool', at: iso(3 * HOUR - 30_000), name: 'Read', summary: 'Reading companies/acme/BRIEF.md' },
+    { t: 'text', at: iso(3 * HOUR - 60_000), text: 'The coffee roaster: they asked for a start date, and the job fills the gap after the Bluebird launch. The bistro is still comparing quotes.' },
     { t: 'user', at: iso(3 * HOUR - 2 * MIN), text: 'Agreed. Note it in the brief.' },
-    { t: 'tool', at: iso(3 * HOUR - 150_000), name: 'Edit', summary: 'Editing personal/BRIEF.md' },
-    { t: 'text', at: iso(3 * HOUR - 3 * MIN), text: 'Done. Both are listed under "Archive" in the brief; I won’t delete anything.' },
+    { t: 'tool', at: iso(3 * HOUR - 150_000), name: 'Edit', summary: 'Editing companies/acme/BRIEF.md' },
+    { t: 'text', at: iso(3 * HOUR - 3 * MIN), text: 'Done. The roaster is first under "Next three moves"; I’ll draft the follow-up for Thursday.' },
   ],
   [RUN_TEAM]: [
     { t: 'start', at: iso(TEAM_AGO), run_id: RUN_TEAM, kind: 'act', entity: 'northwind', agent: 'northwind-lead', doing: 'Discuss: Raise wholesale prices on January 1?', prompt: 'DECISION run for Northwind Supply. The owner asked about decision northwind-price-change.' },
@@ -279,7 +280,7 @@ function liveRuns(): LiveRun[] {
       team, deployments: 1,
     },
     {
-      run_id: RUN_SESSION, kind: 'interactive', entity: 'personal', agent: 'personal-lead', doing: 'Which side projects should I archive this month?',
+      run_id: RUN_SESSION, kind: 'interactive', entity: 'acme', agent: 'acme-lead', doing: 'Which proposal should I chase first?',
       started: iso(3 * HOUR), pid: 0, transcript: `logs/transcripts/${RUN_SESSION}.jsonl`, state: 'finished',
       step: 'Session ended', step_at: iso(2.9 * HOUR), updated: iso(2.9 * HOUR), finished: iso(2.9 * HOUR), ok: true, result: 'Session ended (exit)',
     },
@@ -302,7 +303,7 @@ function activity(): ActivitySnapshot {
           { agent: 'acme-lead', run_id: RUN_ACME, agents: 0, ok: true, result: 'Menu price bug fixed on a branch, PR #42 open with a preview. Status green.', cost_usd: 0.38, secs: 362, models: ['claude-sonnet'] },
           { agent: 'northwind-lead', agents: 0, ok: true, result: 'Researched three cafe leads; price decision still open.', cost_usd: 0.29, secs: 288, models: ['claude-sonnet'] },
           { agent: 'globex-lead', run_id: RUN_GLOBEX, agents: 1, ok: true, result: 'Health red (tenant waiting 9 days). Queued one decision: take the middle roof quote.', cost_usd: 0.52, secs: 241, models: ['claude-sonnet'] },
-          { agent: 'personal-lead', agents: 0, ok: true, result: 'Quiet night. Site refresh preview is ready for review.', cost_usd: 0.11, secs: 96, models: ['claude-sonnet'] },
+          { agent: 'personal-lead', agents: 0, ok: true, result: 'Quiet night. Site refresh preview is ready for review.', cost_usd: null, tokens: { input: 61200, output: 2900 }, runner: 'codex', secs: 96, models: [] },
         ],
       },
       {

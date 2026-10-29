@@ -6,7 +6,7 @@ import { useOrgActivity } from '../hooks/useOrgActivity';
 import { useLive } from '../hooks/useLive';
 import { ConvItem, ORG_THREAD, Thread, buildThreads, threadOfRun, verbOf } from '../utils/conversations';
 import { deployedLine, elapsed, kindLabel, ms, stateLabel, teamLine } from '../utils/live';
-import { formatCost, formatSecs } from '../utils/activity';
+import { formatSecs, usage, usageLine } from '../utils/activity';
 import { firstUrl } from '../utils/decisions';
 import { openExternal } from '../utils/tracker';
 import { EntityMark, Notice, PageHeader } from './BoardUI';
@@ -283,7 +283,7 @@ function RunFooter({ item }: { item: RunItem }) {
   const parts = [
     stopped ? 'Stopped unexpectedly' : item.ok === false ? 'Failed' : item.ok ? 'Finished' : null,
     item.secs ? formatSecs(item.secs) : null,
-    item.cost ? formatCost(item.cost) : null,
+    usageLine(usage([item])),
     deployedLine(item.agents),
   ].filter(Boolean);
   if (!parts.length) return null;

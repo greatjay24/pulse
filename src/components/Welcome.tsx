@@ -8,7 +8,11 @@ import { Icon } from './Icons';
 
 export const SETUP_COMMAND = 'git clone https://github.com/greatjay24/pulse.git ~/pulse && python3 ~/pulse/kit/setup.py';
 export const GUIDE_URL = 'https://github.com/greatjay24/pulse/blob/main/docs/GETTING_STARTED.md';
-const CLAUDE_CODE_URL = 'https://docs.anthropic.com/en/docs/claude-code/setup';
+const RUNNER_HELP: Record<string, string> = {
+  'claude-code': 'https://docs.anthropic.com/en/docs/claude-code/setup',
+  codex: 'https://developers.openai.com/codex/cli',
+  opencode: 'https://opencode.ai/docs/',
+};
 
 function CheckRow({ ok, label, detail }: { ok: boolean | null; label: string; detail: string }) {
   const { tokens } = useTheme();
@@ -60,7 +64,8 @@ export function Welcome({ onRecheck }: { onRecheck: () => void }) {
     }
   };
 
-  const claudeOk = check ? !!check.claude : null;
+  const found = check?.runners.filter((r) => r.path) ?? [];
+  const runnerOk = check ? found.length > 0 : null;
   const pythonOk = check ? !!check.python3 : null;
 
   return (
@@ -74,7 +79,7 @@ export function Welcome({ onRecheck }: { onRecheck: () => void }) {
           Run every business from one desk.
         </h1>
         <div style={{ fontSize: tokens.type.lead, lineHeight: 1.6, color: c.textMuted, margin: '20px 0 40px' }}>
-          <p>Each business you run gets an AI lead, a Claude Code agent that works overnight and keeps a short report.</p>
+          <p>Each business you run gets an AI lead, an agent on ChatGPT (Codex), Claude or another model, that works overnight and keeps a short report.</p>
           <p>It handles what it can and brings you only what needs you: a decision, money, anything sent in your name, or your taste.</p>
           <p>Pulse shows those reports, the decisions waiting on you, and what your agents are doing right now.</p>
         </div>
@@ -84,30 +89,40 @@ export function Welcome({ onRecheck }: { onRecheck: () => void }) {
           {IS_TAURI ? (
             <>
               <CheckRow
-                ok={claudeOk}
-                label="Claude Code"
-                detail={check?.claude ? `Found at ${check.claude}. Make sure you're signed in: run "claude" once.` : check ? 'Not found. Install it and sign in, then check again.' : 'Checking…'}
+                ok={runnerOk}
+                label="An AI to run your agents"
+                detail={
+                  !check
+                    ? 'Checking…'
+                    : found.length
+                      ? `Found ${found.map((r) => r.label).join(', ')}. Setup asks which one to use; you can switch later.`
+                      : 'None found. Install one and sign in: Codex (uses your ChatGPT plan), Claude Code, or opencode (any provider). Then check again.'
+                }
               />
               <CheckRow
                 ok={pythonOk}
                 label="python3"
                 detail={check?.python3 ? `Found at ${check.python3}.` : check ? 'Not found. Run "xcode-select --install" in Terminal, then check again.' : 'Checking…'}
               />
-              {claudeOk === false && (
-                <button className="btn btn-secondary" onClick={() => openExternal(CLAUDE_CODE_URL)} style={{ marginTop: '6px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                  <Icon name="external-link" size={14} color="currentColor" /> How to install Claude Code
-                </button>
+              {runnerOk === false && (
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '6px' }}>
+                  {check?.runners.map((r) => (
+                    <button key={r.id} className="btn btn-secondary" onClick={() => openExternal(RUNNER_HELP[r.id] ?? null)} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                      <Icon name="external-link" size={14} color="currentColor" /> {r.label}
+                    </button>
+                  ))}
+                </div>
               )}
             </>
           ) : (
-            <p style={{ fontSize: tokens.type.body, color: c.textMuted }}>Pulse checks for Claude Code and python3 when it runs as the desktop app.</p>
+            <p style={{ fontSize: tokens.type.body, color: c.textMuted }}>Pulse checks for an agent CLI (Codex, Claude Code or opencode) and python3 when it runs as the desktop app.</p>
           )}
         </section>
 
         <section style={{ marginBottom: '40px' }}>
           <h2 style={{ fontFamily: tokens.fonts.display, fontSize: tokens.type.heading, fontWeight: 500, marginBottom: '8px' }}>2. Run setup in Terminal</h2>
           <p style={{ fontSize: tokens.type.body, color: c.textMuted, marginBottom: '14px', lineHeight: 1.55 }}>
-            It asks your first name and your businesses, then builds your org in ~/portfolio and installs a lead for each one. It never schedules anything or changes your settings by itself.
+            It asks your first name, your businesses and which AI runs your agents, then builds your org in ~/portfolio with a lead for each one. It never schedules anything or changes your settings by itself.
           </p>
           <div style={{ display: 'flex', alignItems: 'stretch', border: `1px solid ${c.border}`, borderRadius: tokens.radius.md, background: c.bgCard, overflow: 'hidden' }}>
             <code id="setup-command" style={{ flex: 1, padding: '14px 16px', fontFamily: tokens.fonts.mono, fontSize: tokens.type.small, lineHeight: 1.5, overflowWrap: 'anywhere', userSelect: 'all' }}>

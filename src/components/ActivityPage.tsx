@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { PortfolioSnapshot } from '../types';
 import { useOrgActivity } from '../hooks/useOrgActivity';
-import { ActivityItem, ActivityKind, activityItems, costBetween, formatCost, formatSecs, localDay, startOfDay } from '../utils/activity';
+import { ActivityItem, ActivityKind, activityItems, formatCost, formatSecs, formatTokens, localDay, startOfDay, usage, usageBetween, usageLine } from '../utils/activity';
 import { openExternal } from '../utils/tracker';
 import { deployedLine } from '../utils/live';
 import { Card, Notice, PageHeader, SectionLabel } from './BoardUI';
@@ -62,7 +62,7 @@ function Row({ item, entityName, onOpen }: { item: ActivityItem; entityName: str
     new Date(item.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
     entityName,
     item.secs !== undefined ? formatSecs(item.secs) : null,
-    item.cost ? formatCost(item.cost) : null,
+    usageLine(usage([item])),
     deployedLine(item.agents),
     item.running ? 'running' : null,
     item.ok === false ? 'failed' : null,
@@ -130,8 +130,13 @@ export function ActivityPage({ snapshot, onOpenConversation }: {
 
   const today = startOfDay(now);
   const weekAgo = today - 6 * 86_400_000;
-  const costToday = costBetween(byEntity, today);
-  const costWeek = costBetween(byEntity, weekAgo);
+  const useToday = usageBetween(byEntity, today);
+  const useWeek = usageBetween(byEntity, weekAgo);
+  // Dollars when the runner reports cost; tokens when it only reports those (Codex).
+  const tile = (period: string, u: ReturnType<typeof usage>): { label: string; value: string; sub?: string } =>
+    u.cost === null && u.tokens
+      ? { label: `Agent use · ${period}`, value: formatTokens(u.tokens) }
+      : { label: `Agent cost · ${period}`, value: formatCost(u.cost ?? 0), sub: u.tokens ? `+ ${formatTokens(u.tokens)} (runners that report tokens only)` : undefined };
   const runsWeek = byEntity.filter((i) => (i.kind === 'run' || i.kind === 'act') && i.at >= weekAgo).length;
   const failedWeek = byEntity.filter((i) => i.ok === false && i.at >= weekAgo).length;
 
@@ -161,14 +166,14 @@ export function ActivityPage({ snapshot, onOpenConversation }: {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '16px', margin: '20px 0 28px' }}>
         {[
-          { label: 'Agent cost · today', value: formatCost(costToday) },
-          { label: 'Agent cost · 7 days', value: formatCost(costWeek) },
+          tile('today', useToday),
+          tile('7 days', useWeek),
           { label: 'Lead runs · 7 days', value: String(runsWeek), sub: failedWeek ? `${failedWeek} failed` : 'none failed' },
         ].map((s) => (
           <Card key={s.label} padding="20px 22px">
             <SectionLabel style={{ marginBottom: '8px' }}>{s.label}</SectionLabel>
             <div style={{ fontSize: '32px', fontWeight: 600, letterSpacing: '-0.02em' }}>{s.value}</div>
-            {s.sub && <div style={{ fontSize: tokens.type.small, color: failedWeek ? c.danger : c.textDim, marginTop: '6px' }}>{s.sub}</div>}
+            {s.sub && <div style={{ fontSize: tokens.type.small, color: s.label.startsWith('Lead runs') && failedWeek ? c.danger : c.textDim, marginTop: '6px' }}>{s.sub}</div>}
           </Card>
         ))}
       </div>
@@ -193,14 +198,14 @@ export function ActivityPage({ snapshot, onOpenConversation }: {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
         {groups.map((g) => {
-          const cost = costBetween(g.items, 0);
+          const used = usageLine(usage(g.items));
           return (
             <section key={g.day}>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: '12px', marginBottom: '10px' }}>
                 <h2 style={{ fontFamily: tokens.fonts.display, fontSize: tokens.type.heading, fontWeight: 500 }}>{dayLabel(g.day, now)}</h2>
                 <span style={{ fontSize: tokens.type.small, color: c.textDim }}>
                   {g.items.length} {g.items.length === 1 ? 'entry' : 'entries'}
-                  {cost > 0 && ` · ${formatCost(cost)} agent cost`}
+                  {used && ` · ${used} agent use`}
                 </span>
               </div>
               <div style={{ background: c.bgCard, border: `1px solid ${c.border}`, borderRadius: tokens.radius.md, padding: '4px' }}>
