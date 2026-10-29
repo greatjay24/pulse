@@ -1,19 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { PortfolioEntity } from '../types';
-import { ORG_TARGET, askLead, leadOf, recentCommands, rememberCommand, routeOf, suggestions } from '../utils/command';
-import { Icon } from './Icons';
+import { COS_TARGET, PULSE_TARGET, askLead, leadOf, recentCommands, rememberCommand, routeOf, suggestions } from '../utils/command';
+import { briefKindOf, briefMe, defaultBriefKind, openListenPanel } from '../utils/voice';
+import { Icon, StrokeIcon } from './Icons';
 
-// ⌘K: the owner types what they need; it goes to the right lead (from a "Name:" prefix or a
-// mention, or the chief of staff), a run starts at once and its conversation opens live.
+// ⌘K: the owner types what they need. It goes to Pulse, the front door, which answers or hands
+// it to the right leads; a "Name:" prefix or an @mention goes straight to that lead. A run
+// starts at once and its conversation opens live.
 export function CommandBox({
   entities,
   chief,
+  frontDoor,
   onClose,
   onStarted,
 }: {
   entities: PortfolioEntity[];
   chief: string | null;
+  frontDoor: string | null; // null: an org with no front door, where the chief of staff is the default
   onClose: () => void;
   onStarted: (runId: string) => void;
 }) {
@@ -27,7 +31,8 @@ export function CommandBox({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const leads = entities.filter((e) => e.lead);
   const route = useMemo(() => routeOf(text, entities), [text, entities]);
-  const target = override ?? route.target;
+  const fallback = frontDoor ? PULSE_TARGET : COS_TARGET;
+  const target = override ?? (route.why === 'default' ? fallback : route.target);
   const recent = useMemo(() => recentCommands(), []);
   const ideas = useMemo(() => suggestions(entities), [entities]);
 
@@ -41,7 +46,8 @@ export function CommandBox({
     setSending(true);
     setError(null);
     try {
-      const r = await askLead(target, message, { fresh });
+      const kind = target === PULSE_TARGET ? briefKindOf(message) : null;
+      const r = kind ? await briefMe(kind) : await askLead(target, message, { fresh });
       rememberCommand(text.trim(), target);
       onStarted(r.run_id);
       onClose();
@@ -57,7 +63,26 @@ export function CommandBox({
     inputRef.current?.focus();
   };
 
-  const routedBy = override ? 'chosen' : route.why === 'prefix' ? 'from the prefix' : route.why === 'mention' ? 'mentioned' : 'cross-cutting or unclear';
+  const brief = async () => {
+    if (sending) return;
+    setSending(true);
+    setError(null);
+    try {
+      const r = await briefMe(defaultBriefKind());
+      onStarted(r.run_id);
+      onClose();
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+      setSending(false);
+    }
+  };
+
+  const talk = () => {
+    openListenPanel().catch((e) => setError(String(e)));
+    onClose();
+  };
+
+  const routedBy = override ? 'chosen' : route.why === 'prefix' ? 'from the prefix' : route.why === 'mention' ? 'mentioned' : frontDoor ? 'Pulse picks who handles it' : 'cross-cutting or unclear';
 
   return (
     <div
@@ -94,7 +119,7 @@ export function CommandBox({
             ref={inputRef}
             value={text}
             rows={Math.min(6, Math.max(1, text.split('\n').length))}
-            placeholder="Ask a lead anything. Start with a name to route it: “Acme: draft the pricing page”"
+            placeholder={frontDoor ? 'Ask Pulse anything. It hands work to the right lead. “Acme: …” goes straight to that lead.' : 'Ask a lead anything. Start with a name to route it: “Acme: draft the pricing page”'}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -104,6 +129,16 @@ export function CommandBox({
             }}
             style={{ flex: 1, resize: 'none', background: 'transparent', border: 'none', outline: 'none', padding: 0, color: c.text, fontFamily: 'inherit', fontSize: '16px', lineHeight: 1.5 }}
           />
+          {frontDoor && (
+            <button
+              onClick={talk}
+              title="Talk instead (opens the listening panel)"
+              aria-label="Talk to Pulse"
+              style={{ background: 'none', border: `1px solid ${c.border}`, borderRadius: tokens.radius.sm, padding: '4px 6px', cursor: 'pointer', display: 'flex' }}
+            >
+              <StrokeIcon name="mic" size={15} color={c.textMuted} />
+            </button>
+          )}
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 18px 12px', flexWrap: 'wrap', fontSize: tokens.type.small, color: c.textMuted }}>
@@ -114,7 +149,8 @@ export function CommandBox({
               onChange={(e) => setOverride(e.target.value)}
               style={{ background: c.bgCard, color: c.text, border: `1px solid ${c.border}`, borderRadius: tokens.radius.sm, padding: '4px 8px', fontFamily: 'inherit', fontSize: 'inherit' }}
             >
-              <option value={ORG_TARGET}>Chief of staff ({chief ?? 'chief-of-staff'})</option>
+              {frontDoor && <option value={PULSE_TARGET}>Pulse (picks the lead)</option>}
+              <option value={COS_TARGET}>Chief of staff ({chief ?? 'chief-of-staff'})</option>
               {leads.map((e) => (
                 <option key={e.id} value={e.id}>
                   {e.name} ({e.lead})
@@ -157,6 +193,11 @@ export function CommandBox({
               </Choice>
             ))}
             <ListLabel>Try</ListLabel>
+            {frontDoor && (
+              <Choice onClick={brief} hint="Pulse">
+                Brief me ({defaultBriefKind() === 'morning' ? 'morning brief' : 'end-of-day recap'})
+              </Choice>
+            )}
             {ideas.map((s) => (
               <Choice key={s} onClick={() => pick(s)}>
                 {s}

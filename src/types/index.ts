@@ -768,6 +768,12 @@ export interface LiveRun {
   deployments?: number;
   session_id?: string; // chat: the Claude session this run continues or started
   child_pid?: number;
+  // Front door (ask.py extras): the run that handed this one off, its hand-off group, why it ran.
+  parent_run?: string;
+  group?: string;
+  trigger?: 'report' | 'brief' | 'followup' | string;
+  report_for?: string;
+  source?: 'pulse' | 'telegram' | 'voice' | 'schedule' | string;
 }
 
 // A subagent a lead deployed. Agents deployed within a few seconds share a batch.
@@ -793,7 +799,8 @@ export interface LiveSnapshot {
 }
 
 export type TranscriptLine =
-  | { t: 'start'; at: string; run_id: string; kind: string; entity: string | null; agent: string; doing: string; prompt: string }
+  | { t: 'start'; at: string; run_id: string; kind: string; entity: string | null; agent: string; doing: string; prompt: string; parent_run?: string; trigger?: string; source?: string; report_for?: string }
+  | { t: 'report'; at: string; text: string; detail?: string } // the leads' results coming back to the front door
   | { t: 'user'; at: string; text: string }
   | { t: 'text'; at: string; text: string; sub?: boolean }
   | { t: 'tool'; at: string; name: string; summary: string; sub?: boolean }

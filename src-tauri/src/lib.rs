@@ -1,4 +1,5 @@
 mod command;
+mod jarvis;
 mod pty;
 mod ops;
 
@@ -3622,8 +3623,11 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(|app, shortcut, event| jarvis::on_shortcut(app, shortcut, event.state())).build())
         .manage(pty::Ptys::default())
+        .manage(jarvis::Voice::default())
         .setup(|app| {
+            jarvis::setup(app.handle());
             let menu = tray_menu(app.handle(), &[])?;
 
             // A template image: macOS tints it for light and dark menu bars.
@@ -3700,7 +3704,18 @@ pub fn run() {
             ops::read_goals,
             ops::save_goal,
             ops::read_connections,
-            ops::check_connections
+            ops::check_connections,
+            jarvis::speak,
+            jarvis::stop_speaking,
+            jarvis::list_voices,
+            jarvis::start_listening,
+            jarvis::stop_listening,
+            jarvis::cancel_listening,
+            jarvis::open_listen_panel,
+            jarvis::hide_listen_panel,
+            jarvis::open_run_in_main,
+            jarvis::set_listen_hotkey,
+            jarvis::pulse_brief
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -3708,6 +3723,7 @@ pub fn run() {
     app.run(|app, event| {
         if let tauri::RunEvent::Exit = event {
             pty::close_all(&app.state::<pty::Ptys>());
+            jarvis::close_all(&app.state::<jarvis::Voice>());
         }
         // Clicking the Dock icon brings the hidden window back.
         #[cfg(target_os = "macos")]

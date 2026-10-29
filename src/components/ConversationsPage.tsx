@@ -4,16 +4,17 @@ import { useTheme } from '../contexts/ThemeContext';
 import { PortfolioSnapshot, TeamMember, Transcript, TranscriptLine, TranscriptSummary } from '../types';
 import { useOrgActivity } from '../hooks/useOrgActivity';
 import { useLive } from '../hooks/useLive';
-import { ConvItem, ORG_THREAD, Thread, buildThreads, threadOfRun, verbOf } from '../utils/conversations';
+import { ConvItem, ORG_THREAD, PULSE_THREAD, Thread, buildThreads, threadOfRun, verbOf } from '../utils/conversations';
 import { deployedLine, elapsed, kindLabel, ms, stateLabel, teamLine } from '../utils/live';
 import { formatSecs, usage, usageLine } from '../utils/activity';
 import { firstUrl } from '../utils/decisions';
 import { openExternal } from '../utils/tracker';
 import { EntityMark, Notice, PageHeader } from './BoardUI';
 import { LiveDot, memberTone } from './WorkingNow';
-import { Icon } from './Icons';
+import { Icon, StrokeIcon } from './Icons';
 import { Composer } from './Composer';
-import { ORG_TARGET, chiefOf, stopRun } from '../utils/command';
+import { COS_TARGET, PULSE_TARGET, chiefOf, stopRun } from '../utils/command';
+import { briefMe, defaultBriefKind, openListenPanel, speak, stopSpeaking } from '../utils/voice';
 
 const INDEX_POLL_MS = 15_000;
 const LIVE_TRANSCRIPT_MS = 2_000;
@@ -92,14 +93,17 @@ function useTranscript(runId: string | null, open: boolean, running: boolean) {
   return { transcript: t, error };
 }
 
-function Bubble({ mine, label, at, children }: { mine: boolean; label: string; at?: number; children: React.ReactNode }) {
+function Bubble({ mine, label, at, speakText, children }: { mine: boolean; label: string; at?: number; speakText?: string; children: React.ReactNode }) {
   const { tokens } = useTheme();
   const c = tokens.colors;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start' }}>
-      <div style={{ fontSize: tokens.type.micro, color: c.textDim, margin: '0 4px 4px' }}>
-        <span style={{ fontWeight: 600, color: mine ? c.text : c.accent }}>{label}</span>
-        {at ? ` · ${when(at)}` : ''}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: tokens.type.micro, color: c.textDim, margin: '0 4px 4px' }}>
+        <span>
+          <span style={{ fontWeight: 600, color: mine ? c.text : c.accent }}>{label}</span>
+          {at ? ` · ${when(at)}` : ''}
+        </span>
+        {speakText && <ReadAloud text={speakText} />}
       </div>
       <div
         style={{
@@ -119,6 +123,105 @@ function Bubble({ mine, label, at, children }: { mine: boolean; label: string; a
     </div>
   );
 }
+
+// Reads a message aloud with the voice from Settings; a second click stops it.
+function ReadAloud({ text }: { text: string }) {
+  const { tokens } = useTheme();
+  const c = tokens.colors;
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    if (!on) return;
+    // `say` reports nothing back, so the button resets after a generous estimate of the read.
+    const t = setTimeout(() => setOn(false), Math.min(120_000, 4000 + text.length * 70));
+    return () => clearTimeout(t);
+  }, [on, text]);
+  return (
+    <button
+      onClick={() => {
+        if (on) {
+          stopSpeaking().catch(() => {});
+          setOn(false);
+        } else {
+          speak(text, true).catch(() => {});
+          setOn(true);
+        }
+      }}
+      title={on ? 'Stop reading' : 'Read aloud'}
+      aria-label={on ? 'Stop reading' : 'Read aloud'}
+      style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'none', border: 'none', padding: 0, color: on ? c.accent : c.textDim, fontFamily: 'inherit', fontSize: 'inherit', cursor: 'pointer' }}
+    >
+      <StrokeIcon name="speaker" size={12} color={on ? c.accent : c.textDim} />
+      {on ? 'Stop' : 'Read aloud'}
+    </button>
+  );
+}
+
+// The leads' results coming back to the front door: one folded line, the full text inside.
+function ReportNote({ text, detail, at }: { text: string; detail?: string; at: number }) {
+  const { tokens } = useTheme();
+  const c = tokens.colors;
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ fontSize: tokens.type.small, color: c.textMuted }}>
+      <button
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        style={{ background: 'none', border: 'none', padding: 0, color: c.textMuted, fontFamily: 'inherit', fontSize: 'inherit', cursor: detail ? 'pointer' : 'default' }}
+      >
+        {detail ? (open ? '▾ ' : '▸ ') : ''}
+        {text} · {when(at)}
+      </button>
+      {open && detail && <div style={{ marginTop: '6px', padding: '10px 12px', borderLeft: `2px solid ${c.border}`, whiteSpace: 'pre-wrap', lineHeight: 1.55 }}>{detail}</div>}
+    </div>
+  );
+}
+
+// Runs the front door handed off, nested under the run that launched them.
+function HandoffBlock({ runs, onOpenRun }: { runs: RunItem[]; onOpenRun: (runId: string) => void }) {
+  const { tokens } = useTheme();
+  const c = tokens.colors;
+  const statusOf = (r: RunItem) => {
+    const st = r.live?.state;
+    if (st === 'running' || st === 'queued' || st === 'idle') return 'running';
+    if (st === 'stopped') return 'stopped';
+    return r.ok === false ? 'failed' : r.ok || st === 'finished' ? 'completed' : 'running';
+  };
+  const working = runs.filter((r) => statusOf(r) === 'running').length;
+  return (
+    <div style={{ border: `1px solid ${c.border}`, borderRadius: tokens.radius.md, padding: '10px 12px', background: c.bgCard, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      <div style={{ fontSize: tokens.type.small, fontWeight: 600 }}>
+        Handed off to {runs.length} {runs.length === 1 ? 'lead' : 'leads'}
+        <span style={{ fontWeight: 400, color: c.textDim }}> · {working ? `${working} working` : 'all reported back'}</span>
+      </div>
+      {runs.map((r) => {
+        const st = statusOf(r);
+        return (
+          <div key={r.key} style={{ fontSize: tokens.type.small, paddingLeft: '4px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <LiveDot color={memberTone(st, c)} pulsing={st === 'running'} />
+              <span style={{ fontWeight: 600 }}>{r.agent}</span>
+              <span style={{ color: c.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{r.doing}</span>
+              {r.runId && (
+                <button
+                  onClick={() => onOpenRun(r.runId!)}
+                  style={{ marginLeft: 'auto', background: 'none', border: 'none', padding: 0, color: c.accent, fontFamily: 'inherit', fontSize: tokens.type.micro, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                >
+                  Open ↗
+                </button>
+              )}
+            </div>
+            <div style={{ color: c.textDim, marginTop: '2px', paddingLeft: '16px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {st === 'running' ? r.live?.step ?? 'Starting' : st === 'completed' ? (r.result ?? 'Finished').replace(/\s+/g, ' ').slice(0, 200) : st}
+              {r.secs ? ` · ${formatSecs(r.secs)}` : ''}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+const TRIGGER_LABEL: Record<string, string> = { report: 'Report back', brief: 'Briefing', followup: 'Follow-up check' };
 
 function LinkOut({ text }: { text?: string }) {
   const { tokens } = useTheme();
@@ -265,7 +368,8 @@ function TranscriptView({ lines, agent, team, chat }: { lines: TranscriptLine[];
     }
     else if (l.t === 'deploy') blocks.push(<TeamBlock key={`d${blocks.length}`} agents={l.agents} at={ms(l.at)} done={done} live={live} />);
     else if (l.t === 'user') blocks.push(<Bubble key={`u${blocks.length}`} mine label="You" at={ms(l.at)}>{l.text}</Bubble>);
-    else if (l.t === 'text') blocks.push(<Bubble key={`t${blocks.length}`} mine={false} label={l.sub ? `${agent} · subagent` : agent} at={ms(l.at)}>{l.text}</Bubble>);
+    else if (l.t === 'report') blocks.push(<ReportNote key={`r${blocks.length}`} text={l.text} detail={l.detail} at={ms(l.at)} />);
+    else if (l.t === 'text') blocks.push(<Bubble key={`t${blocks.length}`} mine={false} label={l.sub ? `${agent} · subagent` : agent} at={ms(l.at)} speakText={l.sub ? undefined : l.text}>{l.text}</Bubble>);
   }
   flush();
   return <>{blocks}</>;
@@ -316,7 +420,7 @@ function StopButton({ runId, label }: { runId: string; label: string }) {
   );
 }
 
-function RunBlock({ item, open: initiallyOpen, focused }: { item: RunItem; open: boolean; focused: boolean }) {
+function RunBlock({ item, open: initiallyOpen, focused, onOpenRun }: { item: RunItem; open: boolean; focused: boolean; onOpenRun: (runId: string) => void }) {
   const { tokens } = useTheme();
   const c = tokens.colors;
   const [open, setOpen] = useState(initiallyOpen || focused);
@@ -343,8 +447,9 @@ function RunBlock({ item, open: initiallyOpen, focused }: { item: RunItem; open:
     >
       <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' }}>
         <span style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: running ? c.accent : c.textDim }}>
-          {kindLabel(item.kind)}
+          {(item.trigger && TRIGGER_LABEL[item.trigger]) || kindLabel(item.kind)}
         </span>
+        {item.source === 'telegram' && <span style={{ fontSize: tokens.type.micro, color: c.textDim }}>from Telegram</span>}
         {!chat && <span style={{ fontSize: '15px', fontWeight: 500 }}>{item.doing}</span>}
         <span style={{ fontSize: tokens.type.micro, color: c.textDim }}>
           {item.agent} · {when(item.at)}
@@ -369,8 +474,9 @@ function RunBlock({ item, open: initiallyOpen, focused }: { item: RunItem; open:
       )}
       {/* Runs from before transcripts, or folded ones: the lead's closing summary. */}
       {(!item.runId || !open || (!hasResultText && transcript)) && item.result && (
-        <Bubble mine={false} label={item.agent}>{item.result}</Bubble>
+        <Bubble mine={false} label={item.agent} speakText={item.result}>{item.result}</Bubble>
       )}
+      {item.children && item.children.length > 0 && <HandoffBlock runs={item.children} onOpenRun={onOpenRun} />}
       <RunFooter item={item} />
     </div>
   );
@@ -466,6 +572,14 @@ export function ConversationsPage({ snapshot, focus, onOpenTerminal }: { snapsho
 
   const current = threads.find((t) => t.id === selected) ?? threads[0] ?? null;
 
+  // A hand-off's "Open": its own thread, scrolled to it.
+  const openRun = (runId: string) => {
+    const thread = threadOfRun(threads, runId);
+    if (!thread) return;
+    setSelected(thread.id);
+    setFocusedRun(runId);
+  };
+
   useEffect(() => {
     const target = focusedRun ? document.getElementById(`run-${focusedRun}`) : bottomRef.current;
     target?.scrollIntoView({ block: focusedRun ? 'center' : 'end' });
@@ -493,7 +607,7 @@ export function ConversationsPage({ snapshot, focus, onOpenTerminal }: { snapsho
 
   return (
     <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
-      <PageHeader title="Conversations" subtitle="What you and each lead said: your answers, their replies, and every run's transcript. Write below a thread to talk to its lead." />
+      <PageHeader title="Conversations" subtitle="Talk to Pulse and it hands work to the right leads; or open a lead's thread to talk to it directly. Every answer, reply and run's transcript is here." />
       {problems.length > 0 && <Notice>{problems.join(' · ')}</Notice>}
       {threads.length === 0 && !problems.length && <div style={{ color: c.textMuted, marginTop: '20px' }}>No conversations recorded yet.</div>}
       {current && (
@@ -512,12 +626,13 @@ export function ConversationsPage({ snapshot, focus, onOpenTerminal }: { snapsho
           <section style={{ display: 'flex', flexDirection: 'column', gap: '16px', minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
               <h2 style={{ fontFamily: tokens.fonts.display, fontSize: tokens.type.heading, fontWeight: 500 }}>{current.name}</h2>
-              {lead && <span style={{ fontSize: tokens.type.small, color: c.textDim }}>{lead}</span>}
+              {lead && current.id !== PULSE_THREAD && <span style={{ fontSize: tokens.type.small, color: c.textDim }}>{lead}</span>}
+              {current.id === PULSE_THREAD && <PulseActions onStarted={setSentRun} />}
               {lead && onOpenTerminal && (
                 <button
                   onClick={() => onOpenTerminal(lead)}
                   title={`A full Claude Code session with ${lead}, in a Pulse tab`}
-                  style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: `1px solid ${c.border}`, borderRadius: tokens.radius.sm, padding: '4px 10px', color: c.textMuted, fontFamily: 'inherit', fontSize: tokens.type.small, cursor: 'pointer' }}
+                  style={{ marginLeft: current.id === PULSE_THREAD ? 0 : 'auto', display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: `1px solid ${c.border}`, borderRadius: tokens.radius.sm, padding: '4px 10px', color: c.textMuted, fontFamily: 'inherit', fontSize: tokens.type.small, cursor: 'pointer' }}
                 >
                   <Icon name="terminal" size={13} color={c.textMuted} /> Open in terminal
                 </button>
@@ -525,7 +640,7 @@ export function ConversationsPage({ snapshot, focus, onOpenTerminal }: { snapsho
             </div>
             {current.items.map((it) =>
               it.type === 'run' ? (
-                <RunBlock key={it.key} item={it} open={autoOpen.has(it.key)} focused={!!it.runId && it.runId === focusedRun} />
+                <RunBlock key={it.key} item={it} open={autoOpen.has(it.key)} focused={!!it.runId && it.runId === focusedRun} onOpenRun={openRun} />
               ) : (
                 <DecisionBubble key={it.key} item={it} lead={current.lead ?? 'Lead'} />
               ),
@@ -536,8 +651,8 @@ export function ConversationsPage({ snapshot, focus, onOpenTerminal }: { snapsho
             </div>
             {lead && (
               <Composer
-                target={current.id === ORG_THREAD ? ORG_TARGET : current.id}
-                lead={lead}
+                target={current.id === PULSE_THREAD ? PULSE_TARGET : current.id === ORG_THREAD ? COS_TARGET : current.id}
+                lead={current.id === PULSE_THREAD ? 'Pulse' : lead}
                 replying={replying}
                 queued={queued}
                 onSent={setSentRun}
@@ -546,6 +661,39 @@ export function ConversationsPage({ snapshot, focus, onOpenTerminal }: { snapsho
           </section>
         </div>
       )}
+    </div>
+  );
+}
+
+// The Pulse thread's header: a briefing on demand, and the listening panel.
+function PulseActions({ onStarted }: { onStarted: (runId: string) => void }) {
+  const { tokens } = useTheme();
+  const c = tokens.colors;
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const kind = defaultBriefKind();
+  const button = { display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: `1px solid ${c.border}`, borderRadius: tokens.radius.sm, padding: '4px 10px', color: c.textMuted, fontFamily: 'inherit', fontSize: tokens.type.small, cursor: 'pointer' } as const;
+  return (
+    <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
+      {error && <span style={{ fontSize: tokens.type.micro, color: c.danger }}>{error}</span>}
+      <button
+        disabled={busy}
+        onClick={() => {
+          setBusy(true);
+          setError(null);
+          briefMe(kind)
+            .then((r) => onStarted(r.run_id))
+            .catch((e) => setError(String(e instanceof Error ? e.message : e)))
+            .finally(() => setBusy(false));
+        }}
+        title={kind === 'morning' ? 'What matters today, read aloud' : 'What got done today, read aloud'}
+        style={{ ...button, opacity: busy ? 0.5 : 1 }}
+      >
+        <StrokeIcon name="speaker" size={13} color={c.textMuted} /> {busy ? 'Starting…' : 'Brief me'}
+      </button>
+      <button onClick={() => openListenPanel().catch((e) => setError(String(e)))} title="Talk to Pulse (also from anywhere with the hotkey in Settings)" style={button}>
+        <StrokeIcon name="mic" size={13} color={c.textMuted} /> Talk
+      </button>
     </div>
   );
 }

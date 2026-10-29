@@ -126,8 +126,8 @@ brief: the same payment seen as a Stripe charge, its payout and the bank deposit
 Pulse is also where you tell the org what to do.
 
 - **Command box** (⌘K, or "Ask a lead…" at the top of the sidebar): type anything. A
-  leading name routes it (`Acme: draft the pricing page`), as does `@acme` or a single
-  entity mentioned anywhere; everything else goes to the chief of staff. The To menu
+  leading name routes it (`Acme: draft the pricing page`), as does `@acme`; everything else
+  goes to Pulse, the front door (below), or to the chief of staff in an org without one. The To menu
   overrides the route. Enter sends, Shift+Enter adds a line, Esc closes. It shows your
   recent commands and a few starting points. Sending starts the lead at once: it shows in
   Working now and its conversation opens live.
@@ -151,6 +151,28 @@ switch provider are removed from the child's environment, and Pulse makes no API
 its own. A lead's `model` in `portfolio.json` is used when set, else the CLI's default.
 Chat needs a Claude Code org with `ask.py` in its `bin/`; the starter kit doesn't ship it
 yet, and Pulse says so when it's missing.
+
+### Pulse, the front door, and voice
+
+An org can name one front door in `portfolio.json` (`"front_door": {"lead": "pulse", "model": "sonnet"}`):
+an agent you talk to instead of picking a lead. Its thread, **Pulse**, is pinned first in
+Conversations and is ⌘K's default. It answers what it can from the files, or hands the work
+to one lead or several in parallel (`bin/pulse.py delegate`). Those runs nest under the
+message that started them, like a team, and when the last one finishes their reports come
+back to Pulse, which sums them up in the same thread. It also keeps follow-ups
+(`followups.jsonl`) and writes the morning brief and the end-of-day recap ("Brief me").
+
+- **Talk**: a global hotkey (default ⌥⇧Space; ⌥Space is left to ChatGPT and Claude) opens a
+  small listening panel from anywhere. Speech becomes text on the Mac (the Speech framework
+  with on-device recognition, through the bundled `pulse-listen` helper), shown live. A
+  pause or Enter sends it to Pulse, Esc drops it, and the text stays editable, so dictation
+  tools work there too. "Brief me" or "end of day recap" asks for a briefing.
+- **Replies aloud**: Pulse's replies are read with macOS's own voices (`say`): the first
+  line by default (Pulse writes its one-sentence answer there), or the whole reply, or off.
+  Voice, rate and the hotkey are in Settings › General. Any message has "Read aloud".
+- First use asks for the microphone and speech recognition. On-device speech needs the
+  language's Dictation model (turn on Dictation in System Settings › Keyboard once).
+  `scripts/build-listen.sh` builds the helper; `tauri build` runs it.
 
 ### Mac app
 
