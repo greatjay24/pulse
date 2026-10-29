@@ -7,10 +7,11 @@ import { DEMO } from './orgSource';
 // sign-in and answers at once with its run id. Everything after that (Working now,
 // Conversations, notifications) reads the run's live file and transcript like any other run.
 
-export const ORG_TARGET = 'org'; // the chief of staff: unclear or cross-cutting asks
+export const PULSE_TARGET = 'pulse'; // the front door: decides who handles it (ask.py target "pulse")
+export const COS_TARGET = 'chief-of-staff'; // the chief of staff, by name
 
 export interface Route {
-  target: string; // an entity id, or ORG_TARGET
+  target: string; // an entity id, PULSE_TARGET or COS_TARGET
   message: string; // with a leading "Name:" taken off
   why: 'prefix' | 'mention' | 'default';
 }
@@ -24,16 +25,19 @@ function names(e: PortfolioEntity): string[] {
   return [e.name, e.id, e.lead ?? ''].filter(Boolean).map((n) => n.toLowerCase());
 }
 
-// "Acme: build a pricing page" goes to Acme's lead; "@acme …" or a single entity named
-// anywhere does too; anything else goes to the chief of staff.
+// "Acme: build a pricing page" goes straight to Acme's lead, and so does "@acme …"; anything
+// else (a business merely named included) goes to Pulse, the front door, which picks the lead.
 export function routeOf(text: string, entities: PortfolioEntity[]): Route {
   const trimmed = text.trim();
   const leads = entities.filter((e) => e.lead);
   const prefix = /^@?([^:\n]{1,60}):\s*/.exec(trimmed);
   if (prefix) {
     const head = prefix[1].trim().toLowerCase();
-    if (['org', 'chief of staff', 'chief-of-staff', 'cos'].includes(head)) {
-      return { target: ORG_TARGET, message: trimmed.slice(prefix[0].length), why: 'prefix' };
+    if (['chief of staff', 'chief-of-staff', 'cos', 'chief'].includes(head)) {
+      return { target: COS_TARGET, message: trimmed.slice(prefix[0].length), why: 'prefix' };
+    }
+    if (['pulse', 'jarvis', 'org'].includes(head)) {
+      return { target: PULSE_TARGET, message: trimmed.slice(prefix[0].length), why: 'prefix' };
     }
     const hit = leads.find((e) => names(e).includes(head));
     if (hit) return { target: hit.id, message: trimmed.slice(prefix[0].length), why: 'prefix' };
@@ -41,9 +45,7 @@ export function routeOf(text: string, entities: PortfolioEntity[]): Route {
   const lower = trimmed.toLowerCase();
   const at = leads.filter((e) => names(e).some((n) => new RegExp(`(^|\\s)@${escape(n)}\\b`).test(lower)));
   if (at.length === 1) return { target: at[0].id, message: trimmed, why: 'mention' };
-  const named = leads.filter((e) => names(e).some((n) => new RegExp(`(^|[^\\w-])${escape(n)}([^\\w-]|$)`).test(lower)));
-  if (named.length === 1) return { target: named[0].id, message: trimmed, why: 'mention' };
-  return { target: ORG_TARGET, message: trimmed, why: 'default' };
+  return { target: PULSE_TARGET, message: trimmed, why: 'default' };
 }
 
 export interface AskResult {
@@ -98,7 +100,7 @@ export function rememberCommand(text: string, target: string) {
 // A few starting points, built from the owner's own entities.
 export function suggestions(entities: PortfolioEntity[]): string[] {
   const leads = entities.filter((e) => e.lead);
-  const out = ["What's on my plate today?", 'What should I work on this week?'];
+  const out = ["What's on my plate today?", "What's running right now?"];
   if (leads[0]) out.push(`${leads[0].name}: what changed since yesterday?`);
   if (leads[1]) out.push(`${leads[1].name}: what's waiting on me?`);
   return out;
@@ -106,11 +108,18 @@ export function suggestions(entities: PortfolioEntity[]): string[] {
 
 // The lead a target talks to, for labels.
 export function leadOf(target: string, entities: PortfolioEntity[], chief: string | null): string {
-  if (target === ORG_TARGET) return chief ?? 'chief-of-staff';
+  if (target === PULSE_TARGET) return 'Pulse';
+  if (target === COS_TARGET) return chief ?? 'chief-of-staff';
   return entities.find((e) => e.id === target)?.lead ?? target;
 }
 
 export function chiefOf(registry: unknown): string | null {
   const lead = (registry as { chief_of_staff?: { lead?: unknown } } | null)?.chief_of_staff?.lead;
+  return typeof lead === 'string' ? lead : null;
+}
+
+// The front door's agent (portfolio.json front_door.lead), or null for an org without one.
+export function frontDoorOf(registry: unknown): string | null {
+  const lead = (registry as { front_door?: { lead?: unknown } } | null)?.front_door?.lead;
   return typeof lead === 'string' ? lead : null;
 }

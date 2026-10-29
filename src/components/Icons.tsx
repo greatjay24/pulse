@@ -447,6 +447,8 @@ const STROKES: Record<string, string[]> = {
   'arrow-right': ['M5 12h14', 'M12 5l7 7-7 7'],
   'trend-flat': ['M5 12h14', 'M15 8l4 4-4 4'],
   'chevron-down': ['M6 9l6 6 6-6'],
+  mic: ['M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z', 'M19 10v2a7 7 0 0 1-14 0v-2', 'M12 19v3'],
+  speaker: ['M11 5L6 9H2v6h4l5 4V5z', 'M15.5 8.5a5 5 0 0 1 0 7', 'M19 5a10 10 0 0 1 0 14'],
   today: ['M12 3v2', 'M5.6 5.6l1.4 1.4', 'M3 13h2', 'M19 13h2', 'M17 7l1.4-1.4', 'M7 17a5 5 0 0 1 10 0', 'M3 21h18'],
   board: ['M3 3h7v9H3z', 'M14 3h7v5h-7z', 'M14 12h7v9h-7z', 'M3 16h7v5H3z'],
   wallet: ['M20 7H5a2 2 0 0 1 0-4h13v4', 'M3 5v14a2 2 0 0 0 2 2h15V7', 'M16 14h.01'],

@@ -41,7 +41,8 @@ import { DEMO } from './utils/orgSource';
 import { DemoBadge, Toast, Welcome } from './components/Welcome';
 import { CommandBox } from './components/CommandBox';
 import { TerminalPage, TerminalRequest } from './components/TerminalPage';
-import { chiefOf } from './utils/command';
+import { chiefOf, frontDoorOf } from './utils/command';
+import { useVoice } from './hooks/useVoice';
 import './index.css';
 
 // Check if running in Tauri environment (Tauri v2 uses __TAURI_INTERNALS__)
@@ -844,6 +845,7 @@ function DashboardContent() {
   // Menu bar count and native notifications, from the same data as Today.
   const { signals, cleared } = urgentSignals(boardItems, portfolio.tracker);
   const { live } = useLive();
+  useVoice(DEMO ? null : live, frontDoorOf(portfolio.snapshot?.registry));
   // The demo org never reaches the menu bar or notifications: they are for the owner's real org.
   // Without a tracker the picture is complete once ~/portfolio has been read.
   useDesktopSignals({
@@ -924,6 +926,7 @@ function DashboardContent() {
         <CommandBox
           entities={portfolio.snapshot?.registry?.entities ?? []}
           chief={chiefOf(portfolio.snapshot?.registry)}
+          frontDoor={frontDoorOf(portfolio.snapshot?.registry)}
           onClose={() => setCommandOpen(false)}
           onStarted={openRun}
         />
