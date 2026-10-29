@@ -5,12 +5,13 @@ import { UrgentSignal } from '../utils/today';
 
 const IS_TAURI = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
 const SEEN_KEY = 'pulse-notified';
+const LIVE_SEEN_KEY = 'pulse-notified-live'; // its own list, so run keys never push urgent ones out
 const SEEN_LIMIT = 500;
 const BATCH_MS = 4000; // signals that arrive within one read go out as one notification
 
-function loadSeen(): string[] | null {
+function loadSeen(key = SEEN_KEY): string[] | null {
   try {
-    const raw = localStorage.getItem(SEEN_KEY);
+    const raw = localStorage.getItem(key);
     const parsed = raw ? JSON.parse(raw) : null;
     return Array.isArray(parsed) ? parsed.filter((k) => typeof k === 'string') : null;
   } catch {
@@ -18,18 +19,21 @@ function loadSeen(): string[] | null {
   }
 }
 
-function saveSeen(keys: string[]) {
+function saveSeen(keys: string[], key = SEEN_KEY) {
   try {
-    localStorage.setItem(SEEN_KEY, JSON.stringify(keys.slice(-SEEN_LIMIT)));
+    localStorage.setItem(key, JSON.stringify(keys.slice(-SEEN_LIMIT)));
   } catch {
     // not persisted; worst case a signal is announced again after a restart
   }
 }
 
+async function permitted(): Promise<boolean> {
+  if (await isPermissionGranted()) return true;
+  return (await requestPermission()) === 'granted';
+}
+
 async function notify(batch: UrgentSignal[]) {
-  let granted = await isPermissionGranted();
-  if (!granted) granted = (await requestPermission()) === 'granted';
-  if (!granted) return;
+  if (!(await permitted())) return;
   if (batch.length === 1) {
     sendNotification({ title: batch[0].title, body: batch[0].body });
   } else {
@@ -44,18 +48,45 @@ interface DesktopSignals {
   signals: UrgentSignal[];
   cleared: string[];
   notificationsOn: boolean;
+  working: { run_id: string; label: string }[] | null; // null until logs/live has been read
+  liveSignals: UrgentSignal[]; // a run started or ended: each is its own notification
 }
 
 // Keeps the menu bar count current and announces each new urgent item once. The first
 // complete read only records what is already there, so launching Pulse never floods.
-export function useDesktopSignals({ ready, decisions, signals, cleared, notificationsOn }: DesktopSignals) {
+export function useDesktopSignals({ ready, decisions, signals, cleared, notificationsOn, working, liveSignals }: DesktopSignals) {
   const pending = useRef<UrgentSignal[]>([]);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const workingKey = JSON.stringify(working ?? []);
   useEffect(() => {
-    if (!IS_TAURI || decisions === null) return;
-    invoke('set_tray_count', { count: decisions }).catch((e) => console.error('Failed to update the menu bar:', e));
-  }, [decisions]);
+    if (!IS_TAURI || (decisions === null && working === null)) return;
+    invoke('set_tray_status', { count: decisions ?? 0, working: working ?? [] }).catch((e) => console.error('Failed to update the menu bar:', e));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [decisions, workingKey]);
+
+  // Starts and finishes go out one by one (not batched as "urgent items"). A run that
+  // started and ended between two reads only announces its end.
+  const liveKeys = liveSignals.map((s) => s.key).join('|');
+  useEffect(() => {
+    if (working === null) return;
+    const seen = loadSeen(LIVE_SEEN_KEY);
+    if (seen === null) {
+      saveSeen(liveSignals.map((s) => s.key), LIVE_SEEN_KEY);
+      return;
+    }
+    const known = new Set(seen);
+    const fresh = liveSignals.filter((s) => !known.has(s.key));
+    if (fresh.length === 0) return;
+    saveSeen([...seen, ...fresh.map((s) => s.key)], LIVE_SEEN_KEY);
+    if (!IS_TAURI || !notificationsOn) return;
+    const ending = new Set(fresh.filter((s) => s.key.startsWith('live-end:')).map((s) => s.key.slice('live-end:'.length)));
+    const out = fresh.filter((s) => !(s.key.startsWith('live-start:') && ending.has(s.key.slice('live-start:'.length))));
+    permitted()
+      .then((ok) => ok && out.forEach((s) => sendNotification({ title: s.title, body: s.body })))
+      .catch((e) => console.error('Failed to notify:', e));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [working === null, liveKeys, notificationsOn]);
 
   const signalKeys = signals.map((s) => s.key).join('|');
   const clearedKeys = cleared.join('|');

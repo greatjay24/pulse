@@ -2356,6 +2356,218 @@ async fn read_activity() -> Result<String, String> {
 }
 
 // ==========================================
+// Live runs and transcripts: who is working now, and what they said. Read-only.
+// ==========================================
+// ~/portfolio/bin/live.py writes logs/live/<run_id>.json while a run works and
+// logs/transcripts/<run_id>.jsonl as it goes (already redacted). Pulse only reads them.
+
+const LIVE_MAX_FILES: usize = 200;
+const LIVE_MAX_FILE_BYTES: u64 = 64 * 1024;
+const TRANSCRIPT_MAX_BYTES: u64 = 8 * 1024 * 1024;
+const TRANSCRIPT_MAX_LINES: usize = 3000;
+const TRANSCRIPT_INDEX_MAX: usize = 400;
+// The longest a headless run may last (nightly.py's timeout is 30 min); past this a run
+// still marked running is treated as stopped even if its pid was reused.
+const HEADLESS_MAX_SECS: i64 = 3 * 3600;
+
+// Run ids: lowercase slugs (live.py's RUN_ID), so one can never name a path.
+fn is_run_id(s: &str) -> bool {
+    let mut chars = s.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit())
+        && s.len() <= 120
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
+
+#[cfg(unix)]
+fn pid_alive(pid: i64) -> bool {
+    extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+    if pid <= 0 || pid > i32::MAX as i64 {
+        return false;
+    }
+    // Signal 0 checks the process exists without touching it; EPERM still means it exists.
+    let ok = unsafe { kill(pid as i32, 0) } == 0;
+    ok || std::io::Error::last_os_error().raw_os_error() == Some(1)
+}
+
+#[cfg(not(unix))]
+fn pid_alive(_pid: i64) -> bool {
+    true
+}
+
+// A run that says it is working but whose process is gone stopped unexpectedly.
+fn live_state(run: &serde_json::Value, now: chrono::DateTime<chrono::FixedOffset>, alive: impl Fn(i64) -> bool) -> String {
+    let state = run.get("state").and_then(|s| s.as_str()).unwrap_or("running").to_string();
+    if state != "running" && state != "idle" {
+        return state;
+    }
+    let pid = run.get("pid").and_then(|p| p.as_i64()).unwrap_or(0);
+    let headless = run.get("kind").and_then(|k| k.as_str()) != Some("interactive");
+    let too_old = run
+        .get("started")
+        .and_then(|s| s.as_str())
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .is_some_and(|t| (now - t).num_seconds() > HEADLESS_MAX_SECS);
+    if !alive(pid) || (headless && too_old) {
+        "stopped".to_string()
+    } else {
+        state
+    }
+}
+
+#[derive(Serialize)]
+struct LiveSnapshot {
+    runs: Vec<serde_json::Value>,
+    errors: Vec<String>,
+    read_at: String,
+}
+
+fn read_live_at(root: &Path, alive: impl Fn(i64) -> bool) -> LiveSnapshot {
+    let now = chrono::Local::now().fixed_offset();
+    let mut runs = Vec::new();
+    let mut errors = Vec::new();
+    let Ok(dir) = fs::read_dir(root.join("logs/live")) else {
+        return LiveSnapshot { runs, errors, read_at: now.to_rfc3339() };
+    };
+    let mut names: Vec<String> = dir
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().to_str().map(String::from))
+        .filter(|n| n.ends_with(".json") && is_run_id(n.trim_end_matches(".json")))
+        .collect();
+    names.sort_by(|a, b| b.cmp(a));
+    for name in names.into_iter().take(LIVE_MAX_FILES) {
+        let read = resolve_portfolio_file(root, "logs/live", &name)
+            .and_then(|p| read_text_capped(&p, LIVE_MAX_FILE_BYTES))
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).map_err(|e| format!("malformed: {}", e)));
+        match read {
+            Ok(mut run) if run.is_object() => {
+                let state = live_state(&run, now, &alive);
+                run["state"] = state.into();
+                runs.push(run);
+            }
+            Ok(_) => errors.push(format!("logs/live/{}: not an object", name)),
+            // A writer replaces the file atomically, so a read mid-write is rare; skip it quietly.
+            Err(e) if e == "missing" => {}
+            Err(e) => errors.push(format!("logs/live/{}: {}", name, e)),
+        }
+    }
+    LiveSnapshot { runs, errors, read_at: now.to_rfc3339() }
+}
+
+#[tauri::command]
+async fn read_live() -> Result<String, String> {
+    let root = get_portfolio_dir()?;
+    let snapshot = tauri::async_runtime::spawn_blocking(move || read_live_at(&root, pid_alive))
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_string(&snapshot).map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+struct Transcript {
+    run_id: String,
+    lines: Vec<serde_json::Value>,
+    truncated: bool,
+}
+
+fn read_transcript_at(root: &Path, run_id: &str) -> Result<Transcript, String> {
+    if !is_run_id(run_id) {
+        return Err("invalid run id".to_string());
+    }
+    let path = resolve_portfolio_file(root, "logs/transcripts", &format!("{}.jsonl", run_id))?;
+    let text = read_text_capped(&path, TRANSCRIPT_MAX_BYTES)?;
+    let all: Vec<serde_json::Value> = text
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|v| v.is_object())
+        .collect();
+    // Keep the start line (who, what was asked) when a long run is cut to its tail.
+    let truncated = all.len() > TRANSCRIPT_MAX_LINES;
+    let lines = if truncated {
+        let mut v = vec![all[0].clone()];
+        v.extend(all[all.len() - (TRANSCRIPT_MAX_LINES - 1)..].iter().cloned());
+        v
+    } else {
+        all
+    };
+    Ok(Transcript { run_id: run_id.to_string(), lines, truncated })
+}
+
+#[tauri::command]
+async fn read_transcript(run_id: String) -> Result<String, String> {
+    let root = get_portfolio_dir()?;
+    let t = tauri::async_runtime::spawn_blocking(move || read_transcript_at(&root, &run_id))
+        .await
+        .map_err(|e| e.to_string())??;
+    serde_json::to_string(&t).map_err(|e| e.to_string())
+}
+
+// One transcript in the Conversations index: its start line and its last line.
+#[derive(Serialize)]
+struct TranscriptSummary {
+    run_id: String,
+    start: Option<serde_json::Value>,
+    last: Option<serde_json::Value>,
+    modified: String,
+}
+
+fn first_and_last_lines(path: &Path) -> std::io::Result<(Option<serde_json::Value>, Option<serde_json::Value>)> {
+    use std::io::{BufRead, Read, Seek, SeekFrom};
+    const TAIL: u64 = 64 * 1024;
+    let mut f = fs::File::open(path)?;
+    let len = f.metadata()?.len();
+    let mut first = String::new();
+    std::io::BufReader::new((&f).take(TAIL)).read_line(&mut first)?;
+    f.seek(SeekFrom::Start(len.saturating_sub(TAIL)))?;
+    let mut tail = String::new();
+    f.take(TAIL).read_to_string(&mut tail).ok();
+    let parse = |l: &str| serde_json::from_str::<serde_json::Value>(l.trim()).ok().filter(|v| v.is_object());
+    let last = tail.lines().rev().find(|l| !l.trim().is_empty()).and_then(parse);
+    Ok((parse(&first), last))
+}
+
+fn list_transcripts_at(root: &Path) -> Vec<TranscriptSummary> {
+    let Ok(dir) = fs::read_dir(root.join("logs/transcripts")) else { return vec![] };
+    let mut files: Vec<(std::time::SystemTime, String)> = dir
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().to_str()?.to_string();
+            let id = name.strip_suffix(".jsonl")?;
+            if !is_run_id(id) {
+                return None;
+            }
+            let meta = e.metadata().ok()?;
+            meta.is_file().then(|| (meta.modified().unwrap_or(std::time::UNIX_EPOCH), id.to_string()))
+        })
+        .collect();
+    files.sort_by(|a, b| b.0.cmp(&a.0));
+    files
+        .into_iter()
+        .take(TRANSCRIPT_INDEX_MAX)
+        .filter_map(|(modified, id)| {
+            let path = resolve_portfolio_file(root, "logs/transcripts", &format!("{}.jsonl", id)).ok()?;
+            let (start, last) = first_and_last_lines(&path).ok()?;
+            Some(TranscriptSummary {
+                run_id: id,
+                start,
+                last,
+                modified: chrono::DateTime::<chrono::Local>::from(modified).to_rfc3339(),
+            })
+        })
+        .collect()
+}
+
+#[tauri::command]
+async fn list_transcripts() -> Result<String, String> {
+    let root = get_portfolio_dir()?;
+    let list = tauri::async_runtime::spawn_blocking(move || list_transcripts_at(&root))
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_string(&list).map_err(|e| e.to_string())
+}
+
+// ==========================================
 // Tracker (~/project-tracker): read-only, a fixed allowlist of files
 // ==========================================
 
@@ -3203,25 +3415,68 @@ fn set_auto_launch_enabled(enabled: bool) -> Result<(), String> {
 
 const TRAY_ID: &str = "pulse";
 
-// The count beside the menu bar mark; nothing when the queue is empty.
-fn tray_title(count: u32) -> Option<String> {
-    (count > 0).then(|| count.to_string())
+// The count beside the menu bar mark, then how many agents are working; nothing when both are zero.
+fn tray_title(count: u32, working: usize) -> Option<String> {
+    let mut parts = Vec::new();
+    if count > 0 {
+        parts.push(count.to_string());
+    }
+    if working > 0 {
+        parts.push(format!("● {}", working));
+    }
+    (!parts.is_empty()).then(|| parts.join("  "))
 }
 
-fn tray_tooltip(count: u32) -> String {
-    match count {
+fn tray_tooltip(count: u32, working: usize) -> String {
+    let decisions = match count {
         0 => "Pulse: no decisions waiting".to_string(),
         1 => "Pulse: 1 decision needs you".to_string(),
         n => format!("Pulse: {} decisions need you", n),
+    };
+    match working {
+        0 => decisions,
+        1 => format!("{} · 1 agent working", decisions),
+        n => format!("{} · {} agents working", decisions, n),
     }
 }
 
-// The webview computes the count from the same data as Today and sends it here.
+// One working agent in the menu; choosing it opens its conversation.
+#[derive(Deserialize)]
+struct TrayRun {
+    run_id: String,
+    label: String,
+}
+
+const TRAY_RUN_PREFIX: &str = "run:";
+const TRAY_RUNS_SHOWN: usize = 8;
+
+fn tray_menu(app: &AppHandle, working: &[TrayRun]) -> tauri::Result<Menu<tauri::Wry>> {
+    let menu = Menu::new(app)?;
+    if !working.is_empty() {
+        menu.append(&MenuItem::with_id(app, "working", "Working now", false, None::<&str>)?)?;
+        for r in working.iter().filter(|r| is_run_id(&r.run_id)).take(TRAY_RUNS_SHOWN) {
+            let label: String = r.label.chars().take(70).collect();
+            menu.append(&MenuItem::with_id(app, format!("{}{}", TRAY_RUN_PREFIX, r.run_id), format!("● {}", label), true, None::<&str>)?)?;
+        }
+        menu.append(&PredefinedMenuItem::separator(app)?)?;
+    }
+    menu.append(&MenuItem::with_id(app, "open", "Open Pulse", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(app, "today", "Today", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(app, "conversations", "Conversations", true, None::<&str>)?)?;
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+    menu.append(&MenuItem::with_id(app, "quit", "Quit Pulse", true, Some("CmdOrCtrl+Q"))?)?;
+    Ok(menu)
+}
+
+// The webview computes the decision count from the same data as Today, and the working
+// list from read_live, and sends both here.
 #[tauri::command]
-fn set_tray_count(app: AppHandle, count: u32) -> Result<(), String> {
+fn set_tray_status(app: AppHandle, count: u32, working: Vec<TrayRun>) -> Result<(), String> {
     let tray = app.tray_by_id(TRAY_ID).ok_or("menu bar item not created")?;
-    tray.set_title(tray_title(count)).map_err(|e| e.to_string())?;
-    tray.set_tooltip(Some(tray_tooltip(count))).map_err(|e| e.to_string())
+    tray.set_title(tray_title(count, working.len())).map_err(|e| e.to_string())?;
+    tray.set_tooltip(Some(tray_tooltip(count, working.len()))).map_err(|e| e.to_string())?;
+    let menu = tray_menu(&app, &working).map_err(|e| e.to_string())?;
+    tray.set_menu(Some(menu)).map_err(|e| e.to_string())
 }
 
 fn show_main_window(app: &AppHandle) {
@@ -3238,28 +3493,29 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
-            let open = MenuItem::with_id(app, "open", "Open Pulse", true, None::<&str>)?;
-            let today = MenuItem::with_id(app, "today", "Today", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit Pulse", true, Some("CmdOrCtrl+Q"))?;
-            let separator = PredefinedMenuItem::separator(app)?;
-            let menu = Menu::with_items(app, &[&open, &today, &separator, &quit])?;
+            let menu = tray_menu(app.handle(), &[])?;
 
             // A template image: macOS tints it for light and dark menu bars.
             let icon = Image::from_bytes(include_bytes!("../icons/tray-template@2x.png"))?;
             TrayIconBuilder::with_id(TRAY_ID)
                 .icon(icon)
                 .icon_as_template(true)
-                .tooltip(tray_tooltip(0))
+                .tooltip(tray_tooltip(0, 0))
                 .menu(&menu)
                 .show_menu_on_left_click(true)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => show_main_window(app),
-                    "today" => {
+                    "today" | "conversations" => {
                         show_main_window(app);
-                        let _ = app.emit("pulse://navigate", "today");
+                        let _ = app.emit("pulse://navigate", event.id.as_ref());
                     }
                     "quit" => app.exit(0),
-                    _ => {}
+                    id => {
+                        if let Some(run_id) = id.strip_prefix(TRAY_RUN_PREFIX).filter(|r| is_run_id(r)) {
+                            show_main_window(app);
+                            let _ = app.emit("pulse://open-run", run_id);
+                        }
+                    }
                 })
                 .build(app)?;
 
@@ -3290,9 +3546,12 @@ pub fn run() {
             read_portfolio,
             set_tv_fullscreen,
             read_tracker,
-            set_tray_count,
+            set_tray_status,
             act_on_decision,
-            read_activity
+            read_activity,
+            read_live,
+            read_transcript,
+            list_transcripts
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -3314,11 +3573,19 @@ mod tray_tests {
 
     #[test]
     fn titles_and_tooltips_count_decisions() {
-        assert_eq!(tray_title(0), None);
-        assert_eq!(tray_title(7).as_deref(), Some("7"));
-        assert_eq!(tray_tooltip(0), "Pulse: no decisions waiting");
-        assert_eq!(tray_tooltip(1), "Pulse: 1 decision needs you");
-        assert_eq!(tray_tooltip(22), "Pulse: 22 decisions need you");
+        assert_eq!(tray_title(0, 0), None);
+        assert_eq!(tray_title(7, 0).as_deref(), Some("7"));
+        assert_eq!(tray_tooltip(0, 0), "Pulse: no decisions waiting");
+        assert_eq!(tray_tooltip(1, 0), "Pulse: 1 decision needs you");
+        assert_eq!(tray_tooltip(22, 0), "Pulse: 22 decisions need you");
+    }
+
+    #[test]
+    fn titles_and_tooltips_show_working_agents() {
+        assert_eq!(tray_title(0, 2).as_deref(), Some("● 2"));
+        assert_eq!(tray_title(3, 1).as_deref(), Some("3  ● 1"));
+        assert_eq!(tray_tooltip(3, 1), "Pulse: 3 decisions need you · 1 agent working");
+        assert_eq!(tray_tooltip(0, 2), "Pulse: no decisions waiting · 2 agents working");
     }
 }
 
@@ -3600,5 +3867,103 @@ mod tracker_tests {
         assert_eq!(empty.finance.coverage[0].reason.as_deref(), Some("not configured"));
         assert!(!empty.configured);
         assert_eq!(empty.totals.d30, 0.0);
+    }
+}
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+
+    fn temp_root(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("pulse-live-test-{}-{}", name, std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("logs/live")).unwrap();
+        fs::create_dir_all(dir.join("logs/transcripts")).unwrap();
+        dir.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn run_ids_are_strict() {
+        assert!(is_run_id("20261028-225759-acme-lead-326d"));
+        assert!(is_run_id("session-e19175e6-7bfd-4ad0-9664-1b96d8620dec"));
+        for bad in ["", "-x", "../x", "a/b", "A", "a.json", "a b", "a\0"] {
+            assert!(!is_run_id(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn dead_and_stale_runs_read_as_stopped() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-28T12:00:00-04:00").unwrap();
+        let run = |state: &str, kind: &str, started: &str| serde_json::json!({"state": state, "kind": kind, "pid": 42, "started": started});
+        let alive = |_| true;
+        let dead = |_| false;
+        assert_eq!(live_state(&run("running", "act", "2026-10-28T11:50:00-04:00"), now, alive), "running");
+        assert_eq!(live_state(&run("running", "act", "2026-10-28T11:50:00-04:00"), now, dead), "stopped");
+        assert_eq!(live_state(&run("idle", "interactive", "2026-10-28T11:50:00-04:00"), now, dead), "stopped");
+        assert_eq!(live_state(&run("finished", "act", "2026-10-28T11:50:00-04:00"), now, dead), "finished");
+        // A headless run older than any timeout is stopped even if its pid was reused…
+        assert_eq!(live_state(&run("running", "nightly", "2026-10-28T06:00:00-04:00"), now, alive), "stopped");
+        // …but an interactive session may stay open all day.
+        assert_eq!(live_state(&run("idle", "interactive", "2026-10-28T06:00:00-04:00"), now, alive), "idle");
+    }
+
+    #[test]
+    fn this_process_is_alive() {
+        assert!(pid_alive(std::process::id() as i64));
+        assert!(!pid_alive(0));
+        assert!(!pid_alive(-1));
+    }
+
+    #[test]
+    fn reads_live_files_and_skips_bad_names() {
+        let root = temp_root("read");
+        fs::write(root.join("logs/live/20261028-1-acme-lead-aaaa.json"), r#"{"run_id":"20261028-1-acme-lead-aaaa","state":"running","pid":1}"#).unwrap();
+        fs::write(root.join("logs/live/20261028-2-acme-lead-bbbb.json"), r#"{"state":"finished"}"#).unwrap();
+        fs::write(root.join("logs/live/.20261028-3.json.123.tmp"), "{").unwrap();
+        fs::write(root.join("logs/live/Bad Name.json"), "{}").unwrap();
+        fs::write(root.join("logs/live/20261028-4-broken.json"), "{").unwrap();
+        let snap = read_live_at(&root, |_| false);
+        assert_eq!(snap.runs.len(), 2);
+        assert_eq!(snap.runs[1]["state"], "stopped"); // pid gone
+        assert_eq!(snap.runs[0]["state"], "finished");
+        assert_eq!(snap.errors.len(), 1);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn transcripts_read_by_id_only_and_keep_the_start_line() {
+        let root = temp_root("transcript");
+        let mut body = String::from("{\"t\":\"start\",\"agent\":\"acme-lead\"}\nnot json\n");
+        for i in 0..(TRANSCRIPT_MAX_LINES + 10) {
+            body.push_str(&format!("{{\"t\":\"text\",\"text\":\"{}\"}}\n", i));
+        }
+        body.push_str("{\"t\":\"result\",\"ok\":true}\n");
+        fs::write(root.join("logs/transcripts/run-a.jsonl"), &body).unwrap();
+        let t = read_transcript_at(&root, "run-a").unwrap();
+        assert!(t.truncated);
+        assert_eq!(t.lines.len(), TRANSCRIPT_MAX_LINES);
+        assert_eq!(t.lines[0]["t"], "start");
+        assert_eq!(t.lines.last().unwrap()["t"], "result");
+        assert!(read_transcript_at(&root, "../portfolio").is_err());
+        assert!(read_transcript_at(&root, "missing").is_err());
+
+        let index = list_transcripts_at(&root);
+        assert_eq!(index.len(), 1);
+        assert_eq!(index[0].start.as_ref().unwrap()["agent"], "acme-lead");
+        assert_eq!(index[0].last.as_ref().unwrap()["t"], "result");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn transcript_symlinks_cannot_escape() {
+        let root = temp_root("symlink");
+        let outside = std::env::temp_dir().join(format!("pulse-live-outside-{}.jsonl", std::process::id()));
+        fs::write(&outside, "{\"t\":\"start\"}\n").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("logs/transcripts/evil.jsonl")).unwrap();
+        assert!(read_transcript_at(&root, "evil").is_err());
+        assert!(list_transcripts_at(&root).is_empty());
+        let _ = fs::remove_file(&outside);
+        let _ = fs::remove_dir_all(&root);
     }
 }

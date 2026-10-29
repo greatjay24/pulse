@@ -102,6 +102,11 @@ body {
   color: var(--text);
 }
 
+/* An Activity row that opens its conversation */
+.activity-row-link:hover {
+  background: var(--bg-card-hover);
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 6px;

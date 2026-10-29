@@ -30,6 +30,9 @@ import { MoneyView } from './components/MoneyView';
 import { decisionQueue, urgentSignals } from './utils/today';
 import { useDesktopSignals } from './hooks/useDesktopSignals';
 import { ActivityPage } from './components/ActivityPage';
+import { ConversationFocus, ConversationsPage } from './components/ConversationsPage';
+import { useLive } from './hooks/useLive';
+import { liveSignals, trayRuns } from './utils/live';
 import { migrateApps } from './utils/platforms';
 import './index.css';
 
@@ -64,6 +67,7 @@ function DashboardContent() {
   const [showSettings, setShowSettings] = useState(false);
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
   const [activeNav, setActiveNav] = useState('today');
+  const [conversationFocus, setConversationFocus] = useState<ConversationFocus | null>(null);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
   const [entityTab, setEntityTab] = useState<EntityTab>('overview');
   const [tvMode, setTvMode] = useState(false);
@@ -786,12 +790,31 @@ function DashboardContent() {
     };
   }, [setTv, handleNavChange]);
 
+  // Conversations opened on one run or one entity's thread (Activity, Working now, the menu bar).
+  const openConversation = useCallback((focus: { runId?: string; entity?: string }) => {
+    setTv(false);
+    setSelectedEntityId(null);
+    setConversationFocus({ ...focus, nonce: Date.now() });
+    setActiveNav('conversations');
+  }, [setTv]);
+  const openRun = useCallback((runId: string) => openConversation({ runId }), [openConversation]);
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    const off = listen<string>('pulse://open-run', (e) => openRun(e.payload));
+    return () => {
+      off.then((unlisten) => unlisten());
+    };
+  }, [openRun]);
+
   const boardItems = boardEntities(portfolio.snapshot, portfolio.tracker);
   const queue = decisionQueue(boardItems);
 
   // Menu bar count and native notifications, from the same data as Today.
   const { signals, cleared } = urgentSignals(boardItems, portfolio.tracker);
+  const { live } = useLive();
   useDesktopSignals({
+    working: live ? trayRuns(live) : null,
+    liveSignals: liveSignals(live),
     ready: !!portfolio.snapshot?.registry && !!portfolio.tracker && !portfolio.tracker.error && settingsLoaded,
     decisions: portfolio.snapshot?.registry ? queue.length : null,
     signals,
@@ -887,6 +910,7 @@ function DashboardContent() {
             trackerError={portfolio.trackerError}
             onOpenEntity={openEntity}
             onOpenActivity={() => handleNavChange('activity')}
+            onOpenRun={openRun}
             onRefresh={portfolio.refresh}
           />
         )}
@@ -901,7 +925,10 @@ function DashboardContent() {
         )}
 
         {/* Activity: what the organization did (read-only) */}
-        {page === 'activity' && !selectedEntity && <ActivityPage snapshot={portfolio.snapshot} />}
+        {page === 'activity' && !selectedEntity && <ActivityPage snapshot={portfolio.snapshot} onOpenConversation={openConversation} />}
+
+        {/* Conversations: the owner and the leads, run by run (read-only) */}
+        {page === 'conversations' && !selectedEntity && <ConversationsPage snapshot={portfolio.snapshot} focus={conversationFocus} />}
 
         {/* SaaS metrics pages: kept behind the Settings toggle */}
         {/* Overview Page */}

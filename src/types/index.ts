@@ -689,6 +689,7 @@ export interface DecisionRow {
 // One agent run: an item of a nightly log (an array) or a whole act log (one object).
 export interface AgentRun {
   agent: string;
+  run_id?: string; // its transcript in logs/transcripts/ (runs from before transcripts have none)
   ok?: boolean;
   result?: string;
   cost_usd?: number | null;
@@ -721,6 +722,62 @@ export interface ActivitySnapshot {
   commits: { hash: string; at: string; subject: string }[];
   errors: string[];
   read_at: string;
+}
+
+// ==========================================
+// Live runs and transcripts (~/portfolio/bin/live.py writes them; Rust `read_live`,
+// `read_transcript` and `list_transcripts` read them)
+// ==========================================
+
+// `stopped` is Pulse's word for a run that says it is working but whose process is gone.
+export type LiveState = 'running' | 'idle' | 'finished' | 'failed' | 'stopped';
+
+export interface LiveRun {
+  run_id: string;
+  kind: string; // nightly | weekly | act | check | interactive
+  entity: string | null; // null = the whole org (chief of staff, a manager)
+  agent: string;
+  doing: string;
+  started: string;
+  pid: number;
+  transcript: string;
+  state: LiveState;
+  step: string;
+  step_at: string;
+  updated: string;
+  finished?: string;
+  ok?: boolean;
+  result?: string;
+  cost_usd?: number | null;
+  secs?: number | null;
+  last?: string; // interactive: the agent's last message
+}
+
+export interface LiveSnapshot {
+  runs: LiveRun[];
+  errors: string[];
+  read_at: string;
+}
+
+export type TranscriptLine =
+  | { t: 'start'; at: string; run_id: string; kind: string; entity: string | null; agent: string; doing: string; prompt: string }
+  | { t: 'user'; at: string; text: string }
+  | { t: 'text'; at: string; text: string; sub?: boolean }
+  | { t: 'tool'; at: string; name: string; summary: string; sub?: boolean }
+  | { t: 'error'; at: string; text: string }
+  | { t: 'result'; at: string; ok: boolean; result: string; cost_usd: number | null; secs: number | null; turns?: number; models?: string[] };
+
+export interface Transcript {
+  run_id: string;
+  lines: TranscriptLine[];
+  truncated: boolean;
+}
+
+export interface TranscriptSummary {
+  run_id: string;
+  start: TranscriptLine | null;
+  last: TranscriptLine | null;
+  modified: string;
 }
 
 // ==========================================

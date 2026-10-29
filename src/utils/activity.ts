@@ -18,6 +18,7 @@ export interface ActivityItem {
   ok?: boolean;
   running?: boolean;
   link?: string | null;
+  runId?: string; // the run's transcript, for Conversations
 }
 
 export function localDay(ms: number): string {
@@ -105,6 +106,7 @@ export function activityItems(activity: ActivitySnapshot | null, snapshot: Portf
         cost: r.cost_usd ?? undefined,
         secs: r.secs,
         ok: r.ok,
+        runId: r.run_id,
       }),
     );
   }
@@ -125,6 +127,7 @@ export function activityItems(activity: ActivitySnapshot | null, snapshot: Portf
       secs: r.running ? undefined : r.secs,
       ok: r.running ? undefined : r.ok,
       running: !!r.running,
+      runId: r.run_id,
     });
   }
 

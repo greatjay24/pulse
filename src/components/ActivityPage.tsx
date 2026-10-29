@@ -5,6 +5,7 @@ import { useOrgActivity } from '../hooks/useOrgActivity';
 import { ActivityItem, ActivityKind, activityItems, costBetween, formatCost, formatSecs, localDay, startOfDay } from '../utils/activity';
 import { openExternal } from '../utils/tracker';
 import { Card, Notice, PageHeader, SectionLabel } from './BoardUI';
+import { WorkingNow } from './WorkingNow';
 import { Icon } from './Icons';
 
 const KIND_LABEL: Record<ActivityKind, string> = {
@@ -49,7 +50,10 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
   );
 }
 
-function Row({ item, entityName }: { item: ActivityItem; entityName: string | null }) {
+// Runs open their conversation; answers and replies open their entity's thread.
+const CONVERSATION_KINDS: ActivityKind[] = ['run', 'act', 'answer', 'report'];
+
+function Row({ item, entityName, onOpen }: { item: ActivityItem; entityName: string | null; onOpen?: () => void }) {
   const { tokens } = useTheme();
   const c = tokens.colors;
   const tone = item.ok === false ? c.danger : item.running ? c.accent : item.kind === 'answer' ? c.accent : c.textDim;
@@ -62,7 +66,15 @@ function Row({ item, entityName }: { item: ActivityItem; entityName: string | nu
     item.ok === false ? 'failed' : null,
   ].filter(Boolean);
   return (
-    <div style={{ display: 'flex', gap: '14px', padding: '12px 16px', alignItems: 'flex-start' }}>
+    <div
+      onClick={onOpen}
+      onKeyDown={(e) => onOpen && (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), onOpen())}
+      role={onOpen ? 'button' : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      title={onOpen ? 'Open the conversation' : undefined}
+      className={onOpen ? 'activity-row-link' : undefined}
+      style={{ display: 'flex', gap: '14px', padding: '12px 16px', alignItems: 'flex-start', cursor: onOpen ? 'pointer' : undefined, borderRadius: tokens.radius.sm }}
+    >
       <span
         style={{
           width: '64px',
@@ -85,7 +97,7 @@ function Row({ item, entityName }: { item: ActivityItem; entityName: string | nu
         <span style={{ display: 'block', fontSize: tokens.type.micro, color: c.textDim, marginTop: '4px' }}>{meta.join(' · ')}</span>
       </span>
       {item.link && /^https?:\/\//.test(item.link) && (
-        <button onClick={() => openExternal(item.link!)} title={item.link} style={{ background: 'none', border: 'none', cursor: 'pointer', marginTop: '3px' }}>
+        <button onClick={(e) => (e.stopPropagation(), openExternal(item.link!))} title={item.link} style={{ background: 'none', border: 'none', cursor: 'pointer', marginTop: '3px' }}>
           <Icon name="external-link" size={13} color={c.textDim} />
         </button>
       )}
@@ -96,7 +108,10 @@ function Row({ item, entityName }: { item: ActivityItem; entityName: string | nu
 // A read-only timeline of what the organization did: lead runs (nightly and on the owner's answers)
 // with their cost, commits in ~/portfolio, `done` from each status.json, decisions.jsonl and
 // sales drafts. Filter by entity and by day.
-export function ActivityPage({ snapshot }: { snapshot: PortfolioSnapshot | null }) {
+export function ActivityPage({ snapshot, onOpenConversation }: {
+  snapshot: PortfolioSnapshot | null;
+  onOpenConversation: (focus: { runId?: string; entity?: string }) => void;
+}) {
   const { tokens } = useTheme();
   const c = tokens.colors;
   const { activity, error, refresh } = useOrgActivity();
@@ -136,6 +151,8 @@ export function ActivityPage({ snapshot }: { snapshot: PortfolioSnapshot | null 
           </button>
         }
       />
+
+      <WorkingNow snapshot={snapshot} onOpenRun={(runId) => onOpenConversation({ runId })} />
 
       {error && <Notice>{error}</Notice>}
       {(activity?.errors.length ?? 0) > 0 && <Notice tone="quiet">Some files could not be read: {activity!.errors.join('; ')}</Notice>}
@@ -186,7 +203,16 @@ export function ActivityPage({ snapshot }: { snapshot: PortfolioSnapshot | null 
               </div>
               <div style={{ background: c.bgCard, border: `1px solid ${c.border}`, borderRadius: tokens.radius.md, padding: '4px' }}>
                 {g.items.map((i) => (
-                  <Row key={i.key} item={i} entityName={entity === 'all' ? nameOf(i.entity) : null} />
+                  <Row
+                    key={i.key}
+                    item={i}
+                    entityName={entity === 'all' ? nameOf(i.entity) : null}
+                    onOpen={
+                      CONVERSATION_KINDS.includes(i.kind)
+                        ? () => onOpenConversation(i.runId ? { runId: i.runId } : { entity: i.entity ?? undefined })
+                        : undefined
+                    }
+                  />
                 ))}
               </div>
             </section>

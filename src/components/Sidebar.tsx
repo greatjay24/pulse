@@ -23,6 +23,7 @@ const MAIN_NAV: { id: string; label: string; icon: string }[] = [
   { id: 'today', label: 'Today', icon: 'today' },
   { id: 'board', label: 'Board', icon: 'board' },
   { id: 'activity', label: 'Activity', icon: 'activity' }, // decision outcomes, agent runs, cost
+  { id: 'conversations', label: 'Conversations', icon: 'chat' }, // what the owner and the leads said, run by run
   { id: 'money', label: 'Money', icon: 'wallet' },
 ];
 
