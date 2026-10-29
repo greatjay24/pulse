@@ -7,6 +7,10 @@ import { projectsOf, sumFinance } from '../utils/finance';
 import { headline } from '../utils/today';
 import { dataSources } from '../utils/sources';
 import { Icon } from './Icons';
+import { Goal } from '../types/ops';
+import { useGoals } from '../hooks/useOps';
+import { PACE_LABEL, formatAmount, formatDate, pace, topGoal } from '../utils/ops';
+import { GoalBar, paceTone } from './GoalsPage';
 import { AgeLabel, Card, DataStamps, EntityMark, HealthBadge, HealthWhy, Notice, PageHeader, SectionLabel, StageBadge } from './BoardUI';
 import type { EntityLogos } from './BoardUI';
 import { HeadlineLine } from './Headline';
@@ -64,7 +68,7 @@ function healthTone(health: string | undefined, c: { danger: string; warning: st
   return health === 'red' ? c.danger : health === 'yellow' ? c.warning : health === 'green' ? c.success : c.textMuted;
 }
 
-function EntityCard({ item, now, onOpen }: { item: BoardEntity; now: number; onOpen: () => void }) {
+function EntityCard({ item, now, onOpen, goal }: { item: BoardEntity; now: number; onOpen: () => void; goal?: Goal | null }) {
   const { tokens } = useTheme();
   const c = tokens.colors;
   const { entity, status, error, tracker, logos, money30 } = item;
@@ -179,6 +183,21 @@ function EntityCard({ item, now, onOpen }: { item: BoardEntity; now: number; onO
         </div>
       )}
 
+      {goal && (
+        <div style={{ width: '100%' }} title={goal.owner_note || goal.metric}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'baseline', fontSize: tokens.type.small, marginBottom: '6px' }}>
+            <span style={{ color: c.textDim, flexShrink: 0 }}>Goal</span>
+            <span style={{ fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{goal.title}</span>
+            <span style={{ marginLeft: 'auto', flexShrink: 0, color: paceTone(pace(goal), c) }}>{PACE_LABEL[pace(goal)]}</span>
+          </div>
+          <GoalBar goal={goal} height={5} />
+          <div style={{ fontSize: tokens.type.micro, color: c.textDim, marginTop: '5px' }}>
+            {formatAmount(goal.current, goal.unit)} of {formatAmount(goal.target, goal.unit)} · by {formatDate(goal.by)}
+            {goal.proposed && ' · proposed'}
+          </div>
+        </div>
+      )}
+
       <div
         style={{
           display: 'flex',
@@ -274,6 +293,8 @@ export function OrgBoard({ snapshot, tracker, error, trackerError, onOpenEntity,
   const trackerProblem = trackerError ?? tracker?.error ?? null;
   const groups = snapshot?.registry?.groups ?? [];
   const line = headline(items, snapshot, tracker);
+  const { data: goals } = useGoals();
+  const goalFor = (id: string) => topGoal(goals?.entities.find((e) => e.entity === id)?.goals?.goals);
 
   return (
     <div style={{ maxWidth: '1680px', margin: '0 auto' }}>
@@ -333,7 +354,7 @@ export function OrgBoard({ snapshot, tracker, error, trackerError, onOpenEntity,
                     const children = byHealth(items.filter((i) => i.entity.parent === item.entity.id));
                     return (
                       <div key={item.entity.id} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                        <EntityCard item={item} now={now} onOpen={() => onOpenEntity(item.entity.id)} />
+                        <EntityCard item={item} now={now} onOpen={() => onOpenEntity(item.entity.id)} goal={goalFor(item.entity.id)} />
                         {children.length > 0 && (
                           <div
                             style={{
@@ -347,7 +368,7 @@ export function OrgBoard({ snapshot, tracker, error, trackerError, onOpenEntity,
                           >
                             <SectionLabel style={{ marginBottom: 0, marginTop: '2px' }}>Ventures</SectionLabel>
                             {children.map((child) => (
-                              <EntityCard key={child.entity.id} item={child} now={now} onOpen={() => onOpenEntity(child.entity.id)} />
+                              <EntityCard key={child.entity.id} item={child} now={now} onOpen={() => onOpenEntity(child.entity.id)} goal={goalFor(child.entity.id)} />
                             ))}
                           </div>
                         )}

@@ -31,6 +31,9 @@ import { decisionQueue, urgentSignals } from './utils/today';
 import { useDesktopSignals } from './hooks/useDesktopSignals';
 import { ActivityPage } from './components/ActivityPage';
 import { ConversationFocus, ConversationsPage } from './components/ConversationsPage';
+import { OutboxPage } from './components/OutboxPage';
+import { GoalsPage } from './components/GoalsPage';
+import { ConnectionsPage } from './components/ConnectionsPage';
 import { useLive } from './hooks/useLive';
 import { liveSignals, trayRuns } from './utils/live';
 import { migrateApps } from './utils/platforms';
@@ -870,7 +873,7 @@ function DashboardContent() {
     invoke<string[]>('list_org_agents').then(setOrgAgents).catch(() => setOrgAgents([]));
   }, [registry]);
   const selectedEntity = entityPage ? boardItems.find((i) => i.entity.id === selectedEntityId) ?? null : null;
-  const pageLabel: Record<string, string> = { today: 'Today', board: 'Board', money: 'Money' };
+  const pageLabel: Record<string, string> = { today: 'Today', board: 'Board', money: 'Money', goals: 'Goals' };
 
   // Narrow windows get an icon rail instead of the full sidebar.
   const compact = useWindowWidth() < COMPACT_BELOW;
@@ -967,6 +970,7 @@ function DashboardContent() {
             trackerError={portfolio.trackerError}
             onOpenEntity={openEntity}
             onOpenActivity={() => handleNavChange('activity')}
+            onOpenOutbox={() => handleNavChange('outbox')}
             onOpenRun={openRun}
             onRefresh={portfolio.refresh}
           />
@@ -992,6 +996,11 @@ function DashboardContent() {
         {terminalUsed && (
           <TerminalPage agents={orgAgents} request={terminalRequest} visible={page === 'terminal' && !selectedEntity} />
         )}
+
+        {/* Operations: the Outbox (one-click send), goals per business, connected systems */}
+        {page === 'outbox' && !selectedEntity && <OutboxPage snapshot={portfolio.snapshot} />}
+        {page === 'goals' && !selectedEntity && <GoalsPage snapshot={portfolio.snapshot} />}
+        {page === 'connections' && !selectedEntity && <ConnectionsPage snapshot={portfolio.snapshot} />}
 
         {/* SaaS metrics pages: kept behind the Settings toggle */}
         {/* Overview Page */}
