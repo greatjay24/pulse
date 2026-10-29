@@ -69,10 +69,11 @@ export function buildThreads(
     const known = runs.get(r.run_id);
     if (known) {
       known.item.live = r;
-      if (r.state !== 'running' && r.state !== 'idle' && known.item.ok === undefined) {
+      const pending = r.state === 'running' || r.state === 'idle' || r.state === 'queued';
+      if (!pending && known.item.ok === undefined) {
         Object.assign(known.item, { ok: r.ok ?? r.state === 'finished', cost: r.cost_usd, tokens: r.tokens, secs: r.secs, result: r.result });
       }
-      if (r.kind !== 'interactive' && r.state !== 'running') known.item.agents ??= r.team?.length ?? 0;
+      if (r.kind !== 'interactive' && !pending) known.item.agents ??= r.team?.length ?? 0;
     } else {
       runs.set(r.run_id, {
         thread: threadOf(r.entity),
@@ -147,6 +148,12 @@ export function buildThreads(
       preview: previewOf(last),
     });
   }
+  // Every lead gets a thread, so the owner can start a conversation with one that has none yet.
+  const chief = (snapshot?.registry as { chief_of_staff?: { lead?: string } } | null | undefined)?.chief_of_staff?.lead;
+  for (const e of entities) {
+    if (e.lead && !items.has(e.id)) threads.push({ id: e.id, name: e.name, lead: e.lead, items: [], latest: 0, working: false, preview: 'No conversation yet' });
+  }
+  if (chief && !items.has(ORG_THREAD)) threads.push({ id: ORG_THREAD, name: 'Organization', lead: null, items: [], latest: 0, working: false, preview: 'No conversation yet' });
   return threads.sort((a, b) => Number(b.working) - Number(a.working) || b.latest - a.latest);
 }
 

@@ -12,6 +12,8 @@ import { openExternal } from '../utils/tracker';
 import { EntityMark, Notice, PageHeader } from './BoardUI';
 import { LiveDot, memberTone } from './WorkingNow';
 import { Icon } from './Icons';
+import { Composer } from './Composer';
+import { ORG_TARGET, chiefOf, stopRun } from '../utils/command';
 
 const INDEX_POLL_MS = 15_000;
 const LIVE_TRANSCRIPT_MS = 2_000;
@@ -242,7 +244,7 @@ function TeamBlock({ agents, at, done, live }: { agents: Deployed[]; at: number;
 
 // A transcript as chat: the owner's turns right, the agent's words left, tool calls folded,
 // teams the lead deployed as one block each.
-function TranscriptView({ lines, agent, team }: { lines: TranscriptLine[]; agent: string; team?: TeamMember[] }) {
+function TranscriptView({ lines, agent, team, chat }: { lines: TranscriptLine[]; agent: string; team?: TeamMember[]; chat?: boolean }) {
   const done = new Map(lines.filter((l): l is AgentDone => l.t === 'agent_done').map((l) => [l.id, l]));
   const live = new Map((team ?? []).map((m) => [m.id, m]));
   const blocks: React.ReactNode[] = [];
@@ -257,7 +259,10 @@ function TranscriptView({ lines, agent, team }: { lines: TranscriptLine[]; agent
       continue;
     }
     flush();
-    if (l.t === 'start') blocks.push(<Brief key={`b${blocks.length}`} prompt={l.prompt} />);
+    // A chat's brief is the owner's message, which follows as their own bubble.
+    if (l.t === 'start') {
+      if (!chat) blocks.push(<Brief key={`b${blocks.length}`} prompt={l.prompt} />);
+    }
     else if (l.t === 'deploy') blocks.push(<TeamBlock key={`d${blocks.length}`} agents={l.agents} at={ms(l.at)} done={done} live={live} />);
     else if (l.t === 'user') blocks.push(<Bubble key={`u${blocks.length}`} mine label="You" at={ms(l.at)}>{l.text}</Bubble>);
     else if (l.t === 'text') blocks.push(<Bubble key={`t${blocks.length}`} mine={false} label={l.sub ? `${agent} · subagent` : agent} at={ms(l.at)}>{l.text}</Bubble>);
@@ -270,11 +275,13 @@ function RunFooter({ item }: { item: RunItem }) {
   const { tokens } = useTheme();
   const c = tokens.colors;
   const live = item.live;
-  if (live && (live.state === 'running' || live.state === 'idle')) {
+  if (live && (live.state === 'running' || live.state === 'idle' || live.state === 'queued')) {
+    const canStop = live.kind !== 'interactive' && live.state !== 'idle';
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: tokens.type.small, color: live.state === 'running' ? c.accent : c.textDim }}>
         <LiveDot color={live.state === 'running' ? c.accent : c.textDim} pulsing={live.state === 'running'} />
-        {live.state === 'running' ? live.step : 'Waiting for you'} · {elapsed(ms(live.started), Date.now())}
+        {live.state === 'running' ? live.step : live.state === 'queued' ? 'Queued: sends when the current reply ends' : 'Waiting for you'} · {elapsed(ms(live.started), Date.now())}
+        {canStop && <StopButton runId={live.run_id} label={live.state === 'queued' ? 'Cancel' : 'Stop'} />}
       </div>
     );
   }
@@ -290,6 +297,25 @@ function RunFooter({ item }: { item: RunItem }) {
   return <div style={{ fontSize: tokens.type.micro, color: failed ? c.danger : c.textDim }}>{parts.join(' · ')}</div>;
 }
 
+function StopButton({ runId, label }: { runId: string; label: string }) {
+  const { tokens } = useTheme();
+  const c = tokens.colors;
+  const [state, setState] = useState<'idle' | 'stopping' | string>('idle');
+  return (
+    <button
+      onClick={() => {
+        setState('stopping');
+        stopRun(runId).catch((e) => setState(String(e instanceof Error ? e.message : e)));
+      }}
+      disabled={state === 'stopping'}
+      title="Ends the run and everything it started"
+      style={{ marginLeft: 'auto', background: 'none', border: `1px solid ${c.border}`, borderRadius: tokens.radius.sm, padding: '2px 10px', color: state === 'idle' || state === 'stopping' ? c.danger : c.textDim, fontFamily: 'inherit', fontSize: tokens.type.micro, cursor: 'pointer' }}
+    >
+      {state === 'idle' ? label : state === 'stopping' ? 'Stopping…' : state}
+    </button>
+  );
+}
+
 function RunBlock({ item, open: initiallyOpen, focused }: { item: RunItem; open: boolean; focused: boolean }) {
   const { tokens } = useTheme();
   const c = tokens.colors;
@@ -297,7 +323,8 @@ function RunBlock({ item, open: initiallyOpen, focused }: { item: RunItem; open:
   useEffect(() => {
     if (focused) setOpen(true);
   }, [focused]);
-  const running = item.live?.state === 'running' || item.live?.state === 'idle';
+  const running = item.live?.state === 'running' || item.live?.state === 'idle' || item.live?.state === 'queued';
+  const chat = item.kind === 'chat';
   const { transcript, error } = useTranscript(item.runId, open, running);
   const lines = transcript?.lines ?? [];
   const hasResultText = lines.some((l) => l.t === 'text');
@@ -318,7 +345,7 @@ function RunBlock({ item, open: initiallyOpen, focused }: { item: RunItem; open:
         <span style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: running ? c.accent : c.textDim }}>
           {kindLabel(item.kind)}
         </span>
-        <span style={{ fontSize: '15px', fontWeight: 500 }}>{item.doing}</span>
+        {!chat && <span style={{ fontSize: '15px', fontWeight: 500 }}>{item.doing}</span>}
         <span style={{ fontSize: tokens.type.micro, color: c.textDim }}>
           {item.agent} · {when(item.at)}
           {item.live && item.live.state !== 'finished' && item.live.state !== 'failed' && ` · ${stateLabel(item.live)}`}
@@ -337,7 +364,7 @@ function RunBlock({ item, open: initiallyOpen, focused }: { item: RunItem; open:
           {error && <div style={{ fontSize: tokens.type.small, color: c.textDim }}>Transcript not readable: {error}</div>}
           {!transcript && !error && <div style={{ fontSize: tokens.type.small, color: c.textDim }}>Reading the transcript…</div>}
           {transcript?.truncated && <div style={{ fontSize: tokens.type.micro, color: c.textDim }}>Long run: showing its latest part.</div>}
-          <TranscriptView lines={lines} agent={item.agent} team={item.live?.team} />
+          <TranscriptView lines={lines} agent={item.agent} team={item.live?.team} chat={chat} />
         </>
       )}
       {/* Runs from before transcripts, or folded ones: the lead's closing summary. */}
@@ -414,7 +441,7 @@ function ThreadList({ threads, selected, snapshot, onSelect }: { threads: Thread
 
 // Read-only: what the owner and each lead said, decision by decision and run by run. Answers
 // still go through the decision cards (act.py); nothing here writes.
-export function ConversationsPage({ snapshot, focus }: { snapshot: PortfolioSnapshot | null; focus: ConversationFocus | null }) {
+export function ConversationsPage({ snapshot, focus, onOpenTerminal }: { snapshot: PortfolioSnapshot | null; focus: ConversationFocus | null; onOpenTerminal?: (agent: string) => void }) {
   const { tokens } = useTheme();
   const c = tokens.colors;
   const { activity, error: activityError } = useOrgActivity();
@@ -445,13 +472,28 @@ export function ConversationsPage({ snapshot, focus }: { snapshot: PortfolioSnap
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.id, focusedRun]);
 
+  // A message just sent: its run shows up on the next live read, then the thread follows it.
+  const [sentRun, setSentRun] = useState<string | null>(null);
+  const sentShown = !!sentRun && !!current?.items.some((i) => i.type === 'run' && i.runId === sentRun);
+  useEffect(() => {
+    if (!sentShown) return;
+    bottomRef.current?.scrollIntoView({ block: 'end' });
+    setSentRun(null);
+  }, [sentShown]);
+
+  const chief = chiefOf(snapshot?.registry);
+  const lead = current ? current.lead ?? chief : null;
+  const chatRuns = (live?.runs ?? []).filter((r) => r.kind === 'chat' && r.agent === lead);
+  const replying = chatRuns.find((r) => r.state === 'running') ?? null;
+  const queued = chatRuns.filter((r) => r.state === 'queued').length;
+
   const runItems = current?.items.filter((i): i is RunItem => i.type === 'run') ?? [];
   const autoOpen = new Set(runItems.slice(-AUTO_OPEN_RUNS).map((i) => i.key));
   const problems = [activityError, liveError, indexError].filter(Boolean);
 
   return (
     <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
-      <PageHeader title="Conversations" subtitle="What you and each lead said: your answers, their replies, and every run's transcript. Read-only." />
+      <PageHeader title="Conversations" subtitle="What you and each lead said: your answers, their replies, and every run's transcript. Write below a thread to talk to its lead." />
       {problems.length > 0 && <Notice>{problems.join(' · ')}</Notice>}
       {threads.length === 0 && !problems.length && <div style={{ color: c.textMuted, marginTop: '20px' }}>No conversations recorded yet.</div>}
       {current && (
@@ -470,7 +512,16 @@ export function ConversationsPage({ snapshot, focus }: { snapshot: PortfolioSnap
           <section style={{ display: 'flex', flexDirection: 'column', gap: '16px', minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
               <h2 style={{ fontFamily: tokens.fonts.display, fontSize: tokens.type.heading, fontWeight: 500 }}>{current.name}</h2>
-              {current.lead && <span style={{ fontSize: tokens.type.small, color: c.textDim }}>{current.lead}</span>}
+              {lead && <span style={{ fontSize: tokens.type.small, color: c.textDim }}>{lead}</span>}
+              {lead && onOpenTerminal && (
+                <button
+                  onClick={() => onOpenTerminal(lead)}
+                  title={`A full Claude Code session with ${lead}, in a Pulse tab`}
+                  style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: `1px solid ${c.border}`, borderRadius: tokens.radius.sm, padding: '4px 10px', color: c.textMuted, fontFamily: 'inherit', fontSize: tokens.type.small, cursor: 'pointer' }}
+                >
+                  <Icon name="terminal" size={13} color={c.textMuted} /> Open in terminal
+                </button>
+              )}
             </div>
             {current.items.map((it) =>
               it.type === 'run' ? (
@@ -483,6 +534,15 @@ export function ConversationsPage({ snapshot, focus }: { snapshot: PortfolioSnap
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: tokens.type.micro, color: c.textDim }}>
               <Icon name="chat" size={12} color={c.textDim} /> Answer decisions from Today or the entity page; the lead's reply lands here.
             </div>
+            {lead && (
+              <Composer
+                target={current.id === ORG_THREAD ? ORG_TARGET : current.id}
+                lead={lead}
+                replying={replying}
+                queued={queued}
+                onSent={setSentRun}
+              />
+            )}
           </section>
         </div>
       )}

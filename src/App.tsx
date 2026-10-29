@@ -31,11 +31,17 @@ import { decisionQueue, urgentSignals } from './utils/today';
 import { useDesktopSignals } from './hooks/useDesktopSignals';
 import { ActivityPage } from './components/ActivityPage';
 import { ConversationFocus, ConversationsPage } from './components/ConversationsPage';
+import { OutboxPage } from './components/OutboxPage';
+import { GoalsPage } from './components/GoalsPage';
+import { ConnectionsPage } from './components/ConnectionsPage';
 import { useLive } from './hooks/useLive';
 import { liveSignals, trayRuns } from './utils/live';
 import { migrateApps } from './utils/platforms';
 import { DEMO } from './utils/orgSource';
 import { DemoBadge, Toast, Welcome } from './components/Welcome';
+import { CommandBox } from './components/CommandBox';
+import { TerminalPage, TerminalRequest } from './components/TerminalPage';
+import { chiefOf } from './utils/command';
 import './index.css';
 
 // Check if running in Tauri environment (Tauri v2 uses __TAURI_INTERNALS__)
@@ -73,6 +79,9 @@ function DashboardContent() {
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
   const [entityTab, setEntityTab] = useState<EntityTab>('overview');
   const [tvMode, setTvMode] = useState(false);
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [terminalRequest, setTerminalRequest] = useState<TerminalRequest | null>(null);
+  const [orgAgents, setOrgAgents] = useState<string[]>([]);
   const portfolio = usePortfolio();
   const [detailPanel, setDetailPanel] = useState<{ isOpen: boolean; type: DetailPanelType; originRect: CardRect | null }>({
     isOpen: false,
@@ -800,6 +809,27 @@ function DashboardContent() {
     setActiveNav('conversations');
   }, [setTv]);
   const openRun = useCallback((runId: string) => openConversation({ runId }), [openConversation]);
+
+  // ⌘K opens the command box from anywhere, inputs and the terminal included.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey && !e.shiftKey && !e.altKey && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setCommandOpen((open) => !open);
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
+
+  // A terminal tab with a lead (from Conversations or the Terminal page). The page stays
+  // mounted once opened, so its sessions survive switching pages.
+  const openTerminal = useCallback((agent: string | null) => {
+    setTv(false);
+    setSelectedEntityId(null);
+    setTerminalRequest({ agent, nonce: Date.now() });
+    setActiveNav('terminal');
+  }, [setTv]);
   useEffect(() => {
     if (!IS_TAURI) return;
     const off = listen<string>('pulse://open-run', (e) => openRun(e.payload));
@@ -833,8 +863,17 @@ function DashboardContent() {
     setSelectedEntityId(id);
   }, []);
   const entityPage = ENTITY_HOSTS.includes(page);
+  const [terminalUsed, setTerminalUsed] = useState(false);
+  useEffect(() => {
+    if (page === 'terminal') setTerminalUsed(true);
+  }, [page]);
+  const registry = portfolio.snapshot?.registry;
+  useEffect(() => {
+    if (!IS_TAURI || DEMO || !registry) return;
+    invoke<string[]>('list_org_agents').then(setOrgAgents).catch(() => setOrgAgents([]));
+  }, [registry]);
   const selectedEntity = entityPage ? boardItems.find((i) => i.entity.id === selectedEntityId) ?? null : null;
-  const pageLabel: Record<string, string> = { today: 'Today', board: 'Board', money: 'Money' };
+  const pageLabel: Record<string, string> = { today: 'Today', board: 'Board', money: 'Money', goals: 'Goals' };
 
   // Narrow windows get an icon rail instead of the full sidebar.
   const compact = useWindowWidth() < COMPACT_BELOW;
@@ -878,7 +917,17 @@ function DashboardContent() {
         decisions={portfolio.snapshot?.registry ? queue.length : null}
         compact={compact}
         hideMoney={portfolio.trackerAbsent}
+        onCommand={() => setCommandOpen(true)}
       />}
+
+      {commandOpen && (
+        <CommandBox
+          entities={portfolio.snapshot?.registry?.entities ?? []}
+          chief={chiefOf(portfolio.snapshot?.registry)}
+          onClose={() => setCommandOpen(false)}
+          onStarted={openRun}
+        />
+      )}
 
       {/* Main Content */}
       <main ref={mainRef} style={{ flex: 1, minWidth: 0, padding: tvMode ? '40px 56px' : compact ? '28px 24px' : '36px 48px', overflow: 'auto' }}>
@@ -921,6 +970,7 @@ function DashboardContent() {
             trackerError={portfolio.trackerError}
             onOpenEntity={openEntity}
             onOpenActivity={() => handleNavChange('activity')}
+            onOpenOutbox={() => handleNavChange('outbox')}
             onOpenRun={openRun}
             onRefresh={portfolio.refresh}
           />
@@ -940,7 +990,17 @@ function DashboardContent() {
         {page === 'activity' && !selectedEntity && <ActivityPage snapshot={portfolio.snapshot} onOpenConversation={openConversation} />}
 
         {/* Conversations: the owner and the leads, run by run (read-only) */}
-        {page === 'conversations' && !selectedEntity && <ConversationsPage snapshot={portfolio.snapshot} focus={conversationFocus} />}
+        {page === 'conversations' && !selectedEntity && <ConversationsPage snapshot={portfolio.snapshot} focus={conversationFocus} onOpenTerminal={openTerminal} />}
+
+        {/* Terminal: Claude Code sessions in tabs; kept mounted so they outlive a page switch */}
+        {terminalUsed && (
+          <TerminalPage agents={orgAgents} request={terminalRequest} visible={page === 'terminal' && !selectedEntity} />
+        )}
+
+        {/* Operations: the Outbox (one-click send), goals per business, connected systems */}
+        {page === 'outbox' && !selectedEntity && <OutboxPage snapshot={portfolio.snapshot} />}
+        {page === 'goals' && !selectedEntity && <GoalsPage snapshot={portfolio.snapshot} />}
+        {page === 'connections' && !selectedEntity && <ConnectionsPage snapshot={portfolio.snapshot} />}
 
         {/* SaaS metrics pages: kept behind the Settings toggle */}
         {/* Overview Page */}

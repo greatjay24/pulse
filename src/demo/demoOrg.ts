@@ -1,3 +1,4 @@
+import { demoConnections, demoGoals, demoOutbox } from './demoOps';
 import {
   ActivitySnapshot,
   EntityStatus,
@@ -441,6 +442,12 @@ export function demoRead(cmd: string, args?: Record<string, unknown>): unknown {
       if (!lines) throw new Error('missing');
       return { run_id: id, lines, truncated: false } satisfies Transcript;
     }
+    case 'read_outbox':
+      return demoOutbox();
+    case 'read_goals':
+      return demoGoals();
+    case 'read_connections':
+      return demoConnections();
     case 'setup_check':
       return { setup_needed: false, claude: null, python3: null, tracker: true };
     default:

@@ -17,6 +17,7 @@ interface SidebarProps {
   decisions: number | null; // decisions waiting on the owner, shown beside Today
   compact: boolean; // narrow window: an icon rail
   hideMoney?: boolean; // no tracker, so nothing for Money to show
+  onCommand?: () => void; // opens the command box (⌘K)
 }
 
 // The main nav, in order of importance.
@@ -26,6 +27,10 @@ const MAIN_NAV: { id: string; label: string; icon: string }[] = [
   { id: 'activity', label: 'Activity', icon: 'activity' }, // decision outcomes, agent runs, cost
   { id: 'conversations', label: 'Conversations', icon: 'chat' }, // what the owner and the leads said, run by run
   { id: 'money', label: 'Money', icon: 'wallet' },
+  { id: 'terminal', label: 'Terminal', icon: 'terminal' }, // Claude Code sessions with any lead, in tabs
+  { id: 'outbox', label: 'Outbox', icon: 'mail' }, // messages agents wrote, sent on the owner's click
+  { id: 'goals', label: 'Goals', icon: 'target' },
+  { id: 'connections', label: 'Connections', icon: 'globe' },
 ];
 
 // Helper to get favicon URL from domain
@@ -334,6 +339,7 @@ export function Sidebar({
   decisions,
   compact,
   hideMoney = false,
+  onCommand,
 }: SidebarProps) {
   const { tokens } = useTheme();
 
@@ -365,6 +371,35 @@ export function Sidebar({
         <PulseMark size={28} />
         {!compact && <span style={{ fontFamily: tokens.fonts.display, fontWeight: 500, fontSize: '20px', letterSpacing: '-0.01em', color: tokens.colors.text }}>Pulse</span>}
       </div>
+
+      {/* Ask a lead: the command box */}
+      {onCommand && (
+        <button
+          onClick={onCommand}
+          title="Ask a lead (⌘K)"
+          aria-label="Ask a lead"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: compact ? 'center' : 'flex-start',
+            gap: '10px',
+            padding: compact ? '9px 0' : '9px 12px',
+            marginBottom: '16px',
+            border: `1px solid ${tokens.colors.border}`,
+            borderRadius: tokens.radius.sm,
+            background: tokens.colors.bgCard,
+            color: tokens.colors.textMuted,
+            fontFamily: 'inherit',
+            fontSize: '14px',
+            cursor: 'pointer',
+            width: '100%',
+          }}
+        >
+          <Icon name="command" size={14} color={tokens.colors.textDim} />
+          {!compact && <span style={{ flex: 1, textAlign: 'left' }}>Ask a lead…</span>}
+          {!compact && <span style={{ fontSize: '11px', color: tokens.colors.textDim }}>⌘K</span>}
+        </button>
+      )}
 
       {/* Main Nav */}
       <nav style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>

@@ -1,3 +1,7 @@
+mod command;
+mod pty;
+mod ops;
+
 use chrono::{Datelike, Timelike};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -2480,7 +2484,8 @@ fn pid_alive(_pid: i64) -> bool {
 // A run that says it is working but whose process is gone stopped unexpectedly.
 fn live_state(run: &serde_json::Value, now: chrono::DateTime<chrono::FixedOffset>, alive: impl Fn(i64) -> bool) -> String {
     let state = run.get("state").and_then(|s| s.as_str()).unwrap_or("running").to_string();
-    if state != "running" && state != "idle" {
+    // A queued chat message waits in its worker (ask.py), so it is checked like a running one.
+    if state != "running" && state != "idle" && state != "queued" {
         return state;
     }
     let pid = run.get("pid").and_then(|p| p.as_i64()).unwrap_or(0);
@@ -3577,6 +3582,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .manage(pty::Ptys::default())
         .setup(|app| {
             let menu = tray_menu(app.handle(), &[])?;
 
@@ -3637,12 +3643,31 @@ pub fn run() {
             read_live,
             read_transcript,
             list_transcripts,
-            setup_check
+            setup_check,
+            command::ask_lead,
+            command::stop_run,
+            command::open_in_terminal,
+            command::list_org_agents,
+            pty::pty_open,
+            pty::pty_write,
+            pty::pty_resize,
+            pty::pty_close,
+            ops::read_outbox,
+            ops::outbox_edit,
+            ops::outbox_skip,
+            ops::outbox_send,
+            ops::read_goals,
+            ops::save_goal,
+            ops::read_connections,
+            ops::check_connections
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
     app.run(|app, event| {
+        if let tauri::RunEvent::Exit = event {
+            pty::close_all(&app.state::<pty::Ptys>());
+        }
         // Clicking the Dock icon brings the hidden window back.
         #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Reopen { .. } = event {
@@ -4009,6 +4034,8 @@ mod live_tests {
         assert_eq!(live_state(&run("running", "act", "2026-10-28T11:50:00-04:00"), now, dead), "stopped");
         assert_eq!(live_state(&run("idle", "interactive", "2026-10-28T11:50:00-04:00"), now, dead), "stopped");
         assert_eq!(live_state(&run("finished", "act", "2026-10-28T11:50:00-04:00"), now, dead), "finished");
+        assert_eq!(live_state(&run("queued", "chat", "2026-10-28T11:50:00-04:00"), now, alive), "queued");
+        assert_eq!(live_state(&run("queued", "chat", "2026-10-28T11:50:00-04:00"), now, dead), "stopped");
         // A headless run older than any timeout is stopped even if its pid was reused…
         assert_eq!(live_state(&run("running", "nightly", "2026-10-28T06:00:00-04:00"), now, alive), "stopped");
         // …but an interactive session may stay open all day.

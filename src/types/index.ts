@@ -740,11 +740,12 @@ export interface ActivitySnapshot {
 // ==========================================
 
 // `stopped` is Pulse's word for a run that says it is working but whose process is gone.
-export type LiveState = 'running' | 'idle' | 'finished' | 'failed' | 'stopped';
+// `queued` is a chat message waiting for the lead's current reply to end (ask.py).
+export type LiveState = 'running' | 'idle' | 'queued' | 'finished' | 'failed' | 'stopped';
 
 export interface LiveRun {
   run_id: string;
-  kind: string; // nightly | weekly | act | check | interactive
+  kind: string; // nightly | weekly | act | check | interactive | chat
   entity: string | null; // null = the whole org (chief of staff, a manager)
   agent: string;
   doing: string;
@@ -765,6 +766,8 @@ export interface LiveRun {
   last?: string; // interactive: the agent's last message
   team?: TeamMember[]; // subagents this run deployed
   deployments?: number;
+  session_id?: string; // chat: the Claude session this run continues or started
+  child_pid?: number;
 }
 
 // A subagent a lead deployed. Agents deployed within a few seconds share a batch.
