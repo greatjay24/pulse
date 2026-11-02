@@ -9,6 +9,8 @@ import {
   PortfolioRegistry,
   PortfolioSnapshot,
   ProjectFinance,
+  Todo,
+  TodosSnapshot,
   TrackerSnapshot,
   Transcript,
   TranscriptLine,
@@ -452,6 +454,21 @@ function tracker(): TrackerSnapshot {
 
 // The read commands Pulse calls, answered from the bundle. Anything else is refused: the demo
 // can look but never act.
+// The demo's to-do list: its tracker's own tasks, plus one already closed by its rule.
+function demoTodos(): TodosSnapshot {
+  const open: Todo[] = tracker()
+    .tasks.filter((t) => t.source === 'manual')
+    .map((t) => ({
+      title: t.title, detail: t.detail, project: t.project, urgency: t.urgency, url: t.url, kind: null,
+      show_from: t.show_from, done: false, added: dayOffset(-2), done_at: null, done_evidence: null, done_when: null,
+    }));
+  const closed: Todo = {
+    title: 'Merge the menu price fix', detail: null, project: 'acme', urgency: 'soon', url: null, kind: null, show_from: null,
+    done: true, added: dayOffset(-3), done_at: `${dayOffset(-1)}T16:20`, done_evidence: 'PR acme/site#42 merged', done_when: { pr_merged: 'acme/site#42' },
+  };
+  return { installed: true, error: null, todos: [...open, closed], skipped: 0, read_at: new Date().toISOString() };
+}
+
 export function demoRead(cmd: string, args?: Record<string, unknown>): unknown {
   switch (cmd) {
     case 'read_portfolio':
@@ -470,6 +487,8 @@ export function demoRead(cmd: string, args?: Record<string, unknown>): unknown {
       if (!lines) throw new Error('missing');
       return { run_id: id, lines, truncated: false } satisfies Transcript;
     }
+    case 'read_todos':
+      return demoTodos();
     case 'read_outbox':
       return demoOutbox();
     case 'read_goals':

@@ -950,3 +950,43 @@ export interface TrackerSnapshot {
   notes: Record<string, TrackerNote>;
   read_at: string;
 }
+
+// ==========================================
+// Tasks (~/project-tracker/todos.json): the owner's own list, read by `read_todos` and
+// changed only through `write_todo` (add_todo.py --stdin)
+// ==========================================
+
+export interface Todo {
+  title: string; // the key: same title = same task
+  detail: string | null;
+  project: string | null;
+  urgency: Urgency | null;
+  url: string | null;
+  kind: string | null;
+  show_from: string | null; // YYYY-MM-DD: hidden until then
+  done: boolean;
+  added: string | null;
+  done_at: string | null;
+  done_evidence: string | null;
+  done_when: Record<string, string | number> | null; // closes itself when this is true
+}
+
+export interface TodosSnapshot {
+  installed: boolean;
+  error: string | null;
+  todos: Todo[];
+  skipped: number;
+  read_at: string;
+}
+
+// One change from the Tasks view. done / reopen are one-way switches.
+export interface TodoChange {
+  title: string;
+  detail?: string;
+  project?: string;
+  urgency?: Urgency;
+  url?: string;
+  show_from?: string;
+  done?: true;
+  reopen?: true;
+}
