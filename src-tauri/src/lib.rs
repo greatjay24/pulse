@@ -3,6 +3,7 @@ mod jarvis;
 mod pty;
 mod ops;
 mod usage;
+mod todos;
 
 use chrono::{Datelike, Timelike};
 use serde::{Deserialize, Serialize};
@@ -2917,6 +2918,11 @@ fn read_tracker() -> Result<String, String> {
     if let Some(doc) = tasks {
         snapshot.tasks = tracker_tasks(&doc);
         snapshot.tasks_updated_at = doc.get("updated_at").and_then(|v| v.as_f64());
+        // The owner's own tasks as they are in todos.json right now (edits in Tasks show at once).
+        if let Ok((todos, _)) = todos::read_todos_at(&root) {
+            let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+            todos::overlay_manual(&mut snapshot.tasks, &todos::known_manual(&doc), &todos, &today, now);
+        }
     }
     snapshot.email = email.as_ref().map(tracker_email);
     if let Some(doc) = scan {
@@ -3682,6 +3688,8 @@ pub fn run() {
             read_portfolio,
             set_tv_fullscreen,
             read_tracker,
+            todos::read_todos,
+            todos::write_todo,
             set_tray_status,
             act_on_decision,
             read_activity,

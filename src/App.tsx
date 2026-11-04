@@ -33,6 +33,7 @@ import { ActivityPage } from './components/ActivityPage';
 import { ConversationFocus, ConversationsPage } from './components/ConversationsPage';
 import { OutboxPage } from './components/OutboxPage';
 import { GoalsPage } from './components/GoalsPage';
+import { TasksPage } from './components/TasksPage';
 import { ConnectionsPage } from './components/ConnectionsPage';
 import { UsagePage } from './components/UsagePage';
 import { useLive } from './hooks/useLive';
@@ -1004,6 +1005,7 @@ function DashboardContent() {
         {/* Operations: the Outbox (one-click send), goals per business, connected systems */}
         {page === 'outbox' && !selectedEntity && <OutboxPage snapshot={portfolio.snapshot} />}
         {page === 'goals' && !selectedEntity && <GoalsPage snapshot={portfolio.snapshot} />}
+        {page === 'tasks' && !selectedEntity && <TasksPage tracker={portfolio.tracker} onChanged={portfolio.refresh} />}
         {page === 'connections' && !selectedEntity && <ConnectionsPage snapshot={portfolio.snapshot} />}
         {page === 'usage' && !selectedEntity && <UsagePage snapshot={portfolio.snapshot} onOpenConversation={openConversation} />}
 

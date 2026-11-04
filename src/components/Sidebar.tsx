@@ -24,6 +24,7 @@ interface SidebarProps {
 const MAIN_NAV: { id: string; label: string; icon: string }[] = [
   { id: 'today', label: 'Today', icon: 'today' },
   { id: 'board', label: 'Board', icon: 'board' },
+  { id: 'tasks', label: 'Tasks', icon: 'list' }, // the owner's to-do list (~/project-tracker/todos.json)
   { id: 'activity', label: 'Activity', icon: 'activity' }, // decision outcomes, agent runs, cost
   { id: 'conversations', label: 'Conversations', icon: 'chat' }, // what the owner and the leads said, run by run
   { id: 'money', label: 'Money', icon: 'wallet' },
@@ -404,7 +405,7 @@ export function Sidebar({
 
       {/* Main Nav */}
       <nav style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-        {MAIN_NAV.filter((item) => !(hideMoney && item.id === 'money')).map((item) => (
+        {MAIN_NAV.filter((item) => !(hideMoney && (item.id === 'money' || item.id === 'tasks'))).map((item) => (
           <NavButton
             key={item.id}
             icon={item.icon}
