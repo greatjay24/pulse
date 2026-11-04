@@ -1,6 +1,6 @@
-# Getting started with Pulse
+# Getting started with Roo
 
-Pulse is a desktop dashboard for people who run more than one business. Each business
+Roo is a desktop dashboard for people who run more than one business. Each business
 gets an AI **lead**: an agent that works every night, handles what it can, and writes a
 short report. Your agents can run on **ChatGPT** (through OpenAI's Codex), **Claude** (through
 Claude Code), or almost any other model (through opencode), and you can switch later. You see the reports, the decisions waiting on you, and what your
@@ -19,15 +19,15 @@ agents are doing right now, all in one window.
 - **python3**. Most Macs have it. If Terminal says it's missing, run `xcode-select --install`.
 - Optional: **GitHub's `gh` tool**, if you want your leads to open pull requests for you.
 
-## 1. Install Pulse
+## 1. Install Roo
 
 1. Download the latest `.dmg` from the [Releases](https://github.com/greatjay24/pulse/releases) page.
-2. Open it and drag Pulse into Applications.
-3. The app isn't signed by Apple yet, so the first time, **right-click Pulse and choose Open**,
+2. Open it and drag Roo into Applications.
+3. The app isn't signed by Apple yet, so the first time, **right-click Roo and choose Open**,
    then click Open again. On macOS 15 or later, if it only offers "Done", open System Settings
    → Privacy & Security, scroll down and click **Open Anyway**. After that it opens normally.
 
-Pulse opens on a welcome screen. It checks for Codex, Claude Code or opencode, and python3, and
+Roo opens on a welcome screen. It checks for Codex, Claude Code or opencode, and python3, and
 shows the setup command. Click **Try the demo** to look around a made-up org first. Nothing in the demo is
 real, and its buttons don't do anything.
 
@@ -46,7 +46,7 @@ installed, and checks that you're signed in. It shows you the plan before it wri
 anything. Then it:
 
 - creates `~/portfolio`, your org: one folder per business with a `BRIEF.md` (for you) and a
-  `status.json` (for Pulse), plus the rules every agent follows (`OPERATING.md`);
+  `status.json` (for Roo), plus the rules every agent follows (`OPERATING.md`);
 - writes your agents to `~/portfolio/agents`: a lead per business (`<id>-lead`), a chief of
   staff, and five shared managers (sales, marketing, delivery, finance, admin). They're plain
   instructions that work with any of the three; setup also puts a copy where your AI looks
@@ -56,10 +56,10 @@ anything. Then it:
 At the end it prints two things it does **not** do for you. Do them when you're ready:
 
 - **Turn on the night shift:** `sh ~/portfolio/launchd/install.sh`
-- **Show your own chat sessions in Pulse** (Claude Code only): paste the hooks snippet it
+- **Show your own chat sessions in Roo** (Claude Code only): paste the hooks snippet it
   prints into `~/.claude/settings.json`.
 
-Click **I ran it, check again** in Pulse, and your board appears.
+Click **I ran it, check again** in Roo, and your board appears.
 
 ## What happens every night
 
@@ -87,9 +87,9 @@ you're signed in. One business can use a different AI from the rest: add
 What differs:
 
 - **Teams.** Claude Code and opencode leads can hand work to the managers in parallel.
-  Codex leads work solo: they do the same jobs themselves, one after another, and Pulse shows
+  Codex leads work solo: they do the same jobs themselves, one after another, and Roo shows
   "worked solo".
-- **Cost.** Pulse shows dollars when the AI reports them (Claude Code, opencode) and token
+- **Cost.** Roo shows dollars when the AI reports them (Claude Code, opencode) and token
   counts when it only reports tokens (Codex). It never estimates.
 - **Guardrails.** All three get the same rules: no sending, no paying, no force-pushes,
   merges or production deploys. For Codex, setup can also install those rules into Codex's
@@ -128,7 +128,7 @@ Everything else, the lead handles and lists under "done". Agents never send emai
 messages, never pay for anything, never merge to main or deploy to production, and never
 delete data. Email goes to your Drafts folder.
 
-## Using Pulse
+## Using Roo
 
 - **Today** opens first: one line (moves, decisions, cash), last night's shift, the
   decisions waiting on you, and each business, worst health first.

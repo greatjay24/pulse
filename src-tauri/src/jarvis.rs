@@ -115,7 +115,7 @@ pub(crate) async fn list_voices() -> Result<Vec<VoiceInfo>, String> {
     Ok(parse_voices(&String::from_utf8_lossy(&out.stdout)))
 }
 
-// The helper sits next to Pulse's own binary in the bundle; in development, where the build
+// The helper sits next to Roo's own binary in the bundle; in development, where the build
 // script leaves it.
 fn listen_helper() -> Result<PathBuf, String> {
     let bundled = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("pulse-listen")));
@@ -194,7 +194,7 @@ pub(crate) fn show_listen_panel(app: &AppHandle) {
         return;
     }
     let built = WebviewWindowBuilder::new(app, LISTEN_WINDOW, WebviewUrl::App("index.html#listen".into()))
-        .title("Pulse")
+        .title("Roo")
         .inner_size(560.0, 210.0)
         .resizable(false)
         .decorations(false)
@@ -221,7 +221,7 @@ pub(crate) fn hide_listen_panel(app: AppHandle, state: tauri::State<'_, Voice>) 
     }
 }
 
-// The listening panel's "Open in Pulse": the main window, on that run.
+// The listening panel's "Open in Roo": the main window, on that run.
 #[tauri::command]
 pub(crate) fn open_run_in_main(app: AppHandle, run_id: String) -> Result<(), String> {
     if !super::is_run_id(&run_id) {

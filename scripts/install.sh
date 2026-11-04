@@ -2,7 +2,7 @@
 
 set -e
 
-echo "Building Pulse..."
+echo "Building Roo..."
 cd "$(dirname "$0")/.."
 
 # Source cargo environment
@@ -19,7 +19,7 @@ if [ ! -d "$APP_PATH" ]; then
     exit 1
 fi
 
-echo "Installing Pulse to /Applications..."
+echo "Installing Roo to /Applications..."
 rm -rf /Applications/Pulse.app
 cp -R "$APP_PATH" /Applications/
 
@@ -28,9 +28,9 @@ launchctl unload ~/Library/LaunchAgents/com.pulse.desktop.plist 2>/dev/null || t
 launchctl load ~/Library/LaunchAgents/com.pulse.desktop.plist
 
 echo ""
-echo "Pulse installed successfully!"
+echo "Roo installed successfully!"
 echo "- App location: /Applications/Pulse.app"
 echo "- Will auto-start on login"
 echo ""
-echo "To start Pulse now, run:"
+echo "To start Roo now, run:"
 echo "  open /Applications/Pulse.app"

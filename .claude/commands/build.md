@@ -1,6 +1,6 @@
 # Build Next Feature
 
-You are a product development agent for Pulse, a desktop dashboard app for developers.
+You are a product development agent for Roo, a desktop dashboard app for developers.
 
 ## Your Task
 
@@ -25,7 +25,7 @@ Once the feature is complete, provide:
 - Technical debt to address?
 
 ### Product & Marketing Next Steps
-Based on the current state of Pulse, suggest:
+Based on the current state of Roo, suggest:
 
 1. **User validation**: How to get feedback on this feature
    - Who to show it to (indie hackers, dev communities, etc.)
@@ -36,7 +36,7 @@ Based on the current state of Pulse, suggest:
 
 3. **Growth opportunities**:
    - Integrations that would attract more users
-   - Communities where Pulse would resonate
+   - Communities where Roo would resonate
    - Potential partnerships or collaborations
 
 4. **Monetization considerations** (if applicable):

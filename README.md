@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="src-tauri/icons/icon.png" width="128" height="128" alt="Pulse Logo">
+  <img src="src-tauri/icons/icon.png" width="128" height="128" alt="Roo Logo">
 </p>
 
-<h1 align="center">Pulse</h1>
+<h1 align="center">Roo</h1>
 
 <p align="center">
   <strong>A beautiful desktop dashboard for tracking your SaaS metrics</strong>
@@ -34,9 +34,9 @@ engineering needed). In short:
 
 1. Install one agent CLI and sign in: Codex (with a ChatGPT plan), Claude Code, or opencode
    (any provider). Make sure `python3` works.
-2. Download Pulse from [Releases](https://github.com/greatjay24/pulse/releases) and open it
+2. Download Roo from [Releases](https://github.com/greatjay24/pulse/releases) and open it
    (right-click → Open the first time; the build isn't signed yet).
-3. Pulse opens on a welcome screen with the setup command, or **Try the demo** to click
+3. Roo opens on a welcome screen with the setup command, or **Try the demo** to click
    through a fictional org (Acme Studio, Northwind Supply, Globex Rentals) first. The demo is
    bundled in the app, read-only, and its action buttons only show a message.
 4. Run setup: `git clone https://github.com/greatjay24/pulse.git ~/pulse && python3 ~/pulse/kit/setup.py`.
@@ -45,7 +45,7 @@ engineering needed). In short:
 
 ## Today, Board, Money
 
-The sidebar is Today, Board, Money and Settings, in that order of importance. Pulse opens
+The sidebar is Today, Board, Money and Settings, in that order of importance. Roo opens
 on **Today**: one headline line (`Today: N moves · N decisions need you · $X in this month`),
 then the decision queue (every report decision, riskiest business first), then each
 business with its health, `health_why` and what is due today. *Moves* are the chief of
@@ -85,7 +85,7 @@ and calendar fetching are unchanged.
 ### Tracker (optional)
 
 The board can also read a project tracker (`~/project-tracker`) through a second
-read-only command, `read_tracker`. The tracker is optional: without it, Pulse hides the
+read-only command, `read_tracker`. The tracker is optional: without it, Roo hides the
 Money page, the entity Finance and Tasks tabs and the inbox rows, with no errors.
 It can open only a fixed list of files:
 `data/tasks.json`, `email.json`, `scan.json`, `stripe.json`, `bank.json`,
@@ -123,11 +123,11 @@ brief: the same payment seen as a Stripe charge, its payout and the bank deposit
 
 ### Ask, chat and terminal
 
-Pulse is also where you tell the org what to do.
+Roo is also where you tell the org what to do.
 
 - **Command box** (⌘K, or "Ask a lead…" at the top of the sidebar): type anything. A
   leading name routes it (`Acme: draft the pricing page`), as does `@acme`; everything else
-  goes to Pulse, the front door (below), or to the chief of staff in an org without one. The To menu
+  goes to Roo, the front door (below), or to the chief of staff in an org without one. The To menu
   overrides the route. Enter sends, Shift+Enter adds a line, Esc closes. It shows your
   recent commands and a few starting points. Sending starts the lead at once: it shows in
   Working now and its conversation opens live.
@@ -139,36 +139,36 @@ Pulse is also where you tell the org what to do.
 - **Terminal**: real `claude --agent <lead>` (or plain `claude`) sessions in tabs, started
   in your home folder through your login shell, so your environment and sign-in are the
   usual ones. Up to eight tabs; closing one ends its session. "Open in Terminal.app" opens
-  the same thing outside Pulse.
+  the same thing outside Roo.
 
-How it runs: Pulse calls `~/portfolio/bin/ask.py <entity|lead> --message "..."`
+How it runs: Roo calls `~/portfolio/bin/ask.py <entity|lead> --message "..."`
 (`--new`, `--session <id>`, `--stop <run_id>`), the same way decisions call `act.py`.
 The script validates against `portfolio.json`, starts `claude -p --agent <lead>` in the
 background with the night shift's allow and deny lists, and writes the run's live file and
 transcript (kind `chat`) like any other run. Runs use the `claude` CLI's own sign-in (your
 Claude subscription): `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and the variables that
-switch provider are removed from the child's environment, and Pulse makes no API calls of
+switch provider are removed from the child's environment, and Roo makes no API calls of
 its own. A lead's `model` in `portfolio.json` is used when set, else the CLI's default.
 Chat needs a Claude Code org with `ask.py` in its `bin/`; the starter kit doesn't ship it
-yet, and Pulse says so when it's missing.
+yet, and Roo says so when it's missing.
 
-### Pulse, the front door, and voice
+### Roo, the front door, and voice
 
 An org can name one front door in `portfolio.json` (`"front_door": {"lead": "pulse", "model": "sonnet"}`):
-an agent you talk to instead of picking a lead. Its thread, **Pulse**, is pinned first in
+an agent you talk to instead of picking a lead. Its thread, **Roo**, is pinned first in
 Conversations and is ⌘K's default. It answers what it can from the files, or hands the work
 to one lead or several in parallel (`bin/pulse.py delegate`). Those runs nest under the
 message that started them, like a team, and when the last one finishes their reports come
-back to Pulse, which sums them up in the same thread. It also keeps follow-ups
+back to Roo, which sums them up in the same thread. It also keeps follow-ups
 (`followups.jsonl`) and writes the morning brief and the end-of-day recap ("Brief me").
 
 - **Talk**: a global hotkey (default ⌥⇧Space; ⌥Space is left to ChatGPT and Claude) opens a
   small listening panel from anywhere. Speech becomes text on the Mac (the Speech framework
   with on-device recognition, through the bundled `pulse-listen` helper), shown live. A
-  pause or Enter sends it to Pulse, Esc drops it, and the text stays editable, so dictation
+  pause or Enter sends it to Roo, Esc drops it, and the text stays editable, so dictation
   tools work there too. "Brief me" or "end of day recap" asks for a briefing.
-- **Replies aloud**: Pulse's replies are read with macOS's own voices (`say`): the first
-  line by default (Pulse writes its one-sentence answer there), or the whole reply, or off.
+- **Replies aloud**: Roo's replies are read with macOS's own voices (`say`): the first
+  line by default (Roo writes its one-sentence answer there), or the whole reply, or off.
   Voice, rate and the hotkey are in Settings › General. Any message has "Read aloud".
 - First use asks for the microphone and speech recognition. On-device speech needs the
   language's Dictation model (turn on Dictation in System Settings › Keyboard once).
@@ -176,8 +176,8 @@ back to Pulse, which sums them up in the same thread. It also keeps follow-ups
 
 ### Mac app
 
-- **Menu bar**: a Pulse mark with the count of decisions waiting on you. Its menu: Open
-  Pulse, Today, Quit. Closing the window keeps Pulse in the menu bar; Quit (or Cmd+Q) exits.
+- **Menu bar**: a Roo mark with the count of decisions waiting on you. Its menu: Open
+  Roo, Today, Quit. Closing the window keeps Roo in the menu bar; Quit (or Cmd+Q) exits.
 - **Notifications**: a native alert when a new urgent item appears (a "Decide:" item
   marked now, or a business turning red). Alerts arriving together are batched, each item
   is announced once, and the first read after launch only records what is already there.
@@ -259,12 +259,29 @@ pulse/
 
 ### Adding Your API Keys
 
-1. Open Pulse and go to **Settings**
+1. Open Roo and go to **Settings**
 2. Select your project
 3. Click on the integration you want to configure
 4. Enter your API key
 
 All credentials are stored securely in your local app data directory.
+
+## Naming: Roo, formerly Pulse
+
+The app and its assistant are called **Roo**. Everything a person reads says Roo: the window,
+the menu bar, the app menu, notifications, the assistant's thread and its replies.
+
+Internal identifiers keep the old name so existing installs, data and scripts keep working:
+
+| Stays `pulse` | Why |
+| --- | --- |
+| Bundle id `com.pulse.app` | App data, the settings store, macOS privacy grants (microphone, speech) and notifications are keyed to it. |
+| Bundle `Pulse.app` (`productName`) and binary `pulse` | Install paths and launchd jobs open `/Applications/Pulse.app`. Its display name (`CFBundleName`, in `src-tauri/Info.plist`) is Roo. |
+| Repo `pulse`, Cargo/npm package `pulse` | Release URLs, clones and CI. |
+| Keychain item `pulse-outbox-send` | The one-click send key; renaming it would orphan the existing key. |
+| launchd labels `com.pulse.*`, helper `pulse-listen` | Already installed on machines; the autolaunch job now opens the app by bundle id. |
+| Agent id / `ask.py` target `pulse`, thread id `front-door` | Existing runs, logs and dispatch use them. "Roo: ..." also routes to the front door. |
+| `PULSE_PORTFOLIO_DIR`, `PULSE_TRACKER_DIR` | Debug env vars in existing scripts. |
 
 ## License
 
@@ -272,8 +289,8 @@ MIT
 
 ## First run and demo mode
 
-When `~/portfolio/portfolio.json` doesn't exist, Pulse shows a welcome screen instead of an
-empty board: what Pulse is, a check for an agent CLI (Claude Code, Codex or opencode) and
+When `~/portfolio/portfolio.json` doesn't exist, Roo shows a welcome screen instead of an
+empty board: what Roo is, a check for an agent CLI (Claude Code, Codex or opencode) and
 python3 (`setup_check`, existence checks at fixed paths only), the setup command with a copy button, and **Try the demo**.
 
 Demo mode serves a fictional org bundled in the frontend (`src/demo/demoOrg.ts`): status
@@ -283,5 +300,5 @@ unchanged, the menu bar and notifications stay off, and Approve/Reject/Discuss o
 message. **Exit demo** (bottom right) returns to the real org. A browser preview of the
 frontend (`npm run dev`) shows the welcome screen; `?demo=1` opens the demo.
 
-Debug builds only: `PULSE_PORTFOLIO_DIR` and `PULSE_TRACKER_DIR` point Pulse at scratch
+Debug builds only: `PULSE_PORTFOLIO_DIR` and `PULSE_TRACKER_DIR` point Roo at scratch
 folders, so first run can be tried without touching `~/portfolio`. Release builds ignore them.

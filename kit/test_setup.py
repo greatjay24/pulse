@@ -223,7 +223,7 @@ class SetupE2E(unittest.TestCase):
     def test_other_org_dir_warns(self):
         r = run(self.home, "--config", str(self.config()), "--org-dir", str(self.home / "elsewhere"), "--yes")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("Pulse reads ~/portfolio only", r.stdout)
+        self.assertIn("Roo reads ~/portfolio only", r.stdout)
         self.assertTrue((self.home / "elsewhere/portfolio.json").is_file())
         self.assertIn(str(self.home / "elsewhere"), (self.agents / "acme-lead.md").read_text())
 

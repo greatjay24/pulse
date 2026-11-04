@@ -240,7 +240,7 @@ const transcripts: Record<string, TranscriptLine[]> = {
     { t: 'result', at: iso(SHIFT_AGO - 4 * MIN), ok: true, result: 'Health red (tenant waiting 9 days). Queued one decision: take the middle roof quote. Insurance renewal flagged for 6 weeks out.', cost_usd: 0.52, secs: 241, turns: 11, models: ['claude-sonnet'], agents: 1 },
   ],
   [RUN_ACT]: [
-    { t: 'start', at: iso(DAY), run_id: RUN_ACT, kind: 'act', entity: 'acme', agent: 'acme-lead', doing: 'Approve: Offer Bluebird Bakery a monthly retainer?', prompt: 'DECISION run for Acme Studio. The owner just answered decision acme-retainer-offer in Pulse: APPROVE.' },
+    { t: 'start', at: iso(DAY), run_id: RUN_ACT, kind: 'act', entity: 'acme', agent: 'acme-lead', doing: 'Approve: Offer Bluebird Bakery a monthly retainer?', prompt: 'DECISION run for Acme Studio. The owner just answered decision acme-retainer-offer in Roo: APPROVE.' },
     { t: 'tool', at: iso(DAY - 20_000), name: 'Read', summary: 'Reading companies/acme/status.json' },
     { t: 'text', at: iso(DAY - 40_000), text: 'Approved. I’ll draft the retainer offer to Bluebird in the owner’s voice and leave it in Drafts. The owner sends it.' },
     { t: 'tool', at: iso(DAY - 90_000), name: 'mcp__email__create_draft', summary: 'Drafting an email' },
@@ -450,7 +450,7 @@ function tracker(): TrackerSnapshot {
   };
 }
 
-// The read commands Pulse calls, answered from the bundle. Anything else is refused: the demo
+// The read commands Roo calls, answered from the bundle. Anything else is refused: the demo
 // can look but never act.
 export function demoRead(cmd: string, args?: Record<string, unknown>): unknown {
   switch (cmd) {

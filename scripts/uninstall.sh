@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "Uninstalling Pulse..."
+echo "Uninstalling Roo..."
 
 # Unload Launch Agent
 launchctl unload ~/Library/LaunchAgents/com.pulse.desktop.plist 2>/dev/null || true
@@ -12,5 +12,5 @@ rm -rf /Applications/Pulse.app
 # Optionally remove settings (commented out by default)
 # rm -rf ~/.pulse
 
-echo "Pulse uninstalled."
+echo "Roo uninstalled."
 echo "Note: Settings preserved at ~/.pulse (delete manually if needed)"

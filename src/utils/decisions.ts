@@ -108,7 +108,7 @@ export function needsConfirm(d: EntityDecision): boolean {
 // A status.json decision and its "Decide: …" tracker task are the same item. The decision
 // (with its buttons) wins; the task is hidden when it belongs to the same entity and its
 // title, minus "Decide:", matches the ask exactly or by word overlap. Same rule as act.py's
-// tracker_match, so the task Pulse hides is the one an approval closes.
+// tracker_match, so the task Roo hides is the one an approval closes.
 const DECIDE_STOP = new Set(['decide', 'the', 'a', 'an', 'and', 'or', 'to', 'of', 'for', 'on', 'in', 'your', 'with', 'then', 'what', 'goes', 'under']);
 const words = (s: string) => new Set((s.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((w) => w.length > 1 && !DECIDE_STOP.has(w)));
 const normalize = (s: string) => s.toLowerCase().replace(/^\s*decide\b\s*:?\s*/, '').replace(/[^a-z0-9]+/g, ' ').trim();

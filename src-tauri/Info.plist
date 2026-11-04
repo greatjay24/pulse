@@ -2,7 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>NSMicrophoneUsageDescription</key><string>Pulse listens only while its listening panel is open, so you can talk to your assistant instead of typing.</string>
-  <key>NSSpeechRecognitionUsageDescription</key><string>Pulse turns what you say into text on this Mac (on-device recognition) and sends that text to your assistant.</string>
+  <!-- The name people see (menu bar, Dock, About). The bundle stays Pulse.app with id com.pulse.app,
+       so install paths, launchd jobs and the Keychain item don't move. -->
+  <key>CFBundleName</key><string>Roo</string>
+  <key>CFBundleDisplayName</key><string>Roo</string>
+  <key>NSMicrophoneUsageDescription</key><string>Roo listens only while its listening panel is open, so you can talk to your assistant instead of typing.</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>Roo turns what you say into text on this Mac (on-device recognition) and sends that text to your assistant.</string>
 </dict>
 </plist>

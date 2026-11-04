@@ -4,7 +4,7 @@ import { LearnedPreference } from '../types/usage';
 import { setPreferenceDisabled, usePreferences } from '../hooks/useUsage';
 import { Notice } from './BoardUI';
 
-// What Pulse has learned: the preferences bin/learn.py drew from the owner's edits, skips,
+// What Roo has learned: the preferences bin/learn.py drew from the owner's edits, skips,
 // rejections and corrections. Every agent reads the enabled ones at session start
 // (~/portfolio/memory/preferences.md). Off keeps the line; nothing here deletes.
 
@@ -67,9 +67,9 @@ export function LearnedPreferences() {
   return (
     <div style={{ maxWidth: '760px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
       <div>
-        <div style={{ fontSize: '18px', fontWeight: 600, color: c.text }}>What Pulse has learned</div>
+        <div style={{ fontSize: '18px', fontWeight: 600, color: c.text }}>What Roo has learned</div>
         <div style={{ fontSize: tokens.type.small, color: c.textMuted, marginTop: '6px', lineHeight: 1.5 }}>
-          Every night Pulse reads what you edit before sending, what you skip or reject, and what you tell your leads, and
+          Every night Roo reads what you edit before sending, what you skip or reject, and what you tell your leads, and
           writes it down as preferences. Every agent follows the ones that are on. Turning one off keeps it on file.
         </div>
       </div>

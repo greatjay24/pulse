@@ -5,7 +5,7 @@ import { COS_TARGET, PULSE_TARGET, askLead, leadOf, recentCommands, rememberComm
 import { briefKindOf, briefMe, defaultBriefKind, openListenPanel } from '../utils/voice';
 import { Icon, StrokeIcon } from './Icons';
 
-// ⌘K: the owner types what they need. It goes to Pulse, the front door, which answers or hands
+// ⌘K: the owner types what they need. It goes to Roo, the front door, which answers or hands
 // it to the right leads; a "Name:" prefix or an @mention goes straight to that lead. A run
 // starts at once and its conversation opens live.
 export function CommandBox({
@@ -82,7 +82,7 @@ export function CommandBox({
     onClose();
   };
 
-  const routedBy = override ? 'chosen' : route.why === 'prefix' ? 'from the prefix' : route.why === 'mention' ? 'mentioned' : frontDoor ? 'Pulse picks who handles it' : 'cross-cutting or unclear';
+  const routedBy = override ? 'chosen' : route.why === 'prefix' ? 'from the prefix' : route.why === 'mention' ? 'mentioned' : frontDoor ? 'Roo picks who handles it' : 'cross-cutting or unclear';
 
   return (
     <div
@@ -119,7 +119,7 @@ export function CommandBox({
             ref={inputRef}
             value={text}
             rows={Math.min(6, Math.max(1, text.split('\n').length))}
-            placeholder={frontDoor ? 'Ask Pulse anything. It hands work to the right lead. “Acme: …” goes straight to that lead.' : 'Ask a lead anything. Start with a name to route it: “Acme: draft the pricing page”'}
+            placeholder={frontDoor ? 'Ask Roo anything. It hands work to the right lead. “Acme: …” goes straight to that lead.' : 'Ask a lead anything. Start with a name to route it: “Acme: draft the pricing page”'}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -133,7 +133,7 @@ export function CommandBox({
             <button
               onClick={talk}
               title="Talk instead (opens the listening panel)"
-              aria-label="Talk to Pulse"
+              aria-label="Talk to Roo"
               style={{ background: 'none', border: `1px solid ${c.border}`, borderRadius: tokens.radius.sm, padding: '4px 6px', cursor: 'pointer', display: 'flex' }}
             >
               <StrokeIcon name="mic" size={15} color={c.textMuted} />
@@ -149,7 +149,7 @@ export function CommandBox({
               onChange={(e) => setOverride(e.target.value)}
               style={{ background: c.bgCard, color: c.text, border: `1px solid ${c.border}`, borderRadius: tokens.radius.sm, padding: '4px 8px', fontFamily: 'inherit', fontSize: 'inherit' }}
             >
-              {frontDoor && <option value={PULSE_TARGET}>Pulse (picks the lead)</option>}
+              {frontDoor && <option value={PULSE_TARGET}>Roo (picks the lead)</option>}
               <option value={COS_TARGET}>Chief of staff ({chief ?? 'chief-of-staff'})</option>
               {leads.map((e) => (
                 <option key={e.id} value={e.id}>
@@ -194,7 +194,7 @@ export function CommandBox({
             ))}
             <ListLabel>Try</ListLabel>
             {frontDoor && (
-              <Choice onClick={brief} hint="Pulse">
+              <Choice onClick={brief} hint="Roo">
                 Brief me ({defaultBriefKind() === 'morning' ? 'morning brief' : 'end-of-day recap'})
               </Choice>
             )}

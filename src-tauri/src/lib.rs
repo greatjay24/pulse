@@ -1245,7 +1245,7 @@ async fn start_google_oauth() -> Result<String, String> {
             let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n\
                 <html><body style=\"font-family: system-ui; text-align: center; padding: 50px;\">\
                 <h1>Authorization Successful!</h1>\
-                <p>You can close this window and return to Pulse.</p>\
+                <p>You can close this window and return to Roo.</p>\
                 <script>window.close();</script>\
                 </body></html>";
 
@@ -1979,7 +1979,7 @@ fn read_portfolio_logo(root: &Path, rel: &str) -> Result<String, String> {
 struct PortfolioSnapshot {
     registry: Option<serde_json::Value>,
     registry_error: Option<String>,
-    // No ~/portfolio or no portfolio.json in it: the owner hasn't run setup yet, so Pulse
+    // No ~/portfolio or no portfolio.json in it: the owner hasn't run setup yet, so Roo
     // shows its welcome screen instead of an empty board.
     setup_needed: bool,
     entities: Vec<PortfolioEntityReport>,
@@ -2180,10 +2180,10 @@ fn set_tv_fullscreen(window: tauri::WebviewWindow, enabled: bool) -> Result<(), 
 }
 
 // ==========================================
-// Decisions: the owner's answers go to ~/portfolio/bin/act.py, the only thing Pulse runs
+// Decisions: the owner's answers go to ~/portfolio/bin/act.py, the only thing Roo runs
 // ==========================================
 // act.py validates again against portfolio.json and status.json, appends to the entity's
-// decisions.jsonl under a lock, and starts the lead in the background. Pulse never writes
+// decisions.jsonl under a lock, and starts the lead in the background. Roo never writes
 // ~/portfolio itself and has no other way to run a program.
 
 const ACT_ACTIONS: &[&str] = &["approve", "reject", "discuss"];
@@ -2446,7 +2446,7 @@ async fn read_activity() -> Result<String, String> {
 // Live runs and transcripts: who is working now, and what they said. Read-only.
 // ==========================================
 // ~/portfolio/bin/live.py writes logs/live/<run_id>.json while a run works and
-// logs/transcripts/<run_id>.jsonl as it goes (already redacted). Pulse only reads them.
+// logs/transcripts/<run_id>.jsonl as it goes (already redacted). Roo only reads them.
 
 const LIVE_MAX_FILES: usize = 200;
 const LIVE_MAX_FILE_BYTES: u64 = 64 * 1024;
@@ -2706,7 +2706,7 @@ fn read_tracker_json(root: &Path, name: &str) -> Result<serde_json::Value, Strin
     Ok(value)
 }
 
-// Each struct below names only the fields Pulse shows. serde drops everything else
+// Each struct below names only the fields Roo shows. serde drops everything else
 // (email snippets, task evidence, repo paths, payer names, account ids) before the webview sees it.
 
 #[derive(Deserialize, Serialize)]
@@ -2799,7 +2799,7 @@ struct TrackerNote {
 
 #[derive(Serialize)]
 struct TrackerSnapshot {
-    // The tracker is optional: false when ~/project-tracker doesn't exist, and Pulse hides
+    // The tracker is optional: false when ~/project-tracker doesn't exist, and Roo hides
     // everything that reads it (tasks, inbox, money) instead of showing an error.
     installed: bool,
     error: Option<String>,
@@ -2937,7 +2937,7 @@ fn read_tracker() -> Result<String, String> {
 }
 
 // ------------------------------------------
-// Money: a port of ~/project-tracker/money.py so Pulse shows the same totals as the brief.
+// Money: a port of ~/project-tracker/money.py so Roo shows the same totals as the brief.
 // The same dollars often arrive three ways (Stripe charge, its payout, the bank deposit), so
 // sightings are matched and only one is counted. Totals and per-project breakdowns (with
 // payer names, for the owner's own screen) leave this module; raw events and descriptions do not.
@@ -2994,8 +2994,8 @@ struct MoneySummary {
     finance: MoneyFinance,
 }
 
-// Breakdowns for Pulse's finance views, built from the same counted events as the totals,
-// so every breakdown adds up to the brief's numbers. Pulse sums tracker projects per entity.
+// Breakdowns for Roo's finance views, built from the same counted events as the totals,
+// so every breakdown adds up to the brief's numbers. Roo sums tracker projects per entity.
 #[derive(Serialize, Default)]
 struct MoneyFinance {
     coverage: Vec<MoneyCoverage>,
@@ -3474,8 +3474,8 @@ const LAUNCH_AGENT_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
     <key>ProgramArguments</key>
     <array>
         <string>open</string>
-        <string>-a</string>
-        <string>Pulse</string>
+        <string>-b</string>
+        <string>com.pulse.app</string>
     </array>
     <key>StartCalendarInterval</key>
     <dict>
@@ -3547,6 +3547,9 @@ fn set_auto_launch_enabled(enabled: bool) -> Result<(), String> {
 
 const TRAY_ID: &str = "pulse";
 
+// What the app calls itself wherever a person reads it.
+pub(crate) const APP_NAME: &str = "Roo";
+
 // The count beside the menu bar mark, then how many agents are working; nothing when both are zero.
 fn tray_title(count: u32, working: usize) -> Option<String> {
     let mut parts = Vec::new();
@@ -3561,9 +3564,9 @@ fn tray_title(count: u32, working: usize) -> Option<String> {
 
 fn tray_tooltip(count: u32, working: usize) -> String {
     let decisions = match count {
-        0 => "Pulse: no decisions waiting".to_string(),
-        1 => "Pulse: 1 decision needs you".to_string(),
-        n => format!("Pulse: {} decisions need you", n),
+        0 => "Roo: no decisions waiting".to_string(),
+        1 => "Roo: 1 decision needs you".to_string(),
+        n => format!("Roo: {} decisions need you", n),
     };
     match working {
         0 => decisions,
@@ -3592,11 +3595,11 @@ fn tray_menu(app: &AppHandle, working: &[TrayRun]) -> tauri::Result<Menu<tauri::
         }
         menu.append(&PredefinedMenuItem::separator(app)?)?;
     }
-    menu.append(&MenuItem::with_id(app, "open", "Open Pulse", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(app, "open", "Open Roo", true, None::<&str>)?)?;
     menu.append(&MenuItem::with_id(app, "today", "Today", true, None::<&str>)?)?;
     menu.append(&MenuItem::with_id(app, "conversations", "Conversations", true, None::<&str>)?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-    menu.append(&MenuItem::with_id(app, "quit", "Quit Pulse", true, Some("CmdOrCtrl+Q"))?)?;
+    menu.append(&MenuItem::with_id(app, "quit", "Quit Roo", true, Some("CmdOrCtrl+Q"))?)?;
     Ok(menu)
 }
 
@@ -3621,6 +3624,11 @@ fn show_main_window(app: &AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // The app is called Roo; its bundle, id and binary stay `pulse` (tauri.conf.json productName),
+    // so installs, launchd jobs and the Keychain item keep working. The name here is the one the
+    // default app menu shows (About, Hide, Quit).
+    let mut context = tauri::generate_context!();
+    context.package_info_mut().name = APP_NAME.to_string();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
@@ -3657,7 +3665,7 @@ pub fn run() {
 
             Ok(())
         })
-        // Closing the window keeps Pulse in the menu bar; Quit (menu or Cmd+Q) exits.
+        // Closing the window keeps Roo in the menu bar; Quit (menu or Cmd+Q) exits.
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
@@ -3721,7 +3729,7 @@ pub fn run() {
             usage::read_preferences,
             usage::set_preference_disabled
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application");
 
     app.run(|app, event| {
@@ -3747,17 +3755,17 @@ mod tray_tests {
     fn titles_and_tooltips_count_decisions() {
         assert_eq!(tray_title(0, 0), None);
         assert_eq!(tray_title(7, 0).as_deref(), Some("7"));
-        assert_eq!(tray_tooltip(0, 0), "Pulse: no decisions waiting");
-        assert_eq!(tray_tooltip(1, 0), "Pulse: 1 decision needs you");
-        assert_eq!(tray_tooltip(22, 0), "Pulse: 22 decisions need you");
+        assert_eq!(tray_tooltip(0, 0), "Roo: no decisions waiting");
+        assert_eq!(tray_tooltip(1, 0), "Roo: 1 decision needs you");
+        assert_eq!(tray_tooltip(22, 0), "Roo: 22 decisions need you");
     }
 
     #[test]
     fn titles_and_tooltips_show_working_agents() {
         assert_eq!(tray_title(0, 2).as_deref(), Some("● 2"));
         assert_eq!(tray_title(3, 1).as_deref(), Some("3  ● 1"));
-        assert_eq!(tray_tooltip(3, 1), "Pulse: 3 decisions need you · 1 agent working");
-        assert_eq!(tray_tooltip(0, 2), "Pulse: no decisions waiting · 2 agents working");
+        assert_eq!(tray_tooltip(3, 1), "Roo: 3 decisions need you · 1 agent working");
+        assert_eq!(tray_tooltip(0, 2), "Roo: no decisions waiting · 2 agents working");
     }
 }
 
@@ -3781,7 +3789,7 @@ mod decision_tests {
             act_args("acme", "acme-offer", "approve", None).unwrap(),
             vec!["acme", "acme-offer", "approve"]
         );
-        assert!(act_args("acme", "x", "done", None).is_err()); // leads' actions are not Pulse's
+        assert!(act_args("acme", "x", "done", None).is_err()); // leads' actions are not Roo's
         assert!(act_args("acme", "x", "reply", None).is_err());
         assert!(act_args("acme", "x", "--record", None).is_err());
         assert!(act_args("acme", "x", "approve;ls", None).is_err());

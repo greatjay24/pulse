@@ -18,7 +18,7 @@ export function usePortfolio() {
 
   const refresh = useCallback(async () => {
     if (!CAN_READ_ORG) {
-      setError('The org board reads ~/portfolio and only runs in the Pulse desktop app.');
+      setError('The org board reads ~/portfolio and only runs in the Roo desktop app.');
       return;
     }
     // Independent reads: a tracker problem never blanks the board, and vice versa.

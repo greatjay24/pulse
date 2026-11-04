@@ -1,4 +1,4 @@
-# Pulse Roadmap
+# Roo Roadmap
 
 This file tracks planned improvements. When starting a new Claude session, reference this file to continue work.
 

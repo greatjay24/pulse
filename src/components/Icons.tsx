@@ -111,7 +111,7 @@ export function HomeIcon({ size = 18, color }: IconProps) {
   );
 }
 
-// Pulse/Activity icon (for logo)
+// Roo/Activity icon (for logo)
 export function PulseIcon({ size = 18, color }: IconProps) {
   const { tokens } = useTheme();
   return (
@@ -441,7 +441,7 @@ export function EyeIcon({ size = 18, color }: IconProps) {
   );
 }
 
-// Line icons for Pulse's own chrome, drawn on the same 24px grid and 2px stroke as the rest.
+// Line icons for Roo's own chrome, drawn on the same 24px grid and 2px stroke as the rest.
 const STROKES: Record<string, string[]> = {
   'arrow-left': ['M19 12H5', 'M12 19l-7-7 7-7'],
   'arrow-right': ['M5 12h14', 'M12 5l7 7-7 7'],

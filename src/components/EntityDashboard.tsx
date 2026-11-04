@@ -94,7 +94,7 @@ function OverviewTab({ item }: { item: BoardEntity }) {
       <Card>
         <p style={{ fontSize: tokens.type.body, color: c.textMuted }}>No report yet.</p>
         <p style={{ fontSize: tokens.type.small, color: c.textDim, marginTop: '8px', lineHeight: 1.55 }}>
-          Pulse looks for ~/portfolio/{entity.path}/status.json
+          Roo looks for ~/portfolio/{entity.path}/status.json
           {error && error !== 'missing' ? ` (${error})` : ''}.
           {entity.lead ? ` ${entity.lead} writes it at the end of each session.` : ''}
         </p>

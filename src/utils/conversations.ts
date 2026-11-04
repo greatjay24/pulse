@@ -2,7 +2,7 @@ import { ActivitySnapshot, DecisionRow, LiveRun, LiveSnapshot, PortfolioSnapshot
 import { decisionId } from './decisions';
 import { leadOwners, shifts, stampOf } from './activity';
 import { ms } from './live';
-import { frontDoorOf } from './command';
+import { agentName, frontDoorOf } from './command';
 
 // Conversations: one thread per entity (plus the org's own, for the chief of staff and
 // managers), each interleaving the owner's side (their answers in decisions.jsonl, their turns in a
@@ -153,7 +153,7 @@ export function buildThreads(
     const working = sorted.some((i) => i.type === 'run' && i.live?.state === 'running');
     threads.push({
       id,
-      name: id === PULSE_THREAD ? 'Pulse' : e?.name ?? 'Organization',
+      name: id === PULSE_THREAD ? 'Roo' : e?.name ?? 'Organization',
       lead: id === PULSE_THREAD ? door : e?.lead ?? null,
       items: sorted,
       latest: last?.at ?? 0,
@@ -167,16 +167,16 @@ export function buildThreads(
     if (e.lead && !items.has(e.id)) threads.push({ id: e.id, name: e.name, lead: e.lead, items: [], latest: 0, working: false, preview: 'No conversation yet' });
   }
   if (chief && !items.has(ORG_THREAD)) threads.push({ id: ORG_THREAD, name: 'Organization', lead: null, items: [], latest: 0, working: false, preview: 'No conversation yet' });
-  if (door && !items.has(PULSE_THREAD)) threads.push({ id: PULSE_THREAD, name: 'Pulse', lead: door, items: [], latest: 0, working: false, preview: 'Ask anything; Pulse hands it to the right lead' });
-  // Pulse first, always: it's the one conversation the owner never has to look for.
+  if (door && !items.has(PULSE_THREAD)) threads.push({ id: PULSE_THREAD, name: 'Roo', lead: door, items: [], latest: 0, working: false, preview: 'Ask anything; Roo hands it to the right lead' });
+  // Roo first, always: it's the one conversation the owner never has to look for.
   return threads.sort((a, b) => Number(b.id === PULSE_THREAD) - Number(a.id === PULSE_THREAD) || Number(b.working) - Number(a.working) || b.latest - a.latest);
 }
 
 function previewOf(it: ConvItem | undefined): string {
   if (!it) return '';
   if (it.type === 'run') {
-    if (it.live?.state === 'running') return `${it.agent}: ${it.live.step}`;
-    return `${it.agent}: ${(it.result || it.doing || '').replace(/\s+/g, ' ').slice(0, 120)}`;
+    if (it.live?.state === 'running') return `${agentName(it.agent)}: ${it.live.step}`;
+    return `${agentName(it.agent)}: ${(it.result || it.doing || '').replace(/\s+/g, ' ').slice(0, 120)}`;
   }
   const who = it.type === 'owner' ? 'You' : 'Lead';
   return `${who}: ${verbOf(it.row.action)} ${it.row.note || it.ask}`.slice(0, 120);

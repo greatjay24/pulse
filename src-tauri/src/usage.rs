@@ -1,8 +1,8 @@
 // ==========================================
-// Usage (where the plan's usage goes) and Memory (what Pulse has learned)
+// Usage (where the plan's usage goes) and Memory (what Roo has learned)
 // ==========================================
 // Reads are local files under ~/portfolio. bin/usage.py builds logs/usage/usage.json from
-// the org's run logs and Claude Code's own usage numbers; Pulse asks it to refresh and then
+// the org's run logs and Claude Code's own usage numbers; Roo asks it to refresh and then
 // reads the file. Preference toggles go through bin/learn.py, which never deletes a line.
 
 use crate::ops::run_script;

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Carry out the owner's answer to a decision from Pulse.
+"""Carry out the owner's answer to a decision from Roo.
 
     act.py <entity_id> <decision_id> approve|reject|discuss [--note "..."] [--dry-run]
     act.py --record <entity_id> <decision_id> done|reply --note "..."     (leads)
@@ -24,7 +24,7 @@ relaunches the lead if no run for that entity is in progress).
 --dry-run validates and prints what would be appended and run, and writes nothing.
 PORTFOLIO_ROOT overrides the org folder (default: the parent of this bin/).
 PULSE_TRACKER_DIR points at an optional task tracker with todos.json and add_todo.py
-(default ~/project-tracker); without one, gate items live only in status.json and Pulse.
+(default ~/project-tracker); without one, gate items live only in status.json and Roo.
 """
 import argparse, contextlib, datetime, fcntl, json, os, pathlib, re, subprocess, sys, time
 
@@ -33,7 +33,7 @@ ORG = pathlib.Path(os.environ.get("PORTFOLIO_ROOT") or pathlib.Path(__file__).re
 LOGS = ORG / "logs"
 TRACKER = pathlib.Path(os.environ.get("PULSE_TRACKER_DIR") or HOME / "project-tracker")
 
-ACTIONS = {"approve", "reject", "discuss"}       # the owner, from Pulse
+ACTIONS = {"approve", "reject", "discuss"}       # the owner, from Roo
 LEAD_ACTIONS = {"done", "reply"}                 # the lead, via --record
 SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]{0,99}$")
 NOTE_MAX = 2000
@@ -45,7 +45,7 @@ class Invalid(ValueError):
 
 
 def slug(text):
-    """Fallback id for decisions written before ids existed. Pulse derives the same."""
+    """Fallback id for decisions written before ids existed. Roo derives the same."""
     return re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")[:60].rstrip("-")
 
 
@@ -238,8 +238,8 @@ def prompt_for(e, did, action, note):
     }[action]
     return (
         f"DECISION run for {e['name']} ({e['path']}). It is {time.strftime('%A %Y-%m-%d %H:%M')}. "
-        f"The owner just answered decision `{did}` in Pulse: {action.upper()}{said}.\n"
-        f"Read {ORG}/OPERATING.md, {ORG}/STATUS_SCHEMA.md ('Decisions the owner acts on in Pulse'), "
+        f"The owner just answered decision `{did}` in Roo: {action.upper()}{said}.\n"
+        f"Read {ORG}/OPERATING.md, {ORG}/STATUS_SCHEMA.md ('Decisions the owner acts on in Roo'), "
         f"{ORG}/{e['path']}/BRIEF.md, status.json and decisions.jsonl. {todo}\n"
         "Hard limits, no exceptions: draft, never send (email goes to Gmail Drafts; no texts, DMs, invites, "
         "forms); never pay or buy; no merges to main/master/develop and no production deploys (open a PR or "
@@ -313,7 +313,7 @@ def worker(entity_id, did, action):
             "agent": e["lead"], "started": now_iso()}
     out.write_text(json.dumps({**base, "running": True}, indent=2))
 
-    # Whatever happens below, the log ends with running: false, so Pulse never shows
+    # Whatever happens below, the log ends with running: false, so Roo never shows
     # a run that died as still working.
     res, tracker = {"agent": e["lead"], "ok": False, "result": "the worker stopped before the lead ran"}, None
     try:

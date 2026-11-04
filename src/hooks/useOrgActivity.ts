@@ -55,7 +55,7 @@ function schedule() {
 
 export function refresh(): Promise<void> {
   if (!CAN_READ_ORG) {
-    set({ error: 'Activity reads ~/portfolio and only runs in the Pulse desktop app.' });
+    set({ error: 'Activity reads ~/portfolio and only runs in the Roo desktop app.' });
     return Promise.resolve();
   }
   if (inflight) return inflight;

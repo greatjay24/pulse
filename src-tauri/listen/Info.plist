@@ -4,7 +4,7 @@
 <dict>
   <key>CFBundleIdentifier</key><string>com.pulse.app.listen</string>
   <key>CFBundleName</key><string>pulse-listen</string>
-  <key>NSMicrophoneUsageDescription</key><string>Pulse listens only while its listening panel is open, so you can talk to your assistant instead of typing.</string>
-  <key>NSSpeechRecognitionUsageDescription</key><string>Pulse turns what you say into text on this Mac (on-device recognition) and sends that text to your assistant.</string>
+  <key>NSMicrophoneUsageDescription</key><string>Roo listens only while its listening panel is open, so you can talk to your assistant instead of typing.</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>Roo turns what you say into text on this Mac (on-device recognition) and sends that text to your assistant.</string>
 </dict>
 </plist>

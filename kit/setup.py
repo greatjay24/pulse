@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Set up an agent-run organization for Pulse.
+"""Set up an agent-run organization for Roo.
 
     python3 kit/setup.py                         ask questions, show the plan, then write
     python3 kit/setup.py --config org.json       no questions (see example-config.json)
     python3 kit/setup.py --dry-run               show what would be written, write nothing
 
 Flags:
-    --org-dir DIR      where the org lives (default ~/portfolio; Pulse only reads ~/portfolio)
+    --org-dir DIR      where the org lives (default ~/portfolio; Roo only reads ~/portfolio)
     --runner NAME      claude-code | codex | opencode (default: ask, offering what's installed;
                        with --config, the config's "runner" or claude-code). Re-running with a
                        different runner switches the org and installs that runner's agent files.
@@ -181,7 +181,7 @@ def choose_runner():
 
 
 def interview():
-    print("Pulse org setup. Press Enter to take the default in [brackets].\n")
+    print("Roo org setup. Press Enter to take the default in [brackets].\n")
     owner = ask("Your first name")
     groups = [g.strip() for g in ask("Groups, comma separated", ", ".join(DEFAULT_GROUPS)).split(",") if g.strip()]
     print("\nNow your businesses (and anything else you want a lead for). Leave the id blank to finish.")
@@ -362,7 +362,7 @@ def merged_registry(path, owner, groups, entities, runner=None, switch=False):
             reg = json.loads(path.read_text())
         except json.JSONDecodeError:
             raise SetupError(f"{path} is not valid JSON; fix or move it, then re-run")
-    reg.setdefault("_comment", "The org registry. Pulse and bin/nightly.py read this. 'schedule' = nightly | weekly | "
+    reg.setdefault("_comment", "The org registry. Roo and bin/nightly.py read this. 'schedule' = nightly | weekly | "
                    "on-call. 'logo' / 'logo_dark' are paths under assets/ (svg, png, jpg, webp; 1 MB max). "
                    "'color' (hex) tints the entity's initial when it has no logo.")
     reg.setdefault("owner", {"name": owner})
@@ -537,7 +537,7 @@ def commit(org, message):
         return "nothing new to commit"
     ident = []
     if not git(org, "config", "user.email").stdout.strip():
-        ident = ["-c", "user.name=Pulse setup", "-c", "user.email=setup@localhost"]
+        ident = ["-c", "user.name=Roo setup", "-c", "user.email=setup@localhost"]
     out = subprocess.run(["git", *ident, "-C", str(org), "commit", "-q", "-m", message], capture_output=True, text=True)
     return "committed" if out.returncode == 0 else f"commit failed: {(out.stderr or out.stdout).strip()[:200]}"
 
@@ -573,12 +573,12 @@ def next_steps(org, registry):
     if runner == "codex" and not runners.Codex.RULES.exists():
         codex_rules_note(show=False)
     hooks = (f"""
-4. So Pulse shows your own lead sessions under Working now, merge this
+4. So Roo shows your own lead sessions under Working now, merge this
    into ~/.claude/settings.json (keep any hooks you already have):
 {hooks_snippet(org)}
 """ if runner == "claude-code" else """
-4. (Claude Code only) Live view of your own chat sessions in Pulse needs Claude Code's
-   hooks; with this runner, Pulse shows the night shift and decision runs live.
+4. (Claude Code only) Live view of your own chat sessions in Roo needs Claude Code's
+   hooks; with this runner, Roo shows the night shift and decision runs live.
 """)
     print(f"""
 Next steps (setup ran none of these):
@@ -592,7 +592,7 @@ Next steps (setup ran none of these):
 3. Schedule it (directors nightly at 5:30am, chief of staff Mondays at 6:30am):
      sh {tilde(org)}/launchd/install.sh
 {hooks}
-5. Open Pulse. It reads ~/portfolio.
+5. Open Roo. It reads ~/portfolio.
 
 To switch runners later, set "runner" in {tilde(org)}/portfolio.json to claude-code, codex
 or opencode (or re-run setup with --runner NAME, which also installs that runner's agents).""")
@@ -625,8 +625,8 @@ def main(argv=None):
         return 2
 
     if org != (HOME / "portfolio").resolve():
-        print(f"Note: Pulse reads ~/portfolio only. {tilde(org)} works for the agents and the night shift, "
-              "but Pulse won't show it unless ~/portfolio points there.\n")
+        print(f"Note: Roo reads ~/portfolio only. {tilde(org)} works for the agents and the night shift, "
+              "but Roo won't show it unless ~/portfolio points there.\n")
 
     changes = plan.changes()
     runner = runners.resolve(registry)["name"]

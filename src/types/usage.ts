@@ -10,7 +10,7 @@ export interface UsageTokens {
 
 export interface UsageRun {
   id: string;
-  run_id: string | null; // a transcript Pulse can open in Conversations
+  run_id: string | null; // a transcript Roo can open in Conversations
   source: 'runner' | 'session';
   kind: string; // nightly | weekly | act | chat | watch | check | learn | interactive | headless
   entity: string | null;

@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Pulse",
+        "title": "Roo",
         "width": 1440,
         "height": 920,
         "minWidth": 720,
@@ -50,7 +50,7 @@
     },
     "category": "Productivity",
     "shortDescription": "Today, the board and money across the portfolio",
-    "longDescription": "Pulse reads ~/portfolio (and an optional task tracker) and shows what needs you today: the decision queue, each business's health, and what your agents are doing."
+    "longDescription": "Roo reads ~/portfolio (and an optional task tracker) and shows what needs you today: the decision queue, each business's health, and what your agents are doing."
   },
   "plugins": {
     "store": {}

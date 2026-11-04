@@ -1,5 +1,5 @@
 // ==========================================
-// Terminal: a real Claude Code session in a Pulse tab
+// Terminal: a real Claude Code session in a Roo tab
 // ==========================================
 // Each tab is a pseudo-terminal running the owner's login shell, which runs
 // `claude --agent <lead>` (or plain `claude`) in ~ with their normal environment and sign-in.
@@ -171,7 +171,7 @@ pub(crate) fn pty_close(ptys: State<'_, Ptys>, id: u32) -> Result<(), String> {
     Ok(())
 }
 
-// Quitting Pulse ends every tab's session.
+// Quitting Roo ends every tab's session.
 pub(crate) fn close_all(ptys: &Ptys) {
     if let Ok(mut sessions) = ptys.sessions.lock() {
         for (_, s) in sessions.drain() {
