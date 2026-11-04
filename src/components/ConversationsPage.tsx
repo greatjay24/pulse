@@ -13,7 +13,7 @@ import { EntityMark, Notice, PageHeader } from './BoardUI';
 import { LiveDot, memberTone } from './WorkingNow';
 import { Icon, StrokeIcon } from './Icons';
 import { Composer } from './Composer';
-import { COS_TARGET, PULSE_TARGET, chiefOf, stopRun } from '../utils/command';
+import { COS_TARGET, PULSE_TARGET, agentName, chiefOf, stopRun } from '../utils/command';
 import { briefMe, defaultBriefKind, openListenPanel, speak, stopSpeaking } from '../utils/voice';
 
 const INDEX_POLL_MS = 15_000;
@@ -199,7 +199,7 @@ function HandoffBlock({ runs, onOpenRun }: { runs: RunItem[]; onOpenRun: (runId:
           <div key={r.key} style={{ fontSize: tokens.type.small, paddingLeft: '4px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <LiveDot color={memberTone(st, c)} pulsing={st === 'running'} />
-              <span style={{ fontWeight: 600 }}>{r.agent}</span>
+              <span style={{ fontWeight: 600 }}>{agentName(r.agent)}</span>
               <span style={{ color: c.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{r.doing}</span>
               {r.runId && (
                 <button
@@ -452,7 +452,7 @@ function RunBlock({ item, open: initiallyOpen, focused, onOpenRun }: { item: Run
         {item.source === 'telegram' && <span style={{ fontSize: tokens.type.micro, color: c.textDim }}>from Telegram</span>}
         {!chat && <span style={{ fontSize: '15px', fontWeight: 500 }}>{item.doing}</span>}
         <span style={{ fontSize: tokens.type.micro, color: c.textDim }}>
-          {item.agent} · {when(item.at)}
+          {agentName(item.agent)} · {when(item.at)}
           {item.live && item.live.state !== 'finished' && item.live.state !== 'failed' && ` · ${stateLabel(item.live)}`}
         </span>
         {item.runId && !initiallyOpen && !running && (
@@ -474,7 +474,7 @@ function RunBlock({ item, open: initiallyOpen, focused, onOpenRun }: { item: Run
       )}
       {/* Runs from before transcripts, or folded ones: the lead's closing summary. */}
       {(!item.runId || !open || (!hasResultText && transcript)) && item.result && (
-        <Bubble mine={false} label={item.agent} speakText={item.result}>{item.result}</Bubble>
+        <Bubble mine={false} label={agentName(item.agent)} speakText={item.result}>{item.result}</Bubble>
       )}
       {item.children && item.children.length > 0 && <HandoffBlock runs={item.children} onOpenRun={onOpenRun} />}
       <RunFooter item={item} />
@@ -607,7 +607,7 @@ export function ConversationsPage({ snapshot, focus, onOpenTerminal }: { snapsho
 
   return (
     <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
-      <PageHeader title="Conversations" subtitle="Talk to Pulse and it hands work to the right leads; or open a lead's thread to talk to it directly. Every answer, reply and run's transcript is here." />
+      <PageHeader title="Conversations" subtitle="Talk to Roo and it hands work to the right leads; or open a lead's thread to talk to it directly. Every answer, reply and run's transcript is here." />
       {problems.length > 0 && <Notice>{problems.join(' · ')}</Notice>}
       {threads.length === 0 && !problems.length && <div style={{ color: c.textMuted, marginTop: '20px' }}>No conversations recorded yet.</div>}
       {current && (
@@ -631,7 +631,7 @@ export function ConversationsPage({ snapshot, focus, onOpenTerminal }: { snapsho
               {lead && onOpenTerminal && (
                 <button
                   onClick={() => onOpenTerminal(lead)}
-                  title={`A full Claude Code session with ${lead}, in a Pulse tab`}
+                  title={`A full Claude Code session with ${lead}, in a Roo tab`}
                   style={{ marginLeft: current.id === PULSE_THREAD ? 0 : 'auto', display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: `1px solid ${c.border}`, borderRadius: tokens.radius.sm, padding: '4px 10px', color: c.textMuted, fontFamily: 'inherit', fontSize: tokens.type.small, cursor: 'pointer' }}
                 >
                   <Icon name="terminal" size={13} color={c.textMuted} /> Open in terminal
@@ -652,7 +652,7 @@ export function ConversationsPage({ snapshot, focus, onOpenTerminal }: { snapsho
             {lead && (
               <Composer
                 target={current.id === PULSE_THREAD ? PULSE_TARGET : current.id === ORG_THREAD ? COS_TARGET : current.id}
-                lead={current.id === PULSE_THREAD ? 'Pulse' : lead}
+                lead={current.id === PULSE_THREAD ? 'Roo' : lead}
                 replying={replying}
                 queued={queued}
                 onSent={setSentRun}
@@ -665,7 +665,7 @@ export function ConversationsPage({ snapshot, focus, onOpenTerminal }: { snapsho
   );
 }
 
-// The Pulse thread's header: a briefing on demand, and the listening panel.
+// The Roo thread's header: a briefing on demand, and the listening panel.
 function PulseActions({ onStarted }: { onStarted: (runId: string) => void }) {
   const { tokens } = useTheme();
   const c = tokens.colors;
@@ -691,7 +691,7 @@ function PulseActions({ onStarted }: { onStarted: (runId: string) => void }) {
       >
         <StrokeIcon name="speaker" size={13} color={c.textMuted} /> {busy ? 'Starting…' : 'Brief me'}
       </button>
-      <button onClick={() => openListenPanel().catch((e) => setError(String(e)))} title="Talk to Pulse (also from anywhere with the hotkey in Settings)" style={button}>
+      <button onClick={() => openListenPanel().catch((e) => setError(String(e)))} title="Talk to Roo (also from anywhere with the hotkey in Settings)" style={button}>
         <StrokeIcon name="mic" size={13} color={c.textMuted} /> Talk
       </button>
     </div>

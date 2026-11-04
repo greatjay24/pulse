@@ -1,6 +1,6 @@
 #!/bin/bash
-# Install Pulse auto-launch daemon (macOS)
-# Launches Pulse every day at 7:30 AM
+# Install Roo auto-launch daemon (macOS)
+# Launches Roo every day at 7:30 AM
 
 PLIST_NAME="com.pulse.autolaunch.plist"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -17,8 +17,8 @@ cp "$SOURCE_PLIST" "$DEST_PLIST"
 # Load the launch agent
 launchctl load "$DEST_PLIST"
 
-echo "Pulse auto-launch installed!"
-echo "Pulse will now open automatically at 7:30 AM every day."
+echo "Roo auto-launch installed!"
+echo "Roo will now open automatically at 7:30 AM every day."
 echo ""
 echo "To change the time, edit: $DEST_PLIST"
 echo "To uninstall, run: ./uninstall-autolaunch.sh"

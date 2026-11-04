@@ -4,7 +4,7 @@ import { firstWeekSection, healthRank, plainMarkdownLine } from './portfolio';
 import { isGate, openTaskList } from './tracker';
 import { sumFinance, trailingMonths } from './finance';
 
-// The one line Pulse leads with, and the decision queue under it. Today, the board, the
+// The one line Roo leads with, and the decision queue under it. Today, the board, the
 // menu bar count and notifications all read these, so every surface counts the same way.
 
 // What each business has due today on the Today page: tasks marked now, "Decide:" gate

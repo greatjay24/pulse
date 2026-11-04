@@ -31,7 +31,7 @@ function CheckRow({ ok, label, detail }: { ok: boolean | null; label: string; de
   );
 }
 
-// First run: no ~/portfolio/portfolio.json yet. Says what Pulse is, checks what setup needs,
+// First run: no ~/portfolio/portfolio.json yet. Says what Roo is, checks what setup needs,
 // gives the one command to run, and offers the bundled demo org.
 export function Welcome({ onRecheck }: { onRecheck: () => void }) {
   const { tokens } = useTheme();
@@ -73,7 +73,7 @@ export function Welcome({ onRecheck }: { onRecheck: () => void }) {
       <div style={{ maxWidth: '680px', margin: '0 auto', padding: '72px 32px 56px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '28px' }}>
           <Icon name="pulse" size={26} color={c.accent} />
-          <span style={{ fontSize: tokens.type.small, letterSpacing: '0.08em', textTransform: 'uppercase', color: c.textMuted }}>Pulse</span>
+          <span style={{ fontSize: tokens.type.small, letterSpacing: '0.08em', textTransform: 'uppercase', color: c.textMuted }}>Roo</span>
         </div>
         <h1 style={{ fontFamily: tokens.fonts.display, fontSize: '44px', fontWeight: 500, letterSpacing: '-0.02em', lineHeight: 1.08 }}>
           Run every business from one desk.
@@ -81,7 +81,7 @@ export function Welcome({ onRecheck }: { onRecheck: () => void }) {
         <div style={{ fontSize: tokens.type.lead, lineHeight: 1.6, color: c.textMuted, margin: '20px 0 40px' }}>
           <p>Each business you run gets an AI lead, an agent on ChatGPT (Codex), Claude or another model, that works overnight and keeps a short report.</p>
           <p>It handles what it can and brings you only what needs you: a decision, money, anything sent in your name, or your taste.</p>
-          <p>Pulse shows those reports, the decisions waiting on you, and what your agents are doing right now.</p>
+          <p>Roo shows those reports, the decisions waiting on you, and what your agents are doing right now.</p>
         </div>
 
         <section style={{ marginBottom: '32px' }}>
@@ -115,7 +115,7 @@ export function Welcome({ onRecheck }: { onRecheck: () => void }) {
               )}
             </>
           ) : (
-            <p style={{ fontSize: tokens.type.body, color: c.textMuted }}>Pulse checks for an agent CLI (Codex, Claude Code or opencode) and python3 when it runs as the desktop app.</p>
+            <p style={{ fontSize: tokens.type.body, color: c.textMuted }}>Roo checks for an agent CLI (Codex, Claude Code or opencode) and python3 when it runs as the desktop app.</p>
           )}
         </section>
 

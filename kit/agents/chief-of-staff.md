@@ -19,7 +19,7 @@ where the owner's hours go, enforce the four gates, and push the directors.
 1. Read every `status.json` and `BRIEF.md` listed above.
 2. If a status file is more than 3 days old, or a director's work looks thin, launch that director (in parallel, brief it with OPERATING.md) to refresh it.
 3. Archive last week's file to `{{ORG}}/history/WEEK-YYYY-MM-DD.md`, then write `{{ORG}}/WEEK.md`:
-   - **Your three moves this week.** Across everything, ranked, each with how long it takes. (Pulse counts this first list as the week's moves.)
+   - **Your three moves this week.** Across everything, ranked, each with how long it takes. (Roo counts this first list as the week's moves.)
    - **Decisions.** Every open gate item, grouped by entity, each with a recommended answer.
    - **Waiting on others.** Who, what, and since when.
    - **Risks with dates.**

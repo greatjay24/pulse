@@ -6,7 +6,7 @@ import { refresh as refreshActivity } from './useOrgActivity';
 const POLL_MS = 2_000; // a start shows within two seconds
 
 // One poll of `read_live` for every view (Working now, Conversations) and for the menu bar
-// and notifications, which App keeps subscribed the whole time Pulse runs.
+// and notifications, which App keeps subscribed the whole time Roo runs.
 let snapshot: LiveSnapshot | null = null;
 let error: string | null = null;
 const listeners = new Set<() => void>();
@@ -51,7 +51,7 @@ function subscribe(l: () => void) {
   listeners.add(l);
   if (listeners.size === 1) {
     if (!CAN_READ_ORG) {
-      error = 'Live runs are read from ~/portfolio and only show in the Pulse desktop app.';
+      error = 'Live runs are read from ~/portfolio and only show in the Roo desktop app.';
     } else {
       poll();
     }

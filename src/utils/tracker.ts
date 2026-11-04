@@ -58,7 +58,7 @@ export interface EntityTracker {
 }
 
 // Email replies also appear in tasks.json (source "email"); email.json is the fresher
-// copy, so Pulse lists them once, under "Needs a reply".
+// copy, so Roo lists them once, under "Needs a reply".
 const isTaskListItem = (t: TrackerTask) => t.source !== 'email';
 
 export function entityTracker(entityId: string, tracker: TrackerSnapshot, owners: Map<string, string>): EntityTracker {

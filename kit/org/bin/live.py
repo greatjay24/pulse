@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Live state and transcripts for every agent run, so Pulse can show who is working now.
+"""Live state and transcripts for every agent run, so Roo can show who is working now.
 
     logs/live/<run_id>.json          one per run: what it's doing, its latest step, its state
     logs/transcripts/<run_id>.jsonl  the run's conversation, normalized and redacted
 
 A run is `running` until it finishes (`finished` | `failed`). Interactive sessions (the
-hook in session_hook.py) also go `idle` between turns. Pulse treats a running or idle
+hook in session_hook.py) also go `idle` between turns. Roo treats a running or idle
 run whose pid is gone as "stopped unexpectedly".
 
 Transcript lines (one JSON object each, every string redacted):
@@ -104,7 +104,7 @@ def clip(text, n=TEXT_MAX):
 
 
 # --------------------------------------------------------------------------
-# Tool calls as one line: what Pulse shows as a step
+# Tool calls as one line: what Roo shows as a step
 # --------------------------------------------------------------------------
 
 def short_path(p):
@@ -345,7 +345,7 @@ def pid_alive(pid):
 
 def prune(now=None):
     """Drop live files older than KEEP_FINISHED_SECS that are finished, or that say they
-    are working but whose process is gone (Pulse shows those as stopped until then)."""
+    are working but whose process is gone (Roo shows those as stopped until then)."""
     now = now or time.time()
     if not LIVE.is_dir():
         return

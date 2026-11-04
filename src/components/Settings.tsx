@@ -321,7 +321,7 @@ export function Settings({ apps, onSave, onClose, inline = false, saasMetrics, o
           </h1>
           {inline && (
             <p style={{ color: tokens.colors.textMuted, fontSize: tokens.type.small, marginTop: '8px' }}>
-              How Pulse looks, what it tells you, and the original SaaS pages.
+              How Roo looks, what it tells you, and the original SaaS pages.
             </p>
           )}
         </div>
@@ -441,7 +441,7 @@ export function Settings({ apps, onSave, onClose, inline = false, saasMetrics, o
               <div style={{ background: tokens.colors.bgCard, border: `1px solid ${tokens.colors.border}`, borderRadius: tokens.radius.lg, padding: '24px' }}>
                 <ToggleRow
                   label="SaaS metrics"
-                  note="The original Pulse pages: Overview, Analytics and Calendar, per-app integrations and Total MRR. Off keeps them out of the sidebar; their settings and data stay as they are."
+                  note="The original Roo pages: Overview, Analytics and Calendar, per-app integrations and Total MRR. Off keeps them out of the sidebar; their settings and data stay as they are."
                   on={saasMetrics}
                   onChange={() => onSaasMetricsChange(!saasMetrics)}
                 />
@@ -678,7 +678,7 @@ export function Settings({ apps, onSave, onClose, inline = false, saasMetrics, o
                           margin: 0,
                         }}
                       >
-                        Open Pulse automatically every morning to review your dashboard
+                        Open Roo automatically every morning to review your dashboard
                       </p>
                     </div>
                     <button

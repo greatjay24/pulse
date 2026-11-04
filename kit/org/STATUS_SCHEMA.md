@@ -1,6 +1,6 @@
 # status.json: what each director reports up
 
-Pulse (the desktop dashboard) and chief-of-staff read these files. Directors
+Roo (the desktop dashboard) and chief-of-staff read these files. Directors
 and venture leads overwrite theirs at the end of every session. Keep the
 shape exactly. Use empty arrays, never omit keys.
 
@@ -64,8 +64,8 @@ to say which rule set it.
 - Pending ventures use green or yellow against their own goals (is it moving toward
   launch?), not revenue.
 
-## Decisions the owner acts on in Pulse
-The owner can Approve, Reject, or Discuss a decision in Pulse. Each action is appended to
+## Decisions the owner acts on in Roo
+The owner can Approve, Reject, or Discuss a decision in Roo. Each action is appended to
 `<entity path>/decisions.jsonl` (`{"id","action","note","at"}`) and the lead is run right
 away to carry it out. At the start of every session, read that file:
 - carry out any approved item not yet done, within the guardrails (OPERATING.md), then
@@ -74,7 +74,7 @@ away to carry it out. At the start of every session, read that file:
 - for a discuss, answer the note as a `reply`, short.
 Never re-ask a decision the owner has answered.
 
-Pulse writes through `bin/act.py`, which validates the answer, appends it under a lock,
+Roo writes through `bin/act.py`, which validates the answer, appends it under a lock,
 and runs the lead (same allow/deny lists as the night shift, in `bin/policy.py`). Its rows
 also carry the decision's `ask` and `recommend`, so the answer still reads after the
 decision leaves status.json. Leads report back with the same script, never by editing

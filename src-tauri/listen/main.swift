@@ -1,7 +1,7 @@
-// pulse-listen: on-device speech to text for Pulse's listening panel.
+// pulse-listen: on-device speech to text for Roo's listening panel.
 //
 // Uses macOS's Speech framework with requiresOnDeviceRecognition, so audio never leaves the
-// Mac and nothing is paid for. Pulse starts it, reads one JSON object per line on stdout:
+// Mac and nothing is paid for. Roo starts it, reads one JSON object per line on stdout:
 //
 //   {"type":"ready"}                       listening
 //   {"type":"level","value":0.0...1.0}     microphone level, ~10 a second
@@ -16,7 +16,7 @@
 // Usage: pulse-listen [--locale en-US] [--pause 1.6] [--max 60]
 //
 // The usage strings the permission prompts show are embedded in this binary's __info_plist
-// (see scripts/build-listen.sh) and repeated in Pulse's own Info.plist.
+// (see scripts/build-listen.sh) and repeated in Roo's own Info.plist.
 
 import AVFoundation
 import Foundation
@@ -162,11 +162,11 @@ func authorizeAndStart() {
     SFSpeechRecognizer.requestAuthorization { status in
         DispatchQueue.main.async {
             guard status == .authorized else {
-                fail("Pulse needs Speech Recognition: System Settings > Privacy & Security > Speech Recognition.")
+                fail("Roo needs Speech Recognition: System Settings > Privacy & Security > Speech Recognition.")
             }
             AVCaptureDevice.requestAccess(for: .audio) { ok in
                 DispatchQueue.main.async {
-                    guard ok else { fail("Pulse needs the microphone: System Settings > Privacy & Security > Microphone.") }
+                    guard ok else { fail("Roo needs the microphone: System Settings > Privacy & Security > Microphone.") }
                     listener.start()
                 }
             }

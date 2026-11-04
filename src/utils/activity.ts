@@ -1,5 +1,6 @@
 import { ActivitySnapshot, AgentRun, PortfolioEntity, PortfolioSnapshot, RunTokens } from '../types';
 import { decisionId } from './decisions';
+import { agentName } from './command';
 
 // One line on the Activity timeline. Built only from files the organization wrote:
 // run logs, git commits, status.json `done`, decisions.jsonl and the sales ledgers.
@@ -103,7 +104,7 @@ export function activityItems(activity: ActivitySnapshot | null, snapshot: Portf
         at: shift.at,
         entity: owners.get(r.agent) ?? null,
         kind: 'run',
-        title: `${r.agent} ran the ${r.agent === 'chief-of-staff' ? 'weekly review' : 'night shift'}`,
+        title: `${agentName(r.agent)} ran the ${r.agent === 'chief-of-staff' ? 'weekly review' : 'night shift'}`,
         detail: plainSummary(r.result),
         cost: r.cost_usd ?? undefined,
         tokens: r.tokens,
@@ -125,7 +126,7 @@ export function activityItems(activity: ActivitySnapshot | null, snapshot: Portf
       at,
       entity: r.entity ?? null,
       kind: 'act',
-      title: `${r.agent} ${r.running ? 'is acting on' : 'acted on'} your ${r.action ? VERB[r.action] : 'answer'}: ${askOf(r.entity, r.decision)}`,
+      title: `${agentName(r.agent)} ${r.running ? 'is acting on' : 'acted on'} your ${r.action ? VERB[r.action] : 'answer'}: ${askOf(r.entity, r.decision)}`,
       detail: r.running ? undefined : plainSummary(r.result),
       cost: r.cost_usd ?? undefined,
       tokens: r.tokens,

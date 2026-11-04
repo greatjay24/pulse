@@ -1,6 +1,6 @@
 # {{OWNER}}'s organization
 
-Each entity has a lead agent, a `BRIEF.md` (for humans) and a `status.json` (for Pulse).
+Each entity has a lead agent, a `BRIEF.md` (for humans) and a `status.json` (for Roo).
 The rules every agent follows are in [OPERATING.md](OPERATING.md); the report format is
 in [STATUS_SCHEMA.md](STATUS_SCHEMA.md).
 
@@ -17,7 +17,7 @@ in [STATUS_SCHEMA.md](STATUS_SCHEMA.md).
 
 ## What reaches you
 Only gate items: a decision, money or a signature, a relationship (anything sent in your
-name), or your taste. They show in Pulse as decisions, each with a recommendation and
+name), or your taste. They show in Roo as decisions, each with a recommendation and
 Approve / Reject / Discuss buttons.
 
 ## Commands
@@ -26,4 +26,4 @@ Approve / Reject / Discuss buttons.
 - Switch runners: set `"runner"` in portfolio.json to `claude-code`, `codex` or `opencode`
 - Run the night shift by hand: `python3 {{ORG}}/bin/nightly.py [entity ...]`
 - Check the setup without doing work: `python3 {{ORG}}/bin/nightly.py --check`
-- Pulse (desktop) reads `portfolio.json`, every `status.json`, `WEEK.md` and `logs/`.
+- Roo (desktop) reads `portfolio.json`, every `status.json`, `WEEK.md` and `logs/`.

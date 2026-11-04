@@ -9,6 +9,7 @@ import {
 } from '../utils/usage';
 import { Card, Notice, PageHeader, SectionLabel } from './BoardUI';
 import { Icon } from './Icons';
+import { agentName } from '../utils/command';
 
 // Usage: where the Claude plan goes. Everything runs on a Max subscription, so dollars are
 // API-equivalent estimates and the plan's limits are what matter. Charts follow the dataviz
@@ -343,7 +344,7 @@ function Body({ report, names, onOpenConversation }: { report: UsageReport; name
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: tokens.type.small, color: c.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{run.doing || who}</div>
                   <div style={{ fontSize: tokens.type.micro, color: c.textDim, marginTop: '3px' }}>
-                    {kindLabel(run.kind)}{run.agent ? ` · ${run.agent}` : ''}{run.entity ? ` · ${names.get(run.entity) ?? run.entity}` : ''} · {when(run.started)}
+                    {kindLabel(run.kind)}{run.agent ? ` · ${agentName(run.agent)}` : ''}{run.entity ? ` · ${names.get(run.entity) ?? run.entity}` : ''} · {when(run.started)}
                     {run.models.length ? ` · ${run.models.map(modelLabel).join(', ')}` : ''}
                   </div>
                 </div>

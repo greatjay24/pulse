@@ -1,6 +1,6 @@
 #!/bin/bash
-# Pulse Setup Script
-# Run this after installing Pulse to configure preferences
+# Roo Setup Script
+# Run this after installing Roo to configure preferences
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLIST_NAME="com.pulse.autolaunch.plist"
@@ -10,12 +10,12 @@ DEST_PLIST="$DEST_DIR/$PLIST_NAME"
 
 echo ""
 echo "  ╔═══════════════════════════════════════╗"
-echo "  ║         Welcome to Pulse Setup        ║"
+echo "  ║         Welcome to Roo Setup        ║"
 echo "  ╚═══════════════════════════════════════╝"
 echo ""
 
 # Ask about auto-launch
-echo "Would you like Pulse to launch automatically every morning at 7:30 AM?"
+echo "Would you like Roo to launch automatically every morning at 7:30 AM?"
 echo "This helps you start your day with a quick overview of your projects."
 echo ""
 read -p "Enable auto-launch? (y/n): " ENABLE_AUTOLAUNCH
@@ -29,7 +29,7 @@ if [[ "$ENABLE_AUTOLAUNCH" =~ ^[Yy]$ ]]; then
     launchctl load "$DEST_PLIST" 2>/dev/null
 
     echo ""
-    echo "✓ Auto-launch enabled! Pulse will open at 7:30 AM daily."
+    echo "✓ Auto-launch enabled! Roo will open at 7:30 AM daily."
     echo "  You can change this later in Settings > Preferences."
 else
     # Make sure it's not installed
@@ -44,8 +44,8 @@ else
 fi
 
 echo ""
-echo "Setup complete! Launching Pulse..."
+echo "Setup complete! Launching Roo..."
 echo ""
 
 # Launch the app
-open -a "Pulse" 2>/dev/null || echo "Note: Open Pulse manually from your Applications folder."
+open -b com.pulse.app 2>/dev/null || echo "Note: Open Roo manually from your Applications folder."

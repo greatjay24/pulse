@@ -1,6 +1,6 @@
-# Pulse starter kit
+# Roo starter kit
 
-Everything Pulse needs behind it: an organization of AI agents that runs your businesses'
+Everything Roo needs behind it: an organization of AI agents that runs your businesses'
 busywork overnight and brings you only the decisions. The agents run on Codex (a ChatGPT
 plan), Claude Code or opencode (any provider); see "Runners" below. No data in here: you
 describe your own businesses when you run setup.
@@ -11,25 +11,25 @@ python3 kit/setup.py --config my-org.json  # same, from a file (see example-conf
 python3 kit/setup.py --dry-run             # show what it would write, write nothing
 ```
 
-Setup creates `~/portfolio` (the org Pulse reads), writes the agents to `~/portfolio/agents`
+Setup creates `~/portfolio` (the org Roo reads), writes the agents to `~/portfolio/agents`
 and installs them where the chosen runner reads them. It never overwrites a file that exists, and it's safe to re-run: add an
 entity to your config and run it again. It prints, but doesn't run, the two things that
 change your Mac's behavior: the nightly schedule (`sh ~/portfolio/launchd/install.sh`) and
-(Claude Code only) the hooks snippet that lets Pulse show your own chat sessions.
+(Claude Code only) the hooks snippet that lets Roo show your own chat sessions.
 
 ## What's in it
 
 | Path | What it is |
 |---|---|
 | `org/OPERATING.md` | The rules every agent follows: the four gates, the guardrails (draft, never send; ask first for production, money, DNS, deletes), nightly runs, teams. |
-| `org/STATUS_SCHEMA.md` | The `status.json` each lead writes and Pulse reads, and how health colors are earned. |
+| `org/STATUS_SCHEMA.md` | The `status.json` each lead writes and Roo reads, and how health colors are earned. |
 | `org/README.md` | The org at a glance, with the commands. |
 | `org/bin/nightly.py` | Runs the leads headlessly: nightly, `--weekly` (chief of staff), `--check` (smoke test). |
-| `org/bin/act.py` | What Pulse calls when you Approve, Reject or Discuss a decision. Appends to `decisions.jsonl` and runs the lead. |
-| `org/bin/live.py` | Live state and redacted transcripts for every run (Pulse's Working now and Conversations). |
-| `org/bin/session_hook.py` | Claude Code hook: shows your own `claude --agent <lead>` sessions in Pulse. |
+| `org/bin/act.py` | What Roo calls when you Approve, Reject or Discuss a decision. Appends to `decisions.jsonl` and runs the lead. |
+| `org/bin/live.py` | Live state and redacted transcripts for every run (Roo's Working now and Conversations). |
+| `org/bin/session_hook.py` | Claude Code hook: shows your own `claude --agent <lead>` sessions in Roo. |
 | `org/bin/policy.py` | The allow and deny lists for headless runs. No sending, no force-push, no merges, no production deploys. |
-| `org/bin/runners.py` | One adapter per agent CLI (claude-code, codex, opencode): the command, the guardrails, and the translation of its events into Pulse's transcript lines. |
+| `org/bin/runners.py` | One adapter per agent CLI (claude-code, codex, opencode): the command, the guardrails, and the translation of its events into Roo's transcript lines. |
 | `org/bin/talk.py` | Opens a lead interactively on the org's runner, fenced the same way. |
 | `org/bin/fixtures/` | Recorded codex and opencode event streams the runner tests replay. |
 | `org/bin/test_*.py` | Tests. `python3 ~/portfolio/bin/test_act.py` and `test_live.py`. |
@@ -70,8 +70,8 @@ entity, or at the top of portfolio.json for every lead. Each runner fences reads
 Checked offline (no model called): `codex sandbox` with the generated profile allows the org and
 the dirs and refuses the rest of home; `opencode debug agent --tool` with the generated
 permissions does the same; `codex execpolicy check` for every forbidden command. The tests
-re-run these when the CLIs are installed. Live view of your own chat sessions in Pulse uses
-Claude Code's hooks; with the other runners, Pulse shows the night shift and decision runs.
+re-run these when the CLIs are installed. Live view of your own chat sessions in Roo uses
+Claude Code's hooks; with the other runners, Roo shows the night shift and decision runs.
 
 ## Optional extras
 
@@ -79,8 +79,8 @@ The scripts work with nothing but one runner and python3. These are used only if
 
 - **A task tracker** (`PULSE_TRACKER_DIR`, default `~/project-tracker`, with `todos.json`
   and `add_todo.py`): approving a decision also closes its matching "Decide: ..." task.
-  Without one, decisions live in `status.json` and Pulse. Leads can read it only if its folder is in the top-level
+  Without one, decisions live in `status.json` and Roo. Leads can read it only if its folder is in the top-level
   `"dirs"` of portfolio.json.
 - **Sales learning** (`~/portfolio/sales/sales_learn.py`): run before the night shift.
-- **Money and inbox data** in Pulse's Money page come from the same optional tracker.
-  Without it, Pulse hides those sections.
+- **Money and inbox data** in Roo's Money page come from the same optional tracker.
+  Without it, Roo hides those sections.

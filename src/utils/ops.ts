@@ -139,7 +139,7 @@ export function primaryLabel(k: OutboxKind): 'Send' | 'Publish' | 'Approve' {
   return 'Send';
 }
 
-// Which fields Pulse's Edit offers, by kind (mirrors bin/outbox.py EDITABLE).
+// Which fields Roo's Edit offers, by kind (mirrors bin/outbox.py EDITABLE).
 export const EDITABLE: Partial<Record<OutboxKind, (keyof OutboxEdit)[]>> = {
   email: ['to', 'cc', 'subject', 'body'],
   post: ['title', 'body', 'link'],

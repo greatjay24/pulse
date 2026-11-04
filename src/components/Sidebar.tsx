@@ -316,7 +316,7 @@ function AddProjectButton({ onClick }: { onClick: () => void }) {
   );
 }
 
-// Pulse's mark: the app icon in miniature (icon-concepts/concept6-signal.svg).
+// Roo's mark: the app icon in miniature (icon-concepts/concept6-signal.svg).
 export function PulseMark({ size = 32 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="100 100 824 824" aria-hidden style={{ flexShrink: 0, display: 'block' }}>
@@ -371,7 +371,7 @@ export function Sidebar({
         }}
       >
         <PulseMark size={28} />
-        {!compact && <span style={{ fontFamily: tokens.fonts.display, fontWeight: 500, fontSize: '20px', letterSpacing: '-0.01em', color: tokens.colors.text }}>Pulse</span>}
+        {!compact && <span style={{ fontFamily: tokens.fonts.display, fontWeight: 500, fontSize: '20px', letterSpacing: '-0.01em', color: tokens.colors.text }}>Roo</span>}
       </div>
 
       {/* Ask a lead: the command box */}

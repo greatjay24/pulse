@@ -1,4 +1,8 @@
-# Pulse - Project Instructions for Claude
+# Roo - Project Instructions for Claude
+
+The app is named Roo (formerly Pulse). User-facing text says Roo; internal ids stay `pulse` (bundle id
+`com.pulse.app`, `Pulse.app`, the repo and package names, launchd labels, the Keychain item, agent id
+`pulse`). See "Naming" in README.md before renaming anything.
 
 ## Engineering Approach
 

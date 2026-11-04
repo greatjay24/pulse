@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { HOTKEYS, InstalledVoice, SpeakMode, VoiceSettings as Settings, applyHotkey, listVoices, loadVoice, saveVoice, speak, stopSpeaking } from '../utils/voice';
 
-// Settings › General: how Pulse talks back, and the hotkey that opens the listening panel.
+// Settings › General: how Roo talks back, and the hotkey that opens the listening panel.
 export function VoiceSettings() {
   const { tokens } = useTheme();
   const c = tokens.colors;
@@ -41,7 +41,7 @@ export function VoiceSettings() {
       <div>
         <div style={{ fontWeight: 600 }}>Voice</div>
         <div style={{ fontSize: tokens.type.small, color: c.textMuted, marginTop: '4px', lineHeight: 1.5 }}>
-          Talk to Pulse with the hotkey, from anywhere. Speech is turned into text on this Mac (macOS on-device recognition), and replies are
+          Talk to Roo with the hotkey, from anywhere. Speech is turned into text on this Mac (macOS on-device recognition), and replies are
           read with macOS's own voices. The first time, macOS asks for the microphone and speech recognition.
         </div>
       </div>

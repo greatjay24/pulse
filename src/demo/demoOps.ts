@@ -60,7 +60,7 @@ export function demoOutbox(): OutboxSnapshot {
           ...base, id: 'demo-globex-roof-reply', entity: 'globex', account: 'personal', to: ['quotes@example.net'],
           subject: 'Re: Roof repair quote', in_reply_to: 'demo-3@example.net',
           body: 'Thanks for the quote. We would like to go ahead with the two-week start. Can you send the contract?\n\nSam',
-          why: 'You approved the middle quote in Pulse; this tells the roofer.',
+          why: 'You approved the middle quote in Roo; this tells the roofer.',
           created_by: 'globex-lead', created_at: iso(2 * DAY), status: 'sent', sent_at: iso(DAY),
         },
       },

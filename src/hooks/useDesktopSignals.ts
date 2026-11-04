@@ -38,7 +38,7 @@ async function notify(batch: UrgentSignal[]) {
     sendNotification({ title: batch[0].title, body: batch[0].body });
   } else {
     const more = batch.length > 3 ? ` and ${batch.length - 3} more` : '';
-    sendNotification({ title: `${batch.length} urgent items in Pulse`, body: batch.slice(0, 3).map((s) => s.body).join(' · ') + more });
+    sendNotification({ title: `${batch.length} urgent items in Roo`, body: batch.slice(0, 3).map((s) => s.body).join(' · ') + more });
   }
 }
 
@@ -53,7 +53,7 @@ interface DesktopSignals {
 }
 
 // Keeps the menu bar count current and announces each new urgent item once. The first
-// complete read only records what is already there, so launching Pulse never floods.
+// complete read only records what is already there, so launching Roo never floods.
 export function useDesktopSignals({ ready, decisions, signals, cleared, notificationsOn, working, liveSignals }: DesktopSignals) {
   const pending = useRef<UrgentSignal[]>([]);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Claude Code hook: registers the owner's interactive sessions with the org's agents in logs/live,
-so Pulse shows `claude --agent acme-lead` the same way it shows a nightly run.
+so Roo shows `claude --agent acme-lead` the same way it shows a nightly run.
 
 Wired in ~/.claude/settings.json for SessionStart, UserPromptSubmit, Stop, SessionEnd,
 PreToolUse (matcher Agent|Task), SubagentStart and SubagentStop, all running

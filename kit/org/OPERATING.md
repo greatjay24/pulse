@@ -30,7 +30,7 @@ bring a recommendation, not a question.
 
 ## Every session: start
 1. Read your entity's `BRIEF.md`, `status.json`, and `decisions.jsonl` (the owner's answers
-   from Pulse; act on them first, per STATUS_SCHEMA.md).
+   from Roo; act on them first, per STATUS_SCHEMA.md).
 2. Read any live data sources your BRIEF.md lists (repos, data exports, notes). If the owner
    has set up a task tracker, its location is in BRIEF.md too; without one, skip it.
 3. Before touching a repo, read its CLAUDE.md / AGENTS.md. Repo rules beat this file.
@@ -42,7 +42,7 @@ bring a recommendation, not a question.
 1. Rewrite your `status.json` (schema in STATUS_SCHEMA.md) and refresh the BRIEF.md
    "Now" and "Next three moves" sections. Keep both short enough to read on a phone.
 2. Gate items go in status.json: choices in `decisions` (with a stable `id` and a concrete
-   `recommend`), chores only the owner can do in `owner_actions`. Pulse shows them with
+   `recommend`), chores only the owner can do in `owner_actions`. Roo shows them with
    Approve / Reject / Discuss. Don't add items for work you finished.
 3. Commit the org folder: `git -C {{ORG}} add -A && git -C {{ORG}} commit -m "<entity>: <what changed>"`.
 4. Reply with what you did, links, and the decisions you queued.

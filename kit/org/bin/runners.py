@@ -146,7 +146,7 @@ def for_opencode(meta, body):
 
 def codex_rules():
     """The policy as codex execpolicy rules: commands it must never run."""
-    out = ["# Pulse org guardrails for codex (generated from bin/policy.py). Commands matching these",
+    out = ["# Roo org guardrails for codex (generated from bin/policy.py). Commands matching these",
            "# prefixes are blocked without asking. Edit policy.py, not this file.", ""]
     for pattern, why in policy.SHELL_FORBIDDEN:
         out.append(f"prefix_rule(\n    pattern = {json.dumps(pattern)},\n    decision = \"forbidden\",\n"

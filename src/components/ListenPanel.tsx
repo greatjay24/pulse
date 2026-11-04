@@ -8,10 +8,10 @@ import { briefKindOf, briefMe, summaryOf } from '../utils/voice';
 import { StrokeIcon } from './Icons';
 
 // The listening panel: its own small window (index.html#listen), opened by the global hotkey,
-// ⌘K's mic or the Pulse thread's Talk. It transcribes on-device (pulse-listen) and sends the
-// text to Pulse when the owner pauses or presses Enter. Esc drops it. The words stay editable,
+// ⌘K's mic or the Roo thread's Talk. It transcribes on-device (pulse-listen) and sends the
+// text to Roo when the owner pauses or presses Enter. Esc drops it. The words stay editable,
 // so a slip can be fixed, or typed (Wispr Flow dictation works here too).
-// The main window reads Pulse's reply aloud; this panel shows its summary line.
+// The main window reads Roo's reply aloud; this panel shows its summary line.
 
 type Phase = 'starting' | 'listening' | 'typing' | 'sending' | 'waiting' | 'reply' | 'error';
 
@@ -53,7 +53,7 @@ export function ListenPanel() {
       const kind = briefKindOf(message);
       const r = kind ? await briefMe(kind) : await askLead(PULSE_TARGET, message);
       setRunId(r.run_id);
-      setNote(kind ? 'Pulse is writing your brief…' : 'Pulse is on it…');
+      setNote(kind ? 'Roo is writing your brief…' : 'Roo is on it…');
       setPhase('waiting');
     } catch (e) {
       setNote(String(e instanceof Error ? e.message : e));
@@ -114,7 +114,7 @@ export function ListenPanel() {
           setPhase('reply');
           return;
         }
-        if (run && alive) setNote(`Pulse: ${run.step}`);
+        if (run && alive) setNote(`Roo: ${run.step}`);
       } catch {
         // keep polling; the live file appears within a second or two
       }
@@ -148,9 +148,9 @@ export function ListenPanel() {
     starting: 'Starting the microphone…',
     listening: 'Listening. Pause or press Enter to send.',
     typing: 'Type, or dictate. Enter sends.',
-    sending: 'Sending to Pulse…',
-    waiting: note ?? 'Pulse is on it…',
-    reply: 'Pulse',
+    sending: 'Sending to Roo…',
+    waiting: note ?? 'Roo is on it…',
+    reply: 'Roo',
     error: note ?? 'Something went wrong.',
   };
   const listening = phase === 'listening' || phase === 'starting';
@@ -179,7 +179,7 @@ export function ListenPanel() {
         <textarea
           ref={inputRef}
           value={text}
-          placeholder={listening ? 'Say what you need…' : 'Ask Pulse anything'}
+          placeholder={listening ? 'Say what you need…' : 'Ask Roo anything'}
           onChange={(e) => {
             if (phaseRef.current === 'listening' || phaseRef.current === 'starting') invoke('cancel_listening').catch(() => {});
             setPhase('typing');
@@ -199,7 +199,7 @@ export function ListenPanel() {
         {phase === 'reply' && runId ? (
           <>
             <button onClick={() => invoke('open_run_in_main', { runId }).then(hide).catch(() => {})} style={{ background: 'none', border: 'none', padding: 0, color: c.accent, cursor: 'pointer', fontFamily: 'inherit', fontSize: 'inherit' }}>
-              Open in Pulse
+              Open in Roo
             </button>
             <button onClick={start} style={{ background: 'none', border: 'none', padding: 0, color: c.accent, cursor: 'pointer', fontFamily: 'inherit', fontSize: 'inherit' }}>
               Ask something else

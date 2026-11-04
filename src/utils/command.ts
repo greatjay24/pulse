@@ -7,6 +7,9 @@ import { DEMO } from './orgSource';
 // sign-in and answers at once with its run id. Everything after that (Working now,
 // Conversations, notifications) reads the run's live file and transcript like any other run.
 
+// What the assistant is called wherever a person reads it. Its agent id and the ask.py target
+// stay `pulse`, so existing runs, logs and dispatch keep working.
+export const ASSISTANT_NAME = 'Roo';
 export const PULSE_TARGET = 'pulse'; // the front door: decides who handles it (ask.py target "pulse")
 export const COS_TARGET = 'chief-of-staff'; // the chief of staff, by name
 
@@ -26,7 +29,7 @@ function names(e: PortfolioEntity): string[] {
 }
 
 // "Acme: build a pricing page" goes straight to Acme's lead, and so does "@acme …"; anything
-// else (a business merely named included) goes to Pulse, the front door, which picks the lead.
+// else (a business merely named included) goes to Roo, the front door, which picks the lead.
 export function routeOf(text: string, entities: PortfolioEntity[]): Route {
   const trimmed = text.trim();
   const leads = entities.filter((e) => e.lead);
@@ -36,7 +39,7 @@ export function routeOf(text: string, entities: PortfolioEntity[]): Route {
     if (['chief of staff', 'chief-of-staff', 'cos', 'chief'].includes(head)) {
       return { target: COS_TARGET, message: trimmed.slice(prefix[0].length), why: 'prefix' };
     }
-    if (['pulse', 'jarvis', 'org'].includes(head)) {
+    if (['roo', 'pulse', 'jarvis', 'org'].includes(head)) {
       return { target: PULSE_TARGET, message: trimmed.slice(prefix[0].length), why: 'prefix' };
     }
     const hit = leads.find((e) => names(e).includes(head));
@@ -106,9 +109,14 @@ export function suggestions(entities: PortfolioEntity[]): string[] {
   return out;
 }
 
+// An agent id as a person reads it: the front door's id shows as the assistant's name.
+export function agentName(agent: string): string {
+  return agent === PULSE_TARGET ? ASSISTANT_NAME : agent;
+}
+
 // The lead a target talks to, for labels.
 export function leadOf(target: string, entities: PortfolioEntity[], chief: string | null): string {
-  if (target === PULSE_TARGET) return 'Pulse';
+  if (target === PULSE_TARGET) return ASSISTANT_NAME;
   if (target === COS_TARGET) return chief ?? 'chief-of-staff';
   return entities.find((e) => e.id === target)?.lead ?? target;
 }

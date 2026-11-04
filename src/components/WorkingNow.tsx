@@ -4,6 +4,7 @@ import { LiveRun, PortfolioSnapshot, TeamMember } from '../types';
 import { useLive } from '../hooks/useLive';
 import { elapsed, kindLabel, ms, stateLabel, stripRuns, teamLine } from '../utils/live';
 import { EntityMark, SectionLabel } from './BoardUI';
+import { agentName } from '../utils/command';
 
 // Ticks once a second while something is on screen, for elapsed times.
 function useNow(active: boolean) {
@@ -103,7 +104,7 @@ function RunCard({ run, snapshot, now, onOpen }: { run: LiveRun; snapshot: Portf
       <span style={{ flex: 1, minWidth: 0 }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: tokens.type.small, color: c.textDim }}>
           <LiveDot color={tone} pulsing={run.state === 'running'} />
-          <span style={{ fontWeight: 600, color: c.text }}>{run.agent}</span>
+          <span style={{ fontWeight: 600, color: c.text }}>{agentName(run.agent)}</span>
           <span style={{ color: tone }}>{stateLabel(run)}</span>
           <span style={{ marginLeft: 'auto', fontVariantNumeric: 'tabular-nums' }}>{elapsed(ms(run.started), end)}</span>
         </span>

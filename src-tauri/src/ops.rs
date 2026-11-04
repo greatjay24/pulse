@@ -6,9 +6,9 @@
 // is validated here and written atomically.
 //
 // The send guard (bin/sendguard.py has the full design): the owner's click is the only
-// thing that can send. On Send, Pulse re-reads the message, checks it still hashes to what
+// thing that can send. On Send, Roo re-reads the message, checks it still hashes to what
 // the owner was shown, signs a one-time approval with an Ed25519 key whose secret half lives
-// in the macOS Keychain (an item this process created, so only Pulse can read it without the
+// in the macOS Keychain (an item this process created, so only Roo can read it without the
 // owner seeing a prompt), and hands the approval to outbox_send.py on stdin. outbox_send.py
 // refuses anything without a valid, unexpired, unused approval for that exact content.
 
@@ -274,7 +274,7 @@ fn keychain_seed() -> Result<[u8; 32], String> {
         Ok(bytes) => bytes.try_into().map_err(|_| "the send key in the Keychain is malformed".to_string()),
         Err(e) if e.code() == -25300 => {
             // errSecItemNotFound: first send on this Mac. Created by this process, so the
-            // item's access list trusts Pulse alone.
+            // item's access list trusts Roo alone.
             let mut seed = [0u8; 32];
             getrandom::getrandom(&mut seed).map_err(|e| e.to_string())?;
             set_generic_password(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT, &seed).map_err(|e| format!("could not save the send key: {}", e))?;
@@ -301,7 +301,7 @@ fn ensure_pubkey(root: &Path, key: &SigningKey) -> Result<Option<String>, String
     let tmp = path.with_extension("pub.tmp");
     fs::write(&tmp, format!("{}\n", ours)).map_err(|e| e.to_string())?;
     fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
-    Ok(current.map(|_| "The send key file had been changed by something other than Pulse. Pulse restored it.".to_string()))
+    Ok(current.map(|_| "The send key file had been changed by something other than Roo. Roo restored it.".to_string()))
 }
 
 pub(crate) fn approval(key: &SigningKey, id: &str, content: &str, nonce: &str, exp: i64) -> String {
@@ -510,7 +510,7 @@ pub async fn check_connections() -> Result<String, String> {
 mod ops_tests {
     use super::*;
 
-    // The same constants as bin/test_outbox.py: Pulse signs, Python verifies.
+    // The same constants as bin/test_outbox.py: Roo signs, Python verifies.
     const PY_SIG: &str = "1bd81ad2d9c09a4be45b085b9afe9f4bd4631660a894a0d283f3d36061f83d9b91e3ea32f0b5fe2af79540453263bd851d012f2b4824245dca81497e1b35a50d";
     const PY_HASH: &str = "56815c408ccd028772d47aa56846591b90c3b4c5994b34aeaa736d4f08d37a9d";
 
@@ -619,7 +619,7 @@ mod ops_tests {
         }
         assert!(save_goal_at(&root, "evil", &serde_json::json!({"id": "acme-cash"})).is_err());
         assert!(save_goal_at(&root, "Acme", &serde_json::json!({"id": "acme-cash"})).is_err());
-        // `source` is not editable from Pulse, so an attempt to change it is ignored, not applied.
+        // `source` is not editable from Roo, so an attempt to change it is ignored, not applied.
         let kept = save_goal_at(&root, "acme", &serde_json::json!({"id": "acme-cash", "source": "vibes"})).unwrap();
         assert_eq!(kept["source"], "stripe");
         let _ = fs::remove_dir_all(&root);

@@ -9,9 +9,9 @@ import { IS_TAURI } from '../utils/orgSource';
 import { PageHeader } from './BoardUI';
 import { Icon } from './Icons';
 
-// Real Claude Code sessions in Pulse tabs: each tab is a pseudo-terminal (Rust `pty_open`)
+// Real Claude Code sessions in Roo tabs: each tab is a pseudo-terminal (Rust `pty_open`)
 // running `claude --agent <lead>` (or plain `claude`) in ~ through the owner's login shell,
-// so their environment and sign-in are the ones they use every day. Tabs live while Pulse
+// so their environment and sign-in are the ones they use every day. Tabs live while Roo
 // runs, including when another page is showing; closing a tab ends its session.
 
 export interface TerminalRequest {
@@ -70,7 +70,7 @@ function TerminalView({ tab, active, onOpened, onEnded }: { tab: Tab; active: bo
     t.open(host.current);
     term.current = t;
     fit.current = f;
-    // Cmd+C copies a selection (otherwise it is ^C for claude); Cmd+K stays Pulse's.
+    // Cmd+C copies a selection (otherwise it is ^C for claude); Cmd+K stays Roo's.
     t.attachCustomKeyEventHandler((e) => {
       if (e.type === 'keydown' && e.metaKey && e.key === 'c' && t.hasSelection()) {
         navigator.clipboard.writeText(t.getSelection()).catch(() => {});
@@ -239,7 +239,7 @@ export function TerminalPage({ agents, request, visible }: { agents: string[]; r
           </div>
         }
       />
-      {!IS_TAURI && <div style={{ color: c.textMuted }}>The terminal runs in the Pulse desktop app.</div>}
+      {!IS_TAURI && <div style={{ color: c.textMuted }}>The terminal runs in the Roo desktop app.</div>}
       {notice && <div style={{ color: c.danger, fontSize: tokens.type.small, marginBottom: '10px' }}>{notice}</div>}
 
       {tabs.length > 0 && (

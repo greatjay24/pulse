@@ -8,8 +8,8 @@
     <key>ProgramArguments</key>
     <array>
         <string>open</string>
-        <string>-a</string>
-        <string>Pulse</string>
+        <string>-b</string>
+        <string>com.pulse.app</string>
     </array>
 
     <!-- Run at 7:30 AM every day -->

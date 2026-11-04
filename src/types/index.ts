@@ -666,7 +666,7 @@ export interface PortfolioEntityReport {
 export interface PortfolioSnapshot {
   registry: PortfolioRegistry | null;
   registry_error: string | null;
-  setup_needed?: boolean; // no ~/portfolio/portfolio.json yet: Pulse shows the welcome screen
+  setup_needed?: boolean; // no ~/portfolio/portfolio.json yet: Roo shows the welcome screen
   entities: PortfolioEntityReport[];
   week: string | null;
   read_at: string;
@@ -739,7 +739,7 @@ export interface ActivitySnapshot {
 // `read_transcript` and `list_transcripts` read them)
 // ==========================================
 
-// `stopped` is Pulse's word for a run that says it is working but whose process is gone.
+// `stopped` is Roo's word for a run that says it is working but whose process is gone.
 // `queued` is a chat message waiting for the lead's current reply to end (ask.py).
 export type LiveState = 'running' | 'idle' | 'queued' | 'finished' | 'failed' | 'stopped';
 

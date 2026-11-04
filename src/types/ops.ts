@@ -59,7 +59,7 @@ export interface OutboxMessage {
   result?: Record<string, unknown> | null;
 }
 
-// What Pulse may change in an item, by kind (bin/outbox.py EDITABLE is the authority).
+// What Roo may change in an item, by kind (bin/outbox.py EDITABLE is the authority).
 export type OutboxEdit = Partial<Pick<OutboxMessage, 'to' | 'cc' | 'subject' | 'body' | 'title' | 'link'>>;
 
 export interface OutboxEntry {
@@ -69,7 +69,7 @@ export interface OutboxEntry {
 
 export interface OutboxSnapshot {
   items: OutboxEntry[];
-  key: string | null; // fingerprint of the send key, once Pulse has made one
+  key: string | null; // fingerprint of the send key, once Roo has made one
   errors: string[];
   read_at: string;
 }

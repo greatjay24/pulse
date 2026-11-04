@@ -13,7 +13,7 @@ Like the night shift, the session starts in the org folder and reads stay inside
 entity's "dirs" (see runners.py).
 
 Interactive sessions ask before anything outside the guardrails, because you are there to
-answer. Only Claude Code sessions show under Working now in Pulse (through its hooks);
+answer. Only Claude Code sessions show under Working now in Roo (through its hooks);
 codex and opencode sessions don't report live, though everything they change does.
 """
 import json, os, pathlib, sys

@@ -42,7 +42,7 @@ Only if your runner can deploy agents. If your run says it can't, do the same jo
 ## Your reports
 - Rewrite `{{ORG}}/{{PATH}}/status.json` per `{{ORG}}/STATUS_SCHEMA.md` at the end of every session.
 - Gate items go in `decisions` (with a stable `id`, a concrete `recommend` and an `on_approve` line) or `owner_actions`.
-- When you carry out an answer from Pulse, report back with
+- When you carry out an answer from Roo, report back with
   `python3 {{ORG}}/bin/act.py --record {{ENTITY_ID}} <decision-id> done|reply --note "<what you did + link>"`.
   Never edit decisions.jsonl by hand.
 

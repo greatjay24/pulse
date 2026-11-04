@@ -2,7 +2,7 @@
 
 runners.py hands these to each agent CLI (Claude Code: --allowedTools / --disallowedTools;
 opencode: a permission block in each agent file; codex: execpolicy rules), so a
-scheduled or Pulse-triggered run physically cannot send email, delete data, force-push,
+scheduled or Roo-triggered run physically cannot send email, delete data, force-push,
 merge, or deploy to production. Edit to taste; keep the NEVER and NEEDS_YES lists.
 """
 

@@ -9,7 +9,7 @@
 Each run is a headless lead run on the org's runner (portfolio.json "runner", per-entity
 override; see runners.py): Claude Code, Codex or opencode, under the allow/deny lists in
 policy.py, so a scheduled run cannot send, pay, merge, or deploy to production. Gate items reach the owner as decisions in each status.json, which
-Pulse shows (and, if an optional task tracker is set up, as tracker tasks).
+Roo shows (and, if an optional task tracker is set up, as tracker tasks).
 
 Optional integrations run only when present:
     <org>/sales/sales_learn.py     a read-only sales-learning pass before the directors start
@@ -99,7 +99,7 @@ def run(agent, prompt, model, max_turns=60, timeout=1800, kind="nightly", entity
             if not claude:
                 live.set(runner=adapter.name)
                 # Anything written into the runner's own config folder is said out loud: in the
-                # transcript (Pulse's Conversations) and in the night shift's log.
+                # transcript (Roo's Conversations) and in the night shift's log.
                 notes = [{"t": "tool", "at": now_iso(), "name": "Write", "summary": f"Installed agent file {short_path(p)}"}
                          for p in adapter.ensure_agents([agent])]
                 notes += [{"t": "error", "at": now_iso(), "text": w} for w in adapter.warnings()]
