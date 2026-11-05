@@ -869,6 +869,7 @@ function DashboardContent() {
     names: entityNames,
     ownerName: ownerNameOf(portfolio.snapshot?.registry),
     onOpen: (draft) => openConversation({ entity: PULSE_THREAD, draft }),
+    realOrg: !DEMO,
   });
   // The demo org never reaches the menu bar or notifications: they are for the owner's real org.
   // Without a tracker the picture is complete once ~/portfolio has been read.

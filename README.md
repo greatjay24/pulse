@@ -173,6 +173,12 @@ back to Roo, which sums them up in the same thread. It also keeps follow-ups
   (see Voice below). A streamed reply is read a sentence at a time with any of them. The first line by default
   (Roo writes its one-sentence answer there), or the whole reply, or off. Voice, rate and
   the hotkey are in Settings › General. Esc, Stop, or muting from the menu bar silences it.
+- **Meeting prep**: the org's watcher (`bin/meeting_prep.py`) writes a brief before each real
+  meeting (`watch/prep/`). Roo offers it 10 minutes before ("your meeting with X is in 10
+  minutes. Want a quick brief?"), and at 8pm the night before for meetings before 9am, quiet
+  hours or not. Clicking it says the two-sentence version and opens the Roo thread on it.
+  While open, Roo writes `watch/desktop.json` each minute (open, screen locked, what it
+  offered); when that goes stale the watcher sends the brief to Telegram instead.
 - First use asks for the microphone and speech recognition. On-device speech needs the
   language's Dictation model (turn on Dictation in System Settings › Keyboard once).
   `scripts/build-listen.sh` builds the helper; `tauri build` runs it.
