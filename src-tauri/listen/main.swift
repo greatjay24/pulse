@@ -13,7 +13,11 @@
 // on "stop" or EOF on stdin, on SIGINT or SIGTERM, or after --max seconds. "cancel" on stdin
 // exits at once with no final.
 //
-// Usage: pulse-listen [--locale en-US] [--pause 1.6] [--max 60]
+// --pause 0 is press-to-send: silence never finishes it, only "stop" (or --max) does. The
+// recognizer may still close a stretch of speech on its own after a long quiet spell; the
+// helper keeps what was said and starts a new stretch, so a pause never cuts the owner off.
+//
+// Usage: pulse-listen [--locale en-US] [--pause 1.6 | --pause 0] [--max 60]
 //
 // The usage strings the permission prompts show are embedded in this binary's __info_plist
 // (see scripts/build-listen.sh) and repeated in Roo's own Info.plist.
@@ -43,19 +47,24 @@ func option(_ name: String, _ fallback: String) -> String {
 }
 
 let localeID = option("--locale", Locale.current.identifier)
-let pauseSecs = max(0.6, Double(option("--pause", "1.6")) ?? 1.6)
-let maxSecs = max(5.0, Double(option("--max", "60")) ?? 60)
+let pauseArg = Double(option("--pause", "1.6")) ?? 1.6
+let manual = pauseArg <= 0                       // press-to-send: only "stop" finishes
+let pauseSecs = max(0.6, pauseArg)
+let maxSecs = min(600.0, max(5.0, Double(option("--max", "60")) ?? 60))
 
 final class Listener {
     let engine = AVAudioEngine()
-    let request = SFSpeechAudioBufferRecognitionRequest()
+    private let lock = NSLock()
+    private var request = SFSpeechAudioBufferRecognitionRequest()
     var task: SFSpeechRecognitionTask?
     var recognizer: SFSpeechRecognizer?
+    var committed = ""        // stretches the recognizer already closed (press-to-send)
     var text = ""
     var lastChange = Date()
     let started = Date()
     var finishing = false
     var lastLevel = Date.distantPast
+    var restarts = 0
 
     func start() {
         guard let rec = SFSpeechRecognizer(locale: Locale(identifier: localeID)) ?? SFSpeechRecognizer() else {
@@ -66,49 +75,73 @@ final class Listener {
         }
         guard rec.isAvailable else { fail("Speech recognition is unavailable right now.") }
         recognizer = rec
-        request.requiresOnDeviceRecognition = true
-        request.shouldReportPartialResults = true
-        if #available(macOS 13, *) { request.addsPunctuation = true }
 
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0 else { fail("No microphone found.") }
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             guard let self = self else { return }
-            self.request.append(buffer)
+            self.currentRequest().append(buffer)
             self.level(buffer)
         }
         engine.prepare()
         do { try engine.start() } catch { fail("Couldn't start the microphone: \(error.localizedDescription)") }
 
-        task = rec.recognitionTask(with: request) { [weak self] result, error in
-            guard let self = self else { return }
-            DispatchQueue.main.async {
-                if let r = result {
-                    let t = r.bestTranscription.formattedString
-                    if t != self.text {
-                        self.text = t
-                        self.lastChange = Date()
-                        emit(["type": "partial", "text": t])
-                    }
-                    if r.isFinal { self.done() }
-                } else if let e = error {
-                    // After endAudio an error with no result means nothing was heard.
-                    if self.finishing { self.done() } else { fail(e.localizedDescription) }
-                }
-            }
-        }
+        beginStretch()
         emit(["type": "ready"])
 
         Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
             guard let self = self, !self.finishing else { return }
             let quiet = Date().timeIntervalSince(self.lastChange)
-            if (!self.text.isEmpty && quiet >= pauseSecs) || Date().timeIntervalSince(self.started) >= maxSecs {
+            if (!manual && !self.text.isEmpty && quiet >= pauseSecs) || Date().timeIntervalSince(self.started) >= maxSecs {
                 self.finish()
             }
         }
     }
 
+    func currentRequest() -> SFSpeechAudioBufferRecognitionRequest {
+        lock.lock(); defer { lock.unlock() }
+        return request
+    }
+
+    // One recognition task. Press-to-send starts another when the recognizer closes one early.
+    func beginStretch() {
+        guard let rec = recognizer else { return }
+        let req = SFSpeechAudioBufferRecognitionRequest()
+        req.requiresOnDeviceRecognition = true
+        req.shouldReportPartialResults = true
+        if #available(macOS 13, *) { req.addsPunctuation = true }
+        lock.lock(); request = req; lock.unlock()
+        let prefix = committed
+        task = rec.recognitionTask(with: req) { [weak self] result, error in
+            guard let self = self else { return }
+            DispatchQueue.main.async {
+                guard req === self.currentRequest() else { return } // a stretch already replaced
+                if let r = result {
+                    let t = joined(prefix, r.bestTranscription.formattedString)
+                    if t != self.text {
+                        self.text = t
+                        self.lastChange = Date()
+                        emit(["type": "partial", "text": t])
+                    }
+                    if r.isFinal { self.stretchEnded() }
+                } else if error != nil {
+                    // After endAudio an error with no result means nothing more was heard.
+                    if self.finishing { self.done() }
+                    else if manual { self.stretchEnded() }
+                    else { fail(error!.localizedDescription) }
+                }
+            }
+        }
+    }
+
+    func stretchEnded() {
+        if finishing || !manual { done(); return }
+        restarts += 1
+        guard restarts <= 200 else { finish(); return }
+        committed = text
+        beginStretch()
+    }
     func level(_ buffer: AVAudioPCMBuffer) {
         guard Date().timeIntervalSince(lastLevel) > 0.1, let data = buffer.floatChannelData?[0] else { return }
         lastLevel = Date()
@@ -127,7 +160,7 @@ final class Listener {
         finishing = true
         engine.stop()
         engine.inputNode.removeTap(onBus: 0)
-        request.endAudio()
+        currentRequest().endAudio()
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in self?.done() }
     }
 
@@ -135,6 +168,11 @@ final class Listener {
         emit(["type": "final", "text": text.trimmingCharacters(in: .whitespacesAndNewlines)])
         exit(0)
     }
+}
+
+func joined(_ a: String, _ b: String) -> String {
+    let a = a.trimmingCharacters(in: .whitespaces), b = b.trimmingCharacters(in: .whitespaces)
+    return a.isEmpty ? b : b.isEmpty ? a : a + " " + b
 }
 
 let listener = Listener()

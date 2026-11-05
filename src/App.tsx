@@ -45,6 +45,7 @@ import { CommandBox } from './components/CommandBox';
 import { TerminalPage, TerminalRequest } from './components/TerminalPage';
 import { chiefOf, frontDoorOf } from './utils/command';
 import { useVoice } from './hooks/useVoice';
+import { useReplyVoice } from './hooks/useReplyVoice';
 import { stopSpeaking } from './utils/voice';
 import { useProactiveVoice } from './hooks/useProactiveVoice';
 import { ownerNameOf } from './utils/proactive';
@@ -853,6 +854,7 @@ function DashboardContent() {
   const { signals, cleared } = urgentSignals(boardItems, portfolio.tracker);
   const { live } = useLive();
   useVoice(DEMO ? null : live, frontDoorOf(portfolio.snapshot?.registry));
+  useReplyVoice();
   // Roo speaks first (interrupts, the morning brief); a click opens its thread with a message ready.
   const entityNames = useMemo(() => {
     const out: Record<string, string> = {};
