@@ -19,6 +19,9 @@ if [ ! -d "$APP_PATH" ]; then
     exit 1
 fi
 
+# A stable code identity keeps the Microphone and Speech Recognition grants across installs.
+./scripts/sign-local.sh "$APP_PATH"
+
 echo "Installing Roo to /Applications..."
 rm -rf /Applications/Pulse.app
 cp -R "$APP_PATH" /Applications/
