@@ -45,6 +45,8 @@ import { CommandBox } from './components/CommandBox';
 import { TerminalPage, TerminalRequest } from './components/TerminalPage';
 import { chiefOf, frontDoorOf } from './utils/command';
 import { useVoice } from './hooks/useVoice';
+import { useReplyVoice } from './hooks/useReplyVoice';
+import { stopSpeaking } from './utils/voice';
 import { useProactiveVoice } from './hooks/useProactiveVoice';
 import { ownerNameOf } from './utils/proactive';
 import { PULSE_THREAD } from './utils/conversations';
@@ -775,9 +777,10 @@ function DashboardContent() {
     }
   }, []);
 
-  // T toggles TV mode, Esc leaves it, Backspace goes from an entity back to where it opened.
+  // T toggles TV mode, Esc leaves it (and silences Roo), Backspace goes from an entity back to where it opened.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') stopSpeaking().catch(() => {});
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -851,6 +854,7 @@ function DashboardContent() {
   const { signals, cleared } = urgentSignals(boardItems, portfolio.tracker);
   const { live } = useLive();
   useVoice(DEMO ? null : live, frontDoorOf(portfolio.snapshot?.registry));
+  useReplyVoice();
   // Roo speaks first (interrupts, the morning brief); a click opens its thread with a message ready.
   const entityNames = useMemo(() => {
     const out: Record<string, string> = {};
@@ -865,6 +869,7 @@ function DashboardContent() {
     names: entityNames,
     ownerName: ownerNameOf(portfolio.snapshot?.registry),
     onOpen: (draft) => openConversation({ entity: PULSE_THREAD, draft }),
+    realOrg: !DEMO,
   });
   // The demo org never reaches the menu bar or notifications: they are for the owner's real org.
   // Without a tracker the picture is complete once ~/portfolio has been read.

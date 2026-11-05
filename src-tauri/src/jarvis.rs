@@ -1,7 +1,8 @@
 // ==========================================
 // Voice and the front door: speak replies, listen from a global hotkey, brief on demand
 // ==========================================
-// Speech out is macOS's own `say` (installed voices, no paid TTS). Speech in is pulse-listen,
+// Speech out is Roo's own British voice (Kokoro, local: tts.rs) or macOS's `say` (installed
+// voices), which is also the fallback whenever Kokoro isn't installed or fails. Speech in is pulse-listen,
 // a small Swift helper (src-tauri/listen) that runs the Speech framework on-device and prints
 // JSON lines; its events reach every window as `pulse://listen`. The hotkey opens the small
 // "listen" window (index.html#listen), which sends the transcript to the front door.
@@ -24,6 +25,9 @@ const BRIEF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 #[derive(Default)]
 pub(crate) struct Voice {
     speaking: Mutex<Option<Child>>,
+    kokoro: super::tts::Kokoro,
+    // A reply streamed to `say`: its sentences, read one after another as they arrive.
+    say_stream: Mutex<Option<SayStream>>,
     listening: Mutex<Option<(Child, Option<ChildStdin>)>>,
     hotkey: Mutex<Option<Shortcut>>,
 }
@@ -61,11 +65,14 @@ fn stop_child(slot: &Mutex<Option<Child>>) {
     }
 }
 
-#[tauri::command]
-pub(crate) fn speak(state: tauri::State<'_, Voice>, text: String, voice: Option<String>, rate: Option<u32>) -> Result<(), String> {
-    let args = say_args(voice.as_deref(), rate)?;
-    let text: String = text.chars().filter(|c| *c != '\0').take(SPEAK_MAX_CHARS).collect();
-    stop_child(&state.speaking);
+fn clean(text: &str) -> String {
+    text.chars().filter(|c| *c != '\0').take(SPEAK_MAX_CHARS).collect()
+}
+
+// Read `text` with `say`, replacing whatever `say` was reading.
+fn say_now(slot: &Mutex<Option<Child>>, text: &str, voice: Option<&str>, rate: Option<u32>) -> Result<(), String> {
+    let args = say_args(voice, rate)?;
+    stop_child(slot);
     if text.trim().is_empty() {
         return Ok(());
     }
@@ -79,12 +86,137 @@ pub(crate) fn speak(state: tauri::State<'_, Voice>, text: String, voice: Option<
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(text.as_bytes());
     }
-    *state.speaking.lock().unwrap() = Some(child);
+    *slot.lock().unwrap() = Some(child);
     Ok(())
 }
 
-// `say` still reading something out.
+// When Kokoro can't finish something, `say` reads it instead.
+fn fallback(app: &AppHandle) -> super::tts::Fallback {
+    let app = app.clone();
+    std::sync::Arc::new(move |p: super::tts::Pending| {
+        let state = app.state::<Voice>();
+        let _ = say_now(&state.speaking, &p.text, p.mac_voice.as_deref(), p.rate);
+    })
+}
+
+pub(crate) struct SayStream {
+    id: u64,
+    voice: Option<String>,
+    rate: Option<u32>,
+    queue: std::collections::VecDeque<String>,
+    ended: bool,
+}
+
+// Reads a streamed reply with `say`, a sentence at a time, until it ends or is stopped (stop
+// clears the stream and kills the current `say`).
+fn say_stream_worker(app: AppHandle, id: u64) {
+    let tick = std::time::Duration::from_millis(30);
+    loop {
+        let state = app.state::<Voice>();
+        let next = {
+            let mut slot = state.say_stream.lock().unwrap();
+            match slot.as_mut() {
+                // Whatever has queued up goes in one `say`: fewer gaps between sentences.
+                Some(st) if st.id == id => match st.queue.is_empty() {
+                    false => Some((st.queue.drain(..).collect::<Vec<_>>().join(" "), st.voice.clone(), st.rate)),
+                    true if st.ended => {
+                        *slot = None;
+                        return;
+                    }
+                    true => None,
+                },
+                _ => return, // stopped or replaced
+            }
+        };
+        let Some((text, voice, rate)) = next else {
+            std::thread::sleep(tick);
+            continue;
+        };
+        if say_now(&state.speaking, &text, voice.as_deref(), rate).is_err() {
+            continue;
+        }
+        // Wait for this sentence (or a stop) before the next.
+        loop {
+            {
+                let mut child = state.speaking.lock().unwrap();
+                match child.as_mut().map(|c| c.try_wait()) {
+                    Some(Ok(None)) => {}
+                    _ => break,
+                }
+            }
+            std::thread::sleep(tick);
+        }
+    }
+}
+
+// Everything stops: `say`, Roo's voice and its queue, a half-collected stream.
+fn silence(state: &Voice) {
+    stop_child(&state.speaking);
+    state.kokoro.stop();
+    *state.say_stream.lock().unwrap() = None;
+}
+
+// engine: "british-1" / "british-2" (Roo's voice) or "mac" (`say` with `voice` and `rate`).
+#[tauri::command]
+pub(crate) fn speak(app: AppHandle, state: tauri::State<'_, Voice>, text: String, voice: Option<String>, rate: Option<u32>, engine: Option<String>) -> Result<(), String> {
+    say_args(voice.as_deref(), rate)?;
+    let text = clean(&text);
+    silence(&state);
+    if text.trim().is_empty() {
+        return Ok(());
+    }
+    if let Some(e) = engine.as_deref().filter(|e| super::tts::is_kokoro_voice(e)) {
+        if state.kokoro.speak(&text, e, voice.clone(), rate, fallback(&app)).is_ok() {
+            return Ok(());
+        }
+    }
+    say_now(&state.speaking, &text, voice.as_deref(), rate)
+}
+
+// A reply arriving in pieces (streamed reply text): begin, append as text comes, end. Each
+// sentence is spoken as soon as it's complete, with Roo's voice or with `say`.
+#[tauri::command]
+pub(crate) fn speak_begin(app: AppHandle, state: tauri::State<'_, Voice>, voice: Option<String>, rate: Option<u32>, engine: Option<String>) -> Result<u64, String> {
+    say_args(voice.as_deref(), rate)?;
+    silence(&state);
+    if let Some(e) = engine.as_deref().filter(|e| super::tts::is_kokoro_voice(e)) {
+        if let Ok(id) = state.kokoro.begin(e, voice.clone(), rate, fallback(&app)) {
+            return Ok(id);
+        }
+    }
+    let id = state.kokoro.new_id();
+    *state.say_stream.lock().unwrap() = Some(SayStream { id, voice, rate, queue: Default::default(), ended: false });
+    std::thread::spawn(move || say_stream_worker(app, id));
+    Ok(id)
+}
+
+// Text appended here is already cleaned and cut at sentence ends (SpokenStream in voiceText.ts).
+#[tauri::command]
+pub(crate) fn speak_append(state: tauri::State<'_, Voice>, id: u64, text: String) {
+    let text = clean(&text);
+    if let Some(st) = state.say_stream.lock().unwrap().as_mut().filter(|st| st.id == id) {
+        if !text.trim().is_empty() && st.queue.len() < 200 {
+            st.queue.push_back(text);
+        }
+        return;
+    }
+    state.kokoro.append(id, &text);
+}
+
+#[tauri::command]
+pub(crate) fn speak_end(state: tauri::State<'_, Voice>, id: u64) {
+    if let Some(st) = state.say_stream.lock().unwrap().as_mut().filter(|st| st.id == id) {
+        st.ended = true;
+        return;
+    }
+    state.kokoro.end(id);
+}
+
+// Something is being read out (by either engine).
 pub(crate) fn is_speaking(state: &Voice) -> bool {
+    if state.kokoro.is_speaking() || state.say_stream.lock().unwrap().is_some() {
+        return true;
+    }
     let mut slot = state.speaking.lock().unwrap();
     match slot.as_mut().map(|c| c.try_wait()) {
         Some(Ok(None)) => true,
@@ -98,7 +230,18 @@ pub(crate) fn is_speaking(state: &Voice) -> bool {
 
 #[tauri::command]
 pub(crate) fn stop_speaking(state: tauri::State<'_, Voice>) {
-    stop_child(&state.speaking);
+    silence(&state);
+}
+
+// Load Roo's voice ahead of the first reply (the model takes about a second).
+#[tauri::command]
+pub(crate) fn voice_warm(app: AppHandle, state: tauri::State<'_, Voice>) -> Result<(), String> {
+    state.kokoro.warm(fallback(&app))
+}
+
+#[tauri::command]
+pub(crate) fn voice_engine_status() -> super::tts::VoiceEngineStatus {
+    super::tts::status()
 }
 
 #[derive(serde::Serialize, Debug, PartialEq)]
@@ -156,15 +299,10 @@ fn stop_listening_now(state: &Voice, how: &str) {
 }
 
 #[tauri::command]
-pub(crate) fn start_listening(app: AppHandle, state: tauri::State<'_, Voice>, locale: Option<String>) -> Result<(), String> {
-    stop_listening_now(&state, "cancel");
+pub(crate) fn start_listening(app: AppHandle, state: tauri::State<'_, Voice>, locale: Option<String>, pause: Option<f64>, max: Option<u32>) -> Result<(), String> {
     let mut cmd = Command::new(listen_helper()?);
-    if let Some(l) = locale.filter(|l| !l.is_empty()) {
-        if !(l.len() <= 16 && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')) {
-            return Err("invalid locale".to_string());
-        }
-        cmd.args(["--locale", &l]);
-    }
+    cmd.args(listen_args(locale.as_deref(), pause, max)?);
+    stop_listening_now(&state, "cancel");
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -187,6 +325,31 @@ pub(crate) fn start_listening(app: AppHandle, state: tauri::State<'_, Voice>, lo
     Ok(())
 }
 
+// pulse-listen's flags. pause: seconds of silence that send (0.6 to 10), or 0 for press-to-send,
+// where only the hotkey or Enter sends; max: the longest one listen may run, in seconds.
+pub(crate) fn listen_args(locale: Option<&str>, pause: Option<f64>, max: Option<u32>) -> Result<Vec<String>, String> {
+    let mut args = Vec::new();
+    if let Some(l) = locale.filter(|l| !l.is_empty()) {
+        if !(l.len() <= 16 && l.starts_with(|c: char| c.is_ascii_alphabetic()) && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')) {
+            return Err("invalid locale".to_string());
+        }
+        args.extend(["--locale".to_string(), l.to_string()]);
+    }
+    if let Some(p) = pause {
+        if !(p == 0.0 || (0.6..=10.0).contains(&p)) {
+            return Err("pause must be 0 (press to send) or 0.6 to 10 seconds".to_string());
+        }
+        args.extend(["--pause".to_string(), format!("{}", p)]);
+    }
+    if let Some(m) = max {
+        if !(10..=600).contains(&m) {
+            return Err("max must be 10 to 600 seconds".to_string());
+        }
+        args.extend(["--max".to_string(), m.to_string()]);
+    }
+    Ok(args)
+}
+
 // Enter: stop now and keep what was said (the helper sends its final transcript).
 #[tauri::command]
 pub(crate) fn stop_listening(state: tauri::State<'_, Voice>) {
@@ -200,7 +363,17 @@ pub(crate) fn cancel_listening(state: tauri::State<'_, Voice>) {
 }
 
 pub(crate) fn show_listen_panel(app: &AppHandle) {
+    open_panel(app, false);
+}
+
+// The hotkey while the panel is up doesn't start over: the panel decides (press-to-send sends,
+// a finished reply starts a new listen). Released matters to hold-to-talk.
+fn open_panel(app: &AppHandle, from_hotkey: bool) {
     if let Some(w) = app.get_webview_window(LISTEN_WINDOW) {
+        if from_hotkey && w.is_visible().unwrap_or(false) {
+            let _ = app.emit_to(LISTEN_WINDOW, "pulse://listen-hotkey", "pressed");
+            return;
+        }
         let _ = w.show();
         let _ = w.set_focus();
         let _ = app.emit_to(LISTEN_WINDOW, "pulse://listen-open", ());
@@ -269,8 +442,11 @@ pub(crate) fn set_listen_hotkey(app: AppHandle, shortcut: String) -> Result<Stri
 }
 
 pub(crate) fn on_shortcut(app: &AppHandle, _shortcut: &Shortcut, state: ShortcutState) {
-    if state == ShortcutState::Pressed {
-        show_listen_panel(app);
+    match state {
+        ShortcutState::Pressed => open_panel(app, true),
+        ShortcutState::Released => {
+            let _ = app.emit_to(LISTEN_WINDOW, "pulse://listen-hotkey", "released");
+        }
     }
 }
 
@@ -282,6 +458,7 @@ pub(crate) fn setup(app: &AppHandle) {
 
 pub(crate) fn close_all(state: &Voice) {
     stop_child(&state.speaking);
+    state.kokoro.shutdown();
     stop_listening_now(state, "cancel");
 }
 
@@ -332,6 +509,18 @@ mod tests {
         assert_eq!(brief_args("morning").unwrap(), vec!["brief", "morning", "--source", "pulse"]);
         assert!(brief_args("--wait").is_err());
         assert!(brief_args("noon").is_err());
+    }
+
+    #[test]
+    fn listen_args_validate_pause_and_max() {
+        assert_eq!(listen_args(None, None, None).unwrap(), Vec::<String>::new());
+        assert_eq!(listen_args(Some("en-US"), Some(0.0), Some(180)).unwrap(), vec!["--locale", "en-US", "--pause", "0", "--max", "180"]);
+        assert_eq!(listen_args(None, Some(2.5), None).unwrap(), vec!["--pause", "2.5"]);
+        assert!(listen_args(None, Some(0.3), None).is_err());
+        assert!(listen_args(None, Some(f64::NAN), None).is_err());
+        assert!(listen_args(None, Some(11.0), None).is_err());
+        assert!(listen_args(None, None, Some(5)).is_err());
+        assert!(listen_args(Some("--max"), None, None).is_err());
     }
 
     #[test]

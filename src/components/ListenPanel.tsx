@@ -2,16 +2,22 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useTheme } from '../contexts/ThemeContext';
-import { LiveSnapshot, Transcript } from '../types';
 import { PULSE_TARGET, askLead } from '../utils/command';
-import { briefKindOf, briefMe, summaryOf } from '../utils/voice';
+import { ListenSettings, finalText, helperArgs, listeningHint, loadListen, onHotkey } from '../utils/listen';
+import { REPLY_EVENT, ReplyEvent, newTurnId } from '../utils/reply';
+import { HOTKEYS, briefKindOf, briefMe, loadVoice, stopSpeaking, summaryOf } from '../utils/voice';
 import { StrokeIcon } from './Icons';
 
 // The listening panel: its own small window (index.html#listen), opened by the global hotkey,
-// ⌘K's mic or the Roo thread's Talk. It transcribes on-device (pulse-listen) and sends the
-// text to Roo when the owner pauses or presses Enter. Esc drops it. The words stay editable,
-// so a slip can be fixed, or typed (Wispr Flow dictation works here too).
-// The main window reads Roo's reply aloud; this panel shows its summary line.
+// ⌘K's mic or the Roo thread's Talk. It transcribes on-device (pulse-listen). By default it's
+// press to send: the hotkey starts it, the hotkey again (or Enter) sends, and pauses never cut
+// the owner off. Settings also offer hold to talk and send when I pause (utils/listen.ts).
+// Esc drops it (and silences Roo). The words stay editable, so a slip can be fixed, or typed.
+//
+// Sending tries Roo's quick lane first (Rust quick.rs: a tool-less model over a snapshot of the
+// owner's files), which streams its answer here in a second or two; work, or anything the
+// snapshot can't answer, goes to full Roo (ask_lead) as before. Both lanes push the reply on
+// `pulse://roo-reply`; the main window reads it aloud as it streams (hooks/useReplyVoice.ts).
 
 type Phase = 'starting' | 'listening' | 'typing' | 'sending' | 'waiting' | 'reply' | 'error';
 
@@ -23,8 +29,12 @@ type ListenEvent =
   | { type: 'error'; message: string }
   | { type: 'end' };
 
-const REPLY_POLL_MS = 1000;
 const HIDE_AFTER_REPLY_MS = 15_000;
+
+function hotkeyLabel(): string {
+  const key = loadVoice().hotkey;
+  return HOTKEYS.find((h) => h.value === key)?.label ?? key;
+}
 
 export function ListenPanel() {
   const { tokens } = useTheme();
@@ -33,110 +43,183 @@ export function ListenPanel() {
   const [text, setText] = useState('');
   const [level, setLevel] = useState(0);
   const [note, setNote] = useState<string | null>(null);
+  const [reply, setReply] = useState('');
   const [runId, setRunId] = useState<string | null>(null);
   const [hover, setHover] = useState(false);
+  const [settings, setSettings] = useState<ListenSettings>(loadListen);
+  const [hotkey, setHotkey] = useState(hotkeyLabel);
   const phaseRef = useRef<Phase>('starting');
   phaseRef.current = phase;
+  const textRef = useRef('');
+  textRef.current = text;
+  const settingsRef = useRef(settings);
+  const openedAt = useRef(0);
+  const turn = useRef<{ id: string; message: string; lane: 'fast' | 'full' } | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  const hide = () => invoke('hide_listen_panel').catch(() => {});
+  // A quick-lane answer still being written is dropped; a full run keeps going (and is read
+  // aloud when it finishes, as before).
+  const dropTurn = () => {
+    const t = turn.current;
+    if (t?.lane === 'fast') invoke('cancel_reply', { id: t.id }).catch(() => {});
+    turn.current = null;
+  };
 
-  const send = useCallback(async (said: string) => {
-    const message = said.trim();
-    if (!message) {
-      setNote("Didn't catch anything.");
-      setPhase('error');
-      return;
-    }
-    setPhase('sending');
+  const hide = () => {
+    dropTurn();
+    invoke('hide_listen_panel').catch(() => {});
+  };
+
+  const fail = (e: unknown) => {
+    setNote(String(e instanceof Error ? e.message : e));
+    setPhase('error');
+  };
+
+  // Full Roo: start the run, then follow it on pulse://roo-reply.
+  const toFullRoo = useCallback(async (id: string, message: string) => {
+    turn.current = { id, message, lane: 'full' };
     try {
-      const kind = briefKindOf(message);
-      const r = kind ? await briefMe(kind) : await askLead(PULSE_TARGET, message);
+      const r = await askLead(PULSE_TARGET, message);
+      if (turn.current?.id !== id) return;
       setRunId(r.run_id);
-      setNote(kind ? 'Roo is writing your brief…' : 'Roo is on it…');
+      setNote(r.queued ? 'Queued behind the reply Roo is writing…' : 'Roo is on it…');
       setPhase('waiting');
+      await invoke('watch_reply', { id, runId: r.run_id });
     } catch (e) {
-      setNote(String(e instanceof Error ? e.message : e));
-      setPhase('error');
+      if (turn.current?.id === id) fail(e);
     }
   }, []);
 
+  const send = useCallback(
+    async (said: string) => {
+      const message = said.trim();
+      if (!message) {
+        setNote("Didn't catch anything.");
+        setPhase('error');
+        return;
+      }
+      setPhase('sending');
+      setReply('');
+      const kind = briefKindOf(message);
+      const id = newTurnId(!!kind);
+      try {
+        if (kind) {
+          turn.current = { id, message, lane: 'full' };
+          const r = await briefMe(kind);
+          setRunId(r.run_id);
+          setNote('Roo is writing your brief…');
+          setPhase('waiting');
+          await invoke('watch_reply', { id, runId: r.run_id });
+          return;
+        }
+        turn.current = { id, message, lane: 'fast' };
+        const lane = await invoke<'fast' | 'full'>('ask_quick', { id, message });
+        if (turn.current?.id !== id) return;
+        if (lane === 'full') return toFullRoo(id, message);
+        setNote('Roo…');
+        setPhase('waiting');
+      } catch (e) {
+        if (turn.current?.id === id) fail(e);
+      }
+    },
+    [toFullRoo],
+  );
+
   const start = useCallback(() => {
+    dropTurn();
+    const s = loadListen();
+    settingsRef.current = s;
+    setSettings(s);
+    setHotkey(hotkeyLabel());
+    openedAt.current = Date.now();
     setText('');
+    setReply('');
     setLevel(0);
     setNote(null);
     setRunId(null);
     setPhase('starting');
-    invoke('start_listening').catch((e) => {
-      setNote(String(e));
-      setPhase('error');
-    });
+    invoke('start_listening', helperArgs(s)).catch(fail);
   }, []);
+
+  // Press to send (or hold to talk): the hotkey again sends, stops, or starts over.
+  const sendNow = useCallback(() => {
+    const p = phaseRef.current;
+    if (p === 'typing' || p === 'error') send(textRef.current);
+    else if (p === 'listening' || p === 'starting') invoke('stop_listening').catch(() => {}); // the helper answers with its final transcript
+  }, [send]);
 
   // Each open of the panel starts a fresh listen.
   useEffect(() => {
     start();
     const offOpen = listen('pulse://listen-open', () => start());
+    const offHotkey = listen<'pressed' | 'released'>('pulse://listen-hotkey', (e) => {
+      const act = onHotkey(settingsRef.current, e.payload, phaseRef.current, Date.now() - openedAt.current);
+      if (act === 'send') sendNow();
+      else if (act === 'restart') start();
+    });
     const offEvents = listen<ListenEvent>('pulse://listen', (e) => {
       const ev = e.payload;
       if (phaseRef.current === 'typing') return;
-      if (ev.type === 'ready') setPhase('listening');
+      if (ev.type === 'ready') setPhase((p) => (p === 'starting' ? 'listening' : p));
       else if (ev.type === 'level') setLevel(ev.value);
       else if (ev.type === 'partial') setText(ev.text);
       else if (ev.type === 'final') {
-        setText(ev.text);
-        if (phaseRef.current === 'listening' || phaseRef.current === 'starting') send(ev.text);
+        // The words on screen win when the final comes back emptier (they are what the owner saw).
+        const said = finalText(ev.text, textRef.current);
+        setText(said);
+        if (phaseRef.current === 'listening' || phaseRef.current === 'starting') send(said);
       } else if (ev.type === 'error') {
         setNote(ev.message);
         setPhase('typing'); // the box still works: type, or dictate with another tool
       }
     });
+    // The reply, pushed as it's written.
+    const offReply = listen<ReplyEvent>(REPLY_EVENT, (e) => {
+      const ev = e.payload;
+      const t = turn.current;
+      if (!t || ev.id !== t.id) return;
+      if (ev.lane === 'fast') {
+        if (ev.type === 'delta' && ev.text) {
+          setReply((r) => r + ev.text);
+          setPhase('reply');
+        } else if (ev.type === 'done') {
+          setReply(ev.text ?? '');
+          setRunId(ev.run_id ?? null);
+          setPhase('reply');
+        } else if (ev.type === 'handoff' || ev.type === 'error') {
+          setReply('');
+          setNote('Roo is on it…');
+          setPhase('waiting');
+          toFullRoo(t.id, t.message);
+        }
+      } else if (ev.type === 'step' && ev.text) {
+        setNote(`Roo: ${ev.text}`);
+      } else if (ev.type === 'delta' && ev.text) {
+        setNote(`Roo: ${summaryOf(ev.text)}`);
+      } else if (ev.type === 'done') {
+        setReply(summaryOf(ev.text ?? '') || (ev.ok ? 'Done.' : 'It stopped before answering.'));
+        setPhase('reply');
+      }
+    });
     return () => {
       offOpen.then((u) => u());
+      offHotkey.then((u) => u());
       offEvents.then((u) => u());
+      offReply.then((u) => u());
     };
-  }, [start, send]);
-
-  // The reply: poll the run until it ends, then show its summary line.
-  useEffect(() => {
-    if (phase !== 'waiting' || !runId) return;
-    let alive = true;
-    const tick = async () => {
-      try {
-        const live: LiveSnapshot = JSON.parse(await invoke<string>('read_live'));
-        const run = live.runs.find((r) => r.run_id === runId);
-        if (run && run.state !== 'running' && run.state !== 'queued' && run.state !== 'idle') {
-          const t: Transcript = JSON.parse(await invoke<string>('read_transcript', { runId }));
-          const last = [...t.lines].reverse().find((l) => l.t === 'result');
-          const reply = last && last.t === 'result' ? last.result : run.result ?? '';
-          if (!alive) return;
-          setNote(summaryOf(reply) || (run.state === 'finished' ? 'Done.' : 'It stopped before answering.'));
-          setPhase('reply');
-          return;
-        }
-        if (run && alive) setNote(`Roo: ${run.step}`);
-      } catch {
-        // keep polling; the live file appears within a second or two
-      }
-      if (alive) timer = setTimeout(tick, REPLY_POLL_MS);
-    };
-    let timer = setTimeout(tick, REPLY_POLL_MS);
-    return () => {
-      alive = false;
-      clearTimeout(timer);
-    };
-  }, [phase, runId]);
+  }, [start, send, sendNow, toFullRoo]);
 
   useEffect(() => {
     if (phase !== 'reply' || hover) return;
     const t = setTimeout(hide, HIDE_AFTER_REPLY_MS);
     return () => clearTimeout(t);
-  }, [phase, hover]);
+  }, [phase, hover, reply]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
+        stopSpeaking().catch(() => {});
         hide();
       }
     };
@@ -146,11 +229,11 @@ export function ListenPanel() {
 
   const label: Record<Phase, string> = {
     starting: 'Starting the microphone…',
-    listening: 'Listening. Pause or press Enter to send.',
+    listening: listeningHint(settings, hotkey),
     typing: 'Type, or dictate. Enter sends.',
     sending: 'Sending to Roo…',
     waiting: note ?? 'Roo is on it…',
-    reply: 'Roo',
+    reply: phase === 'reply' && turn.current?.lane === 'fast' ? 'Roo · quick answer' : 'Roo',
     error: note ?? 'Something went wrong.',
   };
   const listening = phase === 'listening' || phase === 'starting';
@@ -174,7 +257,7 @@ export function ListenPanel() {
         </button>
       </div>
       {phase === 'reply' ? (
-        <div style={{ flex: 1, overflowY: 'auto', fontSize: '15px', lineHeight: 1.5 }}>{note}</div>
+        <div style={{ flex: 1, overflowY: 'auto', fontSize: '15px', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{reply}</div>
       ) : (
         <textarea
           ref={inputRef}
@@ -188,7 +271,7 @@ export function ListenPanel() {
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
-              if (phase === 'listening') invoke('stop_listening').catch(() => {});
+              if (phase === 'listening' || phase === 'starting') invoke('stop_listening').catch(() => {});
               else if (phase === 'typing' || phase === 'error') send(text);
             }
           }}
@@ -196,18 +279,25 @@ export function ListenPanel() {
         />
       )}
       <div style={{ display: 'flex', gap: '14px', fontSize: tokens.type.micro, color: c.textDim }}>
-        {phase === 'reply' && runId ? (
+        {phase === 'reply' ? (
           <>
-            <button onClick={() => invoke('open_run_in_main', { runId }).then(hide).catch(() => {})} style={{ background: 'none', border: 'none', padding: 0, color: c.accent, cursor: 'pointer', fontFamily: 'inherit', fontSize: 'inherit' }}>
+            {runId && <button onClick={() => invoke('open_run_in_main', { runId }).then(hide).catch(() => {})} style={{ background: 'none', border: 'none', padding: 0, color: c.accent, cursor: 'pointer', fontFamily: 'inherit', fontSize: 'inherit' }}>
               Open in Roo
-            </button>
+            </button>}
             <button onClick={start} style={{ background: 'none', border: 'none', padding: 0, color: c.accent, cursor: 'pointer', fontFamily: 'inherit', fontSize: 'inherit' }}>
               Ask something else
             </button>
           </>
         ) : (
           <>
-            <span>Enter sends</span>
+            <button
+              onClick={sendNow}
+              disabled={phase === 'sending' || phase === 'waiting'}
+              style={{ background: 'none', border: 'none', padding: 0, color: c.accent, cursor: 'pointer', fontFamily: 'inherit', fontSize: 'inherit', fontWeight: 600 }}
+            >
+              Send
+            </button>
+            <span>{settings.mode === 'hold' ? `or let go of ${hotkey}, or Enter` : settings.mode === 'press' ? `or ${hotkey} again, or Enter` : 'or pause, or Enter'}</span>
             <span>Esc cancels</span>
             <span style={{ marginLeft: 'auto' }}>On-device speech · nothing leaves this Mac but the text</span>
           </>

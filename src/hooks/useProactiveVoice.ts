@@ -9,13 +9,17 @@ import {
   CalendarRow,
   Interrupt,
   NotifyRow,
+  PrepRow,
   briefOpening,
+  dedupeCalendar,
   draftFor,
   interruptFor,
   isFresh,
   isQuiet,
   localDay,
   meetingInterrupt,
+  prepOffer,
+  preppedIds,
   sentenceFor,
 } from '../utils/proactive';
 
@@ -25,6 +29,11 @@ import {
 // nothing else being read, and at most once per 10 minutes. A notification goes with it; its
 // click (or the menu bar's "Roo said") opens the Roo thread with a ready-to-send message.
 // The morning brief's opening is spoken once a day, before noon, when Roo is open.
+// Meeting prep (~/portfolio/bin/meeting_prep.py): when a brief is due (10 minutes before; 8pm the
+// night before for meetings before 9am) Roo asks "your meeting with X is in 10 minutes. Want a quick
+// brief?" outside quiet hours too; saying it waits for no call and an unmuted voice, the notification
+// always shows. Its click says the two-sentence brief and opens the thread. Every minute Roo writes
+// watch/desktop.json (open, and which briefs it offered); without it the watcher uses Telegram.
 
 const TICK_MS = 60 * 1000;
 const SEEN_KEY = 'pulse-proactive-seen';
@@ -35,6 +44,8 @@ const MUTE_KEY = 'pulse-voice-muted-until';
 const MUTE_MS = 60 * 60 * 1000;
 const SAID_SHOWN_MS = 30 * 60 * 1000; // "Roo said" stays in the menu bar this long
 const BRIEF_BEFORE_HOUR = 12;
+const PREP_OFFERED_KEY = 'pulse-prep-offered';
+const PREP_OFFERED_LIMIT = 60;
 export const PROACTIVE_TEST_EVENT = 'pulse-proactive-test'; // Settings' "Try it"
 
 function get(key: string): string | null {
@@ -73,6 +84,16 @@ export interface Said {
   text: string;
   draft: string;
   at: number;
+  brief?: string; // meeting prep: said when the owner opens it
+}
+
+function loadOffered(): string[] {
+  try {
+    const v = JSON.parse(get(PREP_OFFERED_KEY) ?? '[]');
+    return Array.isArray(v) ? v.filter((k) => typeof k === 'string') : [];
+  } catch {
+    return [];
+  }
 }
 
 export function useProactiveVoice({
@@ -81,7 +102,9 @@ export function useProactiveVoice({
   names,
   ownerName,
   onOpen,
+  realOrg = true,
 }: {
+  realOrg?: boolean; // the demo org never tells the watcher Roo is open
   live: LiveSnapshot | null;
   frontDoor: string | null;
   names: Record<string, string>;
@@ -146,17 +169,19 @@ export function useProactiveVoice({
     busy.current = true;
     try {
       const now = Date.now();
-      const [rows, cal] = await Promise.all([
+      const [rows, cal, prep] = await Promise.all([
         invoke<NotifyRow[]>('read_watch_notify').catch(() => [] as NotifyRow[]),
         invoke<CalendarRow[]>('read_watch_calendar').catch(() => [] as CalendarRow[]),
+        realOrg ? invoke<PrepRow[]>('read_meeting_prep').catch(() => [] as PrepRow[]) : Promise.resolve([] as PrepRow[]),
       ]);
+      const covered = preppedIds(prep);
       const found: Interrupt[] = [];
       for (const r of rows) {
         const it = r && typeof r.id === 'string' ? interruptFor(r, namesRef.current) : null;
         if (it) found.push(it);
       }
-      for (const e of cal) {
-        const it = e && typeof e.id === 'string' ? meetingInterrupt(e, now) : null;
+      for (const e of dedupeCalendar(cal.filter((c) => c && typeof c.id === 'string' && !covered.has(c.id)))) {
+        const it = meetingInterrupt(e, now);
         if (it) found.push(it);
       }
       // The first read only records what is there, so opening Roo never replays the backlog.
@@ -173,6 +198,33 @@ export function useProactiveVoice({
       }
 
       await morningBrief();
+
+      // Meeting prep first: one offer a minute at most, then tell the watcher Roo is here.
+      if (realOrg) {
+        const offered = loadOffered();
+        const known = new Set(offered);
+        let offeredNow = false;
+        for (const r of prep) {
+          const o = prepOffer(r, now, known, ownerRef.current);
+          if (!o) continue;
+          const st = await invoke<Status>('proactive_status');
+          if (st.screen_locked === true) break; // away from the desk: the watcher sends it to Telegram
+          offered.push(o.tag);
+          put(PREP_OFFERED_KEY, JSON.stringify(offered.slice(-PREP_OFFERED_LIMIT)));
+          const s: Said = { id: o.tag, text: o.text, draft: o.draft, brief: o.spoken, at: now };
+          recent.current = [...recent.current.slice(-9), s];
+          setSaid(s);
+          if (loadVoice().proactive && Date.now() >= mutedRef.current && !st.speaking && st.mic_in_use !== true) {
+            put(LAST_KEY, String(now));
+            await speak(o.text, true);
+          }
+          await invoke('proactive_notify', { title: 'Roo', body: o.text, id: o.tag });
+          offeredNow = true;
+          break;
+        }
+        await invoke('desktop_heartbeat', { prepOffered: offered.slice(-PREP_OFFERED_LIMIT) }).catch(() => {});
+        if (offeredNow) return;
+      }
 
       pending.current = pending.current.filter((p) => isFresh(p, now));
       const last = Number(get(LAST_KEY)) || 0;
@@ -191,7 +243,7 @@ export function useProactiveVoice({
     } finally {
       busy.current = false;
     }
-  }, [allowed, morningBrief]);
+  }, [allowed, morningBrief, realOrg]);
 
   useEffect(() => {
     if (!IS_TAURI) return;
@@ -222,7 +274,9 @@ export function useProactiveVoice({
     const offOpen = listen<string>('pulse://proactive-open', (e) => {
       const list = recent.current;
       const hit = e.payload === 'last' ? list[list.length - 1] : list.find((s) => s.id === e.payload);
-      if (hit) onOpenRef.current(hit.draft);
+      if (!hit) return;
+      onOpenRef.current(hit.draft);
+      if (hit.brief) speak(hit.brief, true).catch(() => {}); // asked for: said even in quiet hours
     });
     return () => {
       offMute.then((u) => u());
