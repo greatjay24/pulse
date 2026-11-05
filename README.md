@@ -121,6 +121,22 @@ brief: the same payment seen as a Stripe charge, its payout and the bank deposit
 - Payer names reach the UI for the top payers list (this is the owner's own machine). Email
   bodies, transaction descriptions and account numbers never leave Rust.
 
+### Actions: Resend and Stripe, on your click
+
+Agents queue; the Outbox click carries it out. Keys live in the macOS Keychain (service
+`project-tracker-imap`), never in `~/.pulse/settings.json`. Set them with
+`~/portfolio/bin/roo-keys-setup.sh` (hidden prompt, one read-only check, then the Keychain).
+
+| Keychain name | What uses it |
+|---|---|
+| `stripe-action:<business>` | An Approve click on an invoice, quote, refund or subscription (`stripe_api.approved_call`). Also the old Stripe widget (falls back to the read-only `stripe:<business>`). |
+| `resend:send` | A Send click on an "Email via Resend" item (`outbox_add.py --via resend --from <address>`), from a domain listed in `~/portfolio/resend_domains.json`. |
+
+- Every click that runs adds a row to `~/portfolio/logs/outbox-actions.jsonl`, shown in
+  Activity as "Your click" (kind, sender, subject; never recipients or bodies).
+- The Stripe widget takes a business id (an org entity id) instead of a key; old plaintext
+  Stripe and Resend keys are dropped from settings on load. The Resend widget is retired.
+
 ### Ask, chat and terminal
 
 Roo is also where you tell the org what to do.
@@ -283,7 +299,7 @@ pulse/
 | **Hosting** | Vercel, Netlify |
 | **Backend** | Supabase, Firebase |
 | **Calendar** | Google Calendar, Cal.com |
-| **Communication** | Slack, Resend |
+| **Communication** | Slack (Resend sending lives in the Outbox) |
 | **Error Tracking** | Sentry |
 | **Mobile** | RevenueCat |
 

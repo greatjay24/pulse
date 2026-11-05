@@ -17,6 +17,7 @@ const KIND_LABEL: Record<ActivityKind, string> = {
   answer: 'You',
   report: 'Lead',
   drafts: 'Drafts',
+  sent: 'Your click',
 };
 
 function dayLabel(day: string, now: number): string {

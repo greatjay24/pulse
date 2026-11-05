@@ -109,6 +109,7 @@ const HASH_FIELDS: &[(&str, &[&str])] = &[
     ("stripe_send_quote", &["stripe_id", "customer_id", "amount", "currency", "subject", "body"]),
     ("stripe_refund", &["stripe_id", "amount", "currency", "reason", "subject", "body"]),
     ("stripe_subscription", &["action", "stripe_id", "customer_id", "items", "amount", "currency", "interval", "days_until_due", "subject", "body"]),
+    ("resend_email", &["from", "from_name", "reply_to", "to", "cc", "subject", "body", "in_reply_to", "references"]),
 ];
 
 // Mirrors sendguard._part: strings as is, integers in decimal, lists joined with U+001F, null/missing empty.
@@ -564,6 +565,20 @@ mod ops_tests {
         assert_ne!(content_hash(&more).unwrap(), content_hash(&item).unwrap());
         assert!(content_hash(&serde_json::json!({"kind": "fax"})).is_err());
         assert!(content_hash(&serde_json::json!({"kind": "stripe_refund", "amount": 1.5})).is_err());
+    }
+
+    // Same item and constant as bin/test_outbox.py `test_hash_matches_pulse` (class Resend).
+    #[test]
+    fn resend_hash_matches_python() {
+        let item = serde_json::json!({"kind": "resend_email", "entity": "acme", "from": "notify@notify.example.com",
+            "from_name": "Acme – Notify", "reply_to": null, "to": ["pat@example.com", "sam@example.com"], "cc": [],
+            "subject": "Your site is live", "body": "Hi Pat,\nIt is live.\n", "in_reply_to": "orig@mail.example",
+            "references": ["a@x.example", "orig@mail.example"]});
+        assert_eq!(content_hash(&item).unwrap(), "bcd033d861be93f7e61a9d4f24d6696758142c75a56bb5b04dc36850bddd1f5a");
+        // The sender is part of what Jay approves.
+        let mut other = item.clone();
+        other["from"] = "hello@notify.example.com".into();
+        assert_ne!(content_hash(&other).unwrap(), content_hash(&item).unwrap());
     }
 
     #[test]

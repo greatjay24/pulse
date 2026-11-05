@@ -91,6 +91,7 @@ export function kindOf(m: OutboxMessage): OutboxKind {
 }
 
 export const PUBLISH_KINDS: OutboxKind[] = ['post', 'text', 'dm', 'slack'];
+export const isEmailKind = (k: OutboxKind) => k === 'email' || k === 'resend_email';
 export const isMoneyKind = (k: OutboxKind) => k.startsWith('stripe_');
 
 const CHANNEL_LABEL: Record<string, string> = {
@@ -113,6 +114,8 @@ export function kindLabel(m: OutboxMessage): string {
   switch (k) {
     case 'email':
       return 'Email';
+    case 'resend_email':
+      return 'Email via Resend';
     case 'post':
       return m.channel === 'newsletter' ? 'Newsletter' : m.channel === 'site' ? 'Site post' : `${channelLabel(m.channel)} post`;
     case 'text':
@@ -142,6 +145,7 @@ export function primaryLabel(k: OutboxKind): 'Send' | 'Publish' | 'Approve' {
 // Which fields Roo's Edit offers, by kind (mirrors bin/outbox.py EDITABLE).
 export const EDITABLE: Partial<Record<OutboxKind, (keyof OutboxEdit)[]>> = {
   email: ['to', 'cc', 'subject', 'body'],
+  resend_email: ['to', 'cc', 'subject', 'body'],
   post: ['title', 'body', 'link'],
   text: ['to', 'body'],
   dm: ['to', 'body', 'link'],

@@ -4,6 +4,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { App, IntegrationType, PROJECT_COLORS, Platform } from '../types';
 import { Icon, CheckIcon, CloseIcon } from './Icons';
 import { isRecommendedForPlatforms, getDefaultPlatformForIntegration } from '../utils/platforms';
+import { KEYCHAIN_SETUP, hasCredential, usesKeychain, withoutKeychainSecret } from '../utils/keychain';
 
 interface AddProjectModalProps {
   isOpen: boolean;
@@ -110,7 +111,6 @@ const INTEGRATIONS: { id: IntegrationType; label: string; icon: string; descript
   { id: 'clerk', label: 'Clerk', icon: 'lock', description: 'User authentication & management', category: 'auth' },
   { id: 'auth0', label: 'Auth0', icon: 'lock', description: 'Identity management platform', category: 'auth' },
   // Email & Marketing
-  { id: 'resend', label: 'Resend', icon: 'mail', description: 'Email API for developers', category: 'email' },
   { id: 'sendgrid', label: 'SendGrid', icon: 'mail', description: 'Email delivery service', category: 'email' },
   { id: 'convertkit', label: 'ConvertKit', icon: 'mail', description: 'Email marketing for creators', category: 'email' },
   { id: 'mailchimp', label: 'Mailchimp', icon: 'mail', description: 'Email marketing platform', category: 'email' },
@@ -175,12 +175,12 @@ export function AddProjectModal({ isOpen, onClose, onComplete }: AddProjectModal
       domain: projectDomain || undefined,
       color: selectedColor,
       platforms: selectedPlatforms,
-      integrations: selectedIntegrations.map(type => ({
+      integrations: selectedIntegrations.map(type => withoutKeychainSecret({
         type,
         apiKey: apiKeys[type]?.apiKey,
         projectId: apiKeys[type]?.projectId,
         teamId: apiKeys[type]?.teamId,
-        enabled: !!apiKeys[type]?.apiKey,
+        enabled: hasCredential(type, apiKeys[type]),
         platform: getDefaultPlatformForIntegration(type),
       })),
     };
@@ -570,6 +570,36 @@ export function AddProjectModal({ isOpen, onClose, onComplete }: AddProjectModal
                             </span>
                           </div>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                            {usesKeychain(intId) ? (
+                            <div>
+                              <label style={{ display: 'block', fontSize: '12px', color: tokens.colors.textDim, marginBottom: '6px' }}>
+                                Business
+                              </label>
+                              <input
+                                type="text"
+                                value={apiKeys[intId]?.projectId || ''}
+                                onChange={(e) => setApiKeys(prev => ({
+                                  ...prev,
+                                  [intId]: { ...prev[intId], apiKey: '', projectId: e.target.value.trim().toLowerCase() }
+                                }))}
+                                placeholder="business id, e.g. acme"
+                                style={{
+                                  width: '100%',
+                                  padding: '10px 12px',
+                                  background: tokens.colors.bg,
+                                  border: `1px solid ${tokens.colors.border}`,
+                                  borderRadius: tokens.radius.sm,
+                                  color: tokens.colors.text,
+                                  fontSize: '13px',
+                                  fontFamily: 'inherit',
+                                  outline: 'none',
+                                }}
+                              />
+                              <p style={{ fontSize: '11px', color: tokens.colors.textDim, marginTop: '6px' }}>
+                                The key stays in the macOS Keychain. Add it with {KEYCHAIN_SETUP}.
+                              </p>
+                            </div>
+                            ) : (
                             <div>
                               <label style={{ display: 'block', fontSize: '12px', color: tokens.colors.textDim, marginBottom: '6px' }}>
                                 API Key
@@ -595,6 +625,7 @@ export function AddProjectModal({ isOpen, onClose, onComplete }: AddProjectModal
                                 }}
                               />
                             </div>
+                            )}
                             {(intId === 'vercel' || intId === 'supabase' || intId === 'posthog') && (
                               <div>
                                 <label style={{ display: 'block', fontSize: '12px', color: tokens.colors.textDim, marginBottom: '6px' }}>

@@ -4,6 +4,7 @@ import { WidgetType, IntegrationType, Integration, App, GoogleCalendarConfig } f
 import { useTheme } from '../contexts/ThemeContext';
 import { IntegrationConfigForm, CredentialValues, INTEGRATION_NAMES } from './IntegrationConfigForm';
 import { ProjectCredentialsGrid, ProjectCredentialConfig } from './ProjectCredentialsGrid';
+import { hasCredential, withoutKeychainSecret } from '../utils/keychain';
 
 // Map widgets to their required integrations
 const WIDGET_INTEGRATIONS: Record<WidgetType, IntegrationType[]> = {
@@ -316,7 +317,7 @@ export function WidgetPicker({
     }
 
     const hasAny = requiredIntegrations.some(reqType =>
-      appIntegrations.some(i => i.type === reqType && i.enabled && i.apiKey)
+      appIntegrations.some(i => i.type === reqType && i.enabled && hasCredential(i.type, i))
     );
 
     if (hasAny) {
@@ -376,13 +377,13 @@ export function WidgetPicker({
         return singleOAuthConfig?.enabled === true;
       }
       // For API key integrations, check required fields
-      return !!singleCredentials.apiKey;
+      return hasCredential(requiredIntegration, singleCredentials);
     } else {
       // Overview: at least one project must be configured
       return Object.values(multiCredentials).some(c => {
         if (c.skip) return false;
         if (isOAuth) return c.googleCalendar?.enabled;
-        return !!c.apiKey;
+        return hasCredential(requiredIntegration, c);
       });
     }
   };
@@ -406,13 +407,13 @@ export function WidgetPicker({
       } else {
         // For API key, add/update integration
         const existingIndex = currentApp.integrations.findIndex(i => i.type === requiredIntegration);
-        const newIntegration: Integration = {
+        const newIntegration: Integration = withoutKeychainSecret({
           type: requiredIntegration,
           apiKey: singleCredentials.apiKey,
           projectId: singleCredentials.projectId,
           teamId: singleCredentials.teamId,
           enabled: true,
-        };
+        });
 
         const newIntegrations = existingIndex >= 0
           ? currentApp.integrations.map((i, idx) => idx === existingIndex ? newIntegration : i)
@@ -434,16 +435,16 @@ export function WidgetPicker({
           if (!creds.googleCalendar?.enabled) return app;
           return { ...app, googleCalendar: creds.googleCalendar };
         } else {
-          if (!creds.apiKey) return app;
+          if (!hasCredential(requiredIntegration, creds)) return app;
 
           const existingIndex = app.integrations.findIndex(i => i.type === requiredIntegration);
-          const newIntegration: Integration = {
+          const newIntegration: Integration = withoutKeychainSecret({
             type: requiredIntegration,
             apiKey: creds.apiKey,
             projectId: creds.projectId,
             teamId: creds.teamId,
             enabled: true,
-          };
+          });
 
           const newIntegrations = existingIndex >= 0
             ? app.integrations.map((i, idx) => idx === existingIndex ? newIntegration : i)

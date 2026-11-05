@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { App, IntegrationType, GoogleCalendarConfig } from '../types';
 import { IntegrationConfigForm, CredentialValues, INTEGRATION_NAMES } from './IntegrationConfigForm';
+import { hasCredential } from '../utils/keychain';
 
 // Credential config per project
 export interface ProjectCredentialConfig {
@@ -102,7 +103,7 @@ export function ProjectCredentialsGrid({
           const isSkipped = creds?.skip;
           const hasExistingConfig = isOAuth
             ? creds?.googleCalendar?.enabled
-            : creds?.apiKey;
+            : hasCredential(integrationType, creds);
 
           return (
             <div
@@ -216,7 +217,7 @@ export function ProjectCredentialsGrid({
           const configuredCount = Object.values(credentials).filter(c => {
             if (c.skip) return false;
             if (isOAuth) return c.googleCalendar?.enabled;
-            return c.apiKey;
+            return hasCredential(integrationType, c);
           }).length;
           const skippedCount = Object.values(credentials).filter(c => c.skip).length;
 

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { IntegrationType, GoogleCalendarConfig } from '../types';
 import { useGoogleOAuth } from '../hooks/useGoogleOAuth';
+import { KEYCHAIN_SETUP } from '../utils/keychain';
 
 // Form field configuration
 interface FormField {
@@ -41,10 +42,9 @@ const INTEGRATION_FORMS: Partial<Record<IntegrationType, FormConfig>> = {
   stripe: {
     type: 'api_key',
     fields: [
-      { key: 'apiKey', label: 'Secret Key', type: 'password', placeholder: 'sk_live_...', required: true }
+      { key: 'projectId', label: 'Business', type: 'text', placeholder: 'business id, e.g. acme', required: true }
     ],
-    helpText: 'Find your API key in Stripe Dashboard → Developers → API Keys',
-    helpUrl: 'https://dashboard.stripe.com/apikeys'
+    helpText: `Roo reads this business's Stripe key from the macOS Keychain; nothing is stored in Roo. Add or change keys with ${KEYCHAIN_SETUP}.`
   },
   lemonsqueezy: {
     type: 'api_key',
@@ -194,12 +194,6 @@ const INTEGRATION_FORMS: Partial<Record<IntegrationType, FormConfig>> = {
   },
 
   // Email & Marketing
-  resend: {
-    type: 'api_key',
-    fields: [
-      { key: 'apiKey', label: 'API Key', type: 'password', placeholder: 're_...', required: true }
-    ]
-  },
   sendgrid: {
     type: 'api_key',
     fields: [

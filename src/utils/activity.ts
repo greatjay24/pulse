@@ -3,8 +3,9 @@ import { decisionId } from './decisions';
 import { agentName } from './command';
 
 // One line on the Activity timeline. Built only from files the organization wrote:
-// run logs, git commits, status.json `done`, decisions.jsonl and the sales ledgers.
-export type ActivityKind = 'run' | 'act' | 'commit' | 'done' | 'answer' | 'report' | 'drafts';
+// run logs, git commits, status.json `done`, decisions.jsonl, the sales ledgers and the
+// Outbox actions log (what Jay's clicks carried out).
+export type ActivityKind = 'run' | 'act' | 'commit' | 'done' | 'answer' | 'report' | 'drafts' | 'sent';
 
 export interface ActivityItem {
   key: string;
@@ -176,6 +177,21 @@ export function activityItems(activity: ActivitySnapshot | null, snapshot: Portf
         detail: r.note || undefined,
         link: r.action === 'done' ? r.note?.match(/https?:\/\/[^\s)>\]]+/)?.[0] ?? null : null,
       });
+    });
+  }
+
+  // Outbox clicks that ran: sends, Resend emails, Stripe actions.
+  for (const a of activity?.actions ?? []) {
+    const at = dateMs(a.at);
+    if (at === null) continue;
+    push({
+      key: `sent-${a.id}-${a.at}`,
+      at,
+      entity: a.entity && ids.has(a.entity) ? a.entity : null,
+      kind: 'sent',
+      title: a.what,
+      ok: a.ok,
+      link: a.link ?? null,
     });
   }
 

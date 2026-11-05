@@ -297,13 +297,50 @@ fn ensure_history_dir() {
     fs::create_dir_all(history_dir).ok();
 }
 
+// Integrations whose credentials live in the macOS Keychain now, never in settings.json.
+// Their old plaintext `apiKey` fields (the revoked SaaS keys) are dropped on read and on save.
+const KEYCHAIN_INTEGRATIONS: &[&str] = &["stripe", "resend"];
+
+// Returns the settings without plaintext keys for KEYCHAIN_INTEGRATIONS, and whether anything
+// was removed. Text that isn't the settings shape passes through untouched.
+fn scrub_keychain_fields(settings: &str) -> (String, bool) {
+    let Ok(mut v) = serde_json::from_str::<serde_json::Value>(settings) else {
+        return (settings.to_string(), false);
+    };
+    let mut changed = false;
+    if let Some(apps) = v.get_mut("apps").and_then(|a| a.as_array_mut()) {
+        for app in apps {
+            let Some(integrations) = app.get_mut("integrations").and_then(|i| i.as_array_mut()) else { continue };
+            for integration in integrations {
+                let kind = integration.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                if KEYCHAIN_INTEGRATIONS.contains(&kind) {
+                    if let Some(obj) = integration.as_object_mut() {
+                        changed |= obj.remove("apiKey").is_some();
+                    }
+                }
+            }
+        }
+    }
+    if !changed {
+        return (settings.to_string(), false);
+    }
+    (serde_json::to_string_pretty(&v).unwrap_or_else(|_| settings.to_string()), true)
+}
+
 #[tauri::command]
 fn get_settings() -> String {
     ensure_settings_dir();
     let settings_path = get_settings_path();
 
     match fs::read_to_string(&settings_path) {
-        Ok(content) => content,
+        Ok(content) => {
+            let (clean, changed) = scrub_keychain_fields(&content);
+            if changed {
+                // One-time migration: the dead plaintext keys leave the file for good.
+                fs::write(&settings_path, &clean).ok();
+            }
+            clean
+        }
         Err(_) => {
             let default = r#"{"apps":[],"refreshInterval":5,"launchAtStartup":false}"#;
             default.to_string()
@@ -316,7 +353,56 @@ fn save_settings(settings: String) -> Result<(), String> {
     ensure_settings_dir();
     let settings_path = get_settings_path();
 
-    fs::write(&settings_path, settings).map_err(|e| e.to_string())
+    fs::write(&settings_path, scrub_keychain_fields(&settings).0).map_err(|e| e.to_string())
+}
+
+// ==========================================
+// Keychain: the org's credentials (service "project-tracker-imap"), set by
+// ~/portfolio/bin/roo-keys-setup.sh (action keys) and ~/project-tracker/connect_money.py
+// (read-only Money keys). Read through /usr/bin/security, as the Python side does, so the
+// items' access list (which trusts `security`, their creator) never prompts. Never logged.
+// ==========================================
+
+const ORG_KEYCHAIN_SERVICE: &str = "project-tracker-imap";
+
+fn is_business_id(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 40
+        && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && !s.starts_with('-')
+}
+
+// The Keychain names the Stripe widget may read for a business, best first: the action key
+// (roo-keys-setup.sh), then the read-only Money key (connect_money.py).
+fn stripe_key_names(business: &str) -> Vec<String> {
+    if !is_business_id(business) {
+        return vec![];
+    }
+    vec![format!("stripe-action:{}", business), format!("stripe:{}", business)]
+}
+
+#[cfg(target_os = "macos")]
+fn org_keychain_secret(account: &str) -> Option<String> {
+    let out = std::process::Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-a", account, "-s", ORG_KEYCHAIN_SERVICE, "-w"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let secret = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    (!secret.is_empty()).then_some(secret)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn org_keychain_secret(_account: &str) -> Option<String> {
+    None
+}
+
+fn stripe_widget_key(business: &str) -> Option<String> {
+    stripe_key_names(business).iter().find_map(|name| org_keychain_secret(name))
 }
 
 #[tauri::command]
@@ -436,9 +522,13 @@ async fn fetch_app_metrics(app: String) -> Result<String, String> {
 
         match integration.integration_type.as_str() {
             "stripe" => {
-                if let Some(api_key) = &integration.api_key {
-                    metrics.stripe = fetch_stripe_metrics(&client, api_key).await.ok();
-                    metrics.stripe_events = fetch_stripe_events(&client, api_key).await.ok();
+                // The key comes from the Keychain, by business (the integration's projectId),
+                // never from settings.json.
+                let business = integration.project_id.clone().unwrap_or_default();
+                let key = tauri::async_runtime::spawn_blocking(move || stripe_widget_key(&business)).await.ok().flatten();
+                if let Some(api_key) = key {
+                    metrics.stripe = fetch_stripe_metrics(&client, &api_key).await.ok();
+                    metrics.stripe_events = fetch_stripe_events(&client, &api_key).await.ok();
                 }
             }
             "vercel" => {
@@ -2297,6 +2387,8 @@ const ACTIVITY_MAX_ROWS: usize = 500;
 const JSONL_MAX_BYTES: u64 = 4 * 1024 * 1024;
 // Only these ledger fields leave Rust: no recipients, no bodies.
 const DRAFT_FIELDS: &[&str] = &["date", "entity", "prospect", "vertical", "subject", "variant", "source"];
+// logs/outbox-actions.jsonl (bin/outbox.py log_action): what Jay's Outbox clicks carried out.
+const ACTION_FIELDS: &[&str] = &["at", "id", "kind", "entity", "status", "ok", "what", "link"];
 
 #[derive(Serialize)]
 struct ActivityRunFile {
@@ -2322,6 +2414,7 @@ struct ActivitySnapshot {
     runs: Vec<ActivityRunFile>,
     decisions: Vec<ActivityEntityRows>,
     drafts: Vec<serde_json::Value>,
+    actions: Vec<serde_json::Value>,
     commits: Vec<ActivityCommit>,
     errors: Vec<String>,
     read_at: String,
@@ -2415,6 +2508,16 @@ fn read_activity_at(root: &Path) -> ActivitySnapshot {
         }
     }
 
+    // Outbox clicks that ran: emails sent (Gmail or Resend), Stripe actions, approvals.
+    let actions = match resolve_portfolio_file(root, "logs", "outbox-actions.jsonl").and_then(|p| read_jsonl_tail(&p, ACTIVITY_MAX_ROWS)) {
+        Ok(rows) => rows.iter().map(|r| pick_fields(r, ACTION_FIELDS)).collect(),
+        Err(e) if e == "missing" => vec![],
+        Err(e) => {
+            errors.push(format!("logs/outbox-actions.jsonl: {}", e));
+            vec![]
+        }
+    };
+
     // git log, fixed arguments, read-only.
     let commits = match std::process::Command::new("/usr/bin/git")
         .arg("-C")
@@ -2434,7 +2537,7 @@ fn read_activity_at(root: &Path) -> ActivitySnapshot {
         }
     };
 
-    ActivitySnapshot { runs, decisions, drafts, commits, errors, read_at: chrono::Local::now().to_rfc3339() }
+    ActivitySnapshot { runs, decisions, drafts, actions, commits, errors, read_at: chrono::Local::now().to_rfc3339() }
 }
 
 #[tauri::command]
@@ -3906,7 +4009,39 @@ mod decision_tests {
         assert_eq!(a.drafts.len(), 1);
         assert!(a.drafts[0].get("to").is_none() && a.drafts[0].get("body").is_none());
         assert_eq!(a.drafts[0]["entity"], "acme");
+        assert!(a.actions.is_empty());
+        fs::write(
+            root.join("logs/outbox-actions.jsonl"),
+            "{\"at\":\"2026-11-05T09:00:00-05:00\",\"id\":\"x\",\"kind\":\"resend_email\",\"entity\":\"acme\",\"ok\":true,\"what\":\"Email via Resend from a@b.example: Hi\",\"to\":[\"pat@example.com\"]}\nbad\n",
+        )
+        .unwrap();
+        let a = read_activity_at(&root);
+        assert_eq!(a.actions.len(), 1);
+        assert_eq!(a.actions[0]["kind"], "resend_email");
+        assert!(a.actions[0].get("to").is_none());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn keychain_integrations_lose_their_plaintext_keys() {
+        let s = r#"{"apps":[{"id":"a","integrations":[{"type":"stripe","apiKey":"rk_dead","projectId":"acme","enabled":true},
+            {"type":"resend","apiKey":"re_dead","enabled":true},{"type":"vercel","apiKey":"keep-me","enabled":true}]}],"refreshInterval":5}"#;
+        let (clean, changed) = scrub_keychain_fields(s);
+        assert!(changed);
+        assert!(!clean.contains("rk_dead") && !clean.contains("re_dead"));
+        assert!(clean.contains("keep-me") && clean.contains("\"acme\""));
+        let (again, changed) = scrub_keychain_fields(&clean);
+        assert!(!changed);
+        assert_eq!(again, clean);
+        assert_eq!(scrub_keychain_fields("not json"), ("not json".to_string(), false));
+    }
+
+    #[test]
+    fn stripe_widget_reads_only_well_named_keys() {
+        assert_eq!(stripe_key_names("acme"), vec!["stripe-action:acme".to_string(), "stripe:acme".to_string()]);
+        for bad in ["", "Acme", "../x", "-x", "a b", "acme;rm"] {
+            assert!(stripe_key_names(bad).is_empty(), "{}", bad);
+        }
     }
 }
 

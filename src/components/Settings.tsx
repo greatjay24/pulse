@@ -6,6 +6,7 @@ import { useTheme, fontOptions, presets, PresetId, ThemeMode, FontChoice } from 
 import { App, IntegrationType, PROJECT_COLORS, GoogleCalendarConfig } from '../types';
 import { Icon } from './Icons';
 import { LearnedPreferences } from './LearnedPreferences';
+import { KEYCHAIN_SETUP, hasCredential, usesKeychain } from '../utils/keychain';
 
 // Check if running in Tauri environment (Tauri v2 uses __TAURI_INTERNALS__)
 const IS_TAURI = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
@@ -955,7 +956,7 @@ export function Settings({ apps, onSave, onClose, inline = false, saasMetrics, o
                                 <h4 style={{ fontWeight: 500, fontSize: '14px', color: tokens.colors.text }}>
                                   {INTEGRATION_LABELS[integration.type]}
                                 </h4>
-                                {integration.apiKey && (
+                                {hasCredential(integration.type, integration) && (
                                   <span
                                     style={{
                                       padding: '2px 8px',
@@ -986,8 +987,37 @@ export function Settings({ apps, onSave, onClose, inline = false, saasMetrics, o
                             </div>
 
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                              {/* Show default API Key field for non-GitHub integrations */}
-                              {integration.type !== 'github' && (
+                              {/* Stripe: a business whose key Roo reads from the Keychain */}
+                              {usesKeychain(integration.type) && (
+                                <div>
+                                  <label style={{ display: 'block', fontSize: '11px', color: tokens.colors.textDim, marginBottom: '6px' }}>
+                                    Business
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={integration.projectId || ''}
+                                    onChange={(e) => updateIntegration(activeApp.id, integration.type, { projectId: e.target.value.trim().toLowerCase() })}
+                                    placeholder="business id, e.g. acme"
+                                    style={{
+                                      width: '100%',
+                                      padding: '10px 12px',
+                                      fontSize: '13px',
+                                      background: tokens.colors.bg,
+                                      border: `1px solid ${tokens.colors.border}`,
+                                      borderRadius: tokens.radius.sm,
+                                      color: tokens.colors.text,
+                                      fontFamily: 'inherit',
+                                      outline: 'none',
+                                    }}
+                                  />
+                                  <p style={{ fontSize: '11px', color: tokens.colors.textDim, marginTop: '6px' }}>
+                                    The key stays in the macOS Keychain. Add it with {KEYCHAIN_SETUP}.
+                                  </p>
+                                </div>
+                              )}
+
+                              {/* Show default API Key field for the rest (GitHub has its own below) */}
+                              {integration.type !== 'github' && !usesKeychain(integration.type) && (
                                 <div>
                                   <label
                                     style={{
