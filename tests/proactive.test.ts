@@ -1,7 +1,7 @@
 // Run: npm test (node's own test runner; no extra dependencies).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { briefOpening, draftFor, interruptFor, isQuiet, meetingInterrupt, ownerNameOf, scrub, sentenceFor } from '../src/utils/proactive.ts';
+import { briefOpening, dedupeCalendar, draftFor, interruptFor, isQuiet, meetingInterrupt, ownerNameOf, prepOffer, preppedIds, scrub, sentenceFor } from '../src/utils/proactive.ts';
 
 const names = { acme: 'Acme Holdings', studio: 'Studio' };
 const at = new Date().toISOString();
@@ -93,4 +93,39 @@ test('the owner name comes from the registry, plain names only', () => {
   assert.equal(ownerNameOf({ front_door: { call_owner: 'Sam' } }), 'Sam');
   assert.equal(ownerNameOf({ front_door: { call_owner: 'x; rm -rf' } }), null);
   assert.equal(ownerNameOf(null), null);
+});
+
+test('meeting prep: offered at its slot, once, never after the start', () => {
+  const start = new Date(2026, 10, 9, 14, 0).getTime();
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const row = { key: '2026-11-09-northwind-review', title: 'Northwind review', start: iso(start), who: 'Sam at Northwind', spoken: 'Sam wants a date. Ask for sign-off. A third one.', status: 'ready', slots: { pre: iso(start - 10 * 60000) }, delivered: {}, ids: ['e1', 'e2'] };
+  assert.equal(prepOffer(row, start - 11 * 60000, new Set()), null);
+  const o = prepOffer(row, start - 10 * 60000, new Set(), 'Alex')!;
+  assert.equal(o.text, 'Hey Alex, your meeting with Sam at Northwind is in 10 minutes. Want a quick brief?');
+  assert.equal(o.tag, '2026-11-09-northwind-review:pre');
+  assert.equal(o.spoken, 'Sam wants a date. Ask for sign-off.');
+  assert.match(o.draft, /watch\/prep\/2026-11-09-northwind-review\.md/);
+  assert.equal(prepOffer(row, start - 5 * 60000, new Set([o.tag])), null);
+  assert.equal(prepOffer({ ...row, delivered: { pre: { via: 'telegram' } } }, start - 5 * 60000, new Set()), null);
+  assert.equal(prepOffer(row, start + 1000, new Set()), null);
+  assert.equal(prepOffer({ ...row, status: 'thin' }, start - 5 * 60000, new Set()), null);
+});
+
+test('meeting prep: the night before for an early meeting', () => {
+  const start = new Date(2026, 10, 9, 8, 30).getTime();
+  const night = new Date(2026, 10, 8, 20, 0).getTime();
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const row = { key: '2026-11-09-investor-call', title: 'Investor call', start: iso(start), who: null, status: 'ready', slots: { night: iso(night), pre: iso(start - 600000) } };
+  const o = prepOffer(row, night + 60000, new Set(), null)!;
+  assert.equal(o.slot, 'night');
+  assert.equal(o.text, 'Hey, Investor call is tomorrow at 8:30 am. Your brief is ready. Want a quick look?');
+  assert.equal(prepOffer(row, night + 151 * 60000, new Set(), null), null);
+  assert.equal(prepOffer(row, start - 300000, new Set([o.tag]), null)!.slot, 'pre');
+});
+
+test('meeting prep: covered and duplicate calendar rows stay quiet', () => {
+  assert.deepEqual([...preppedIds([{ key: 'k', start: 'x', status: 'ready', ids: ['a', 'b'] }, { key: 'j', start: 'x', status: 'thin', ids: ['c'] }])], ['a', 'b']);
+  const s = '2026-11-06T09:00:00-05:00';
+  const rows = dedupeCalendar([{ id: 'a', start: s, summary: 'Site Grant - 12 Main St (City, Teams)' }, { id: 'b', start: s, summary: 'Site Grant - 12 Main St' }, { id: 'c', start: s, summary: 'Other thing' }]);
+  assert.deepEqual(rows.map((r) => r.id), ['a', 'c']);
 });
