@@ -299,15 +299,10 @@ fn stop_listening_now(state: &Voice, how: &str) {
 }
 
 #[tauri::command]
-pub(crate) fn start_listening(app: AppHandle, state: tauri::State<'_, Voice>, locale: Option<String>) -> Result<(), String> {
-    stop_listening_now(&state, "cancel");
+pub(crate) fn start_listening(app: AppHandle, state: tauri::State<'_, Voice>, locale: Option<String>, pause: Option<f64>, max: Option<u32>) -> Result<(), String> {
     let mut cmd = Command::new(listen_helper()?);
-    if let Some(l) = locale.filter(|l| !l.is_empty()) {
-        if !(l.len() <= 16 && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')) {
-            return Err("invalid locale".to_string());
-        }
-        cmd.args(["--locale", &l]);
-    }
+    cmd.args(listen_args(locale.as_deref(), pause, max)?);
+    stop_listening_now(&state, "cancel");
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -330,6 +325,31 @@ pub(crate) fn start_listening(app: AppHandle, state: tauri::State<'_, Voice>, lo
     Ok(())
 }
 
+// pulse-listen's flags. pause: seconds of silence that send (0.6 to 10), or 0 for press-to-send,
+// where only the hotkey or Enter sends; max: the longest one listen may run, in seconds.
+pub(crate) fn listen_args(locale: Option<&str>, pause: Option<f64>, max: Option<u32>) -> Result<Vec<String>, String> {
+    let mut args = Vec::new();
+    if let Some(l) = locale.filter(|l| !l.is_empty()) {
+        if !(l.len() <= 16 && l.starts_with(|c: char| c.is_ascii_alphabetic()) && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')) {
+            return Err("invalid locale".to_string());
+        }
+        args.extend(["--locale".to_string(), l.to_string()]);
+    }
+    if let Some(p) = pause {
+        if !(p == 0.0 || (0.6..=10.0).contains(&p)) {
+            return Err("pause must be 0 (press to send) or 0.6 to 10 seconds".to_string());
+        }
+        args.extend(["--pause".to_string(), format!("{}", p)]);
+    }
+    if let Some(m) = max {
+        if !(10..=600).contains(&m) {
+            return Err("max must be 10 to 600 seconds".to_string());
+        }
+        args.extend(["--max".to_string(), m.to_string()]);
+    }
+    Ok(args)
+}
+
 // Enter: stop now and keep what was said (the helper sends its final transcript).
 #[tauri::command]
 pub(crate) fn stop_listening(state: tauri::State<'_, Voice>) {
@@ -343,7 +363,17 @@ pub(crate) fn cancel_listening(state: tauri::State<'_, Voice>) {
 }
 
 pub(crate) fn show_listen_panel(app: &AppHandle) {
+    open_panel(app, false);
+}
+
+// The hotkey while the panel is up doesn't start over: the panel decides (press-to-send sends,
+// a finished reply starts a new listen). Released matters to hold-to-talk.
+fn open_panel(app: &AppHandle, from_hotkey: bool) {
     if let Some(w) = app.get_webview_window(LISTEN_WINDOW) {
+        if from_hotkey && w.is_visible().unwrap_or(false) {
+            let _ = app.emit_to(LISTEN_WINDOW, "pulse://listen-hotkey", "pressed");
+            return;
+        }
         let _ = w.show();
         let _ = w.set_focus();
         let _ = app.emit_to(LISTEN_WINDOW, "pulse://listen-open", ());
@@ -412,8 +442,11 @@ pub(crate) fn set_listen_hotkey(app: AppHandle, shortcut: String) -> Result<Stri
 }
 
 pub(crate) fn on_shortcut(app: &AppHandle, _shortcut: &Shortcut, state: ShortcutState) {
-    if state == ShortcutState::Pressed {
-        show_listen_panel(app);
+    match state {
+        ShortcutState::Pressed => open_panel(app, true),
+        ShortcutState::Released => {
+            let _ = app.emit_to(LISTEN_WINDOW, "pulse://listen-hotkey", "released");
+        }
     }
 }
 
@@ -476,6 +509,18 @@ mod tests {
         assert_eq!(brief_args("morning").unwrap(), vec!["brief", "morning", "--source", "pulse"]);
         assert!(brief_args("--wait").is_err());
         assert!(brief_args("noon").is_err());
+    }
+
+    #[test]
+    fn listen_args_validate_pause_and_max() {
+        assert_eq!(listen_args(None, None, None).unwrap(), Vec::<String>::new());
+        assert_eq!(listen_args(Some("en-US"), Some(0.0), Some(180)).unwrap(), vec!["--locale", "en-US", "--pause", "0", "--max", "180"]);
+        assert_eq!(listen_args(None, Some(2.5), None).unwrap(), vec!["--pause", "2.5"]);
+        assert!(listen_args(None, Some(0.3), None).is_err());
+        assert!(listen_args(None, Some(f64::NAN), None).is_err());
+        assert!(listen_args(None, Some(11.0), None).is_err());
+        assert!(listen_args(None, None, Some(5)).is_err());
+        assert!(listen_args(Some("--max"), None, None).is_err());
     }
 
     #[test]

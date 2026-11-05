@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { SpokenStream, choiceValue, engineOf, parseChoice, speakable, summaryOf } from '../src/utils/voiceText.ts';
+import { SpokenStream, choiceValue, engineOf, firstSentences, parseChoice, speakable, summaryOf } from '../src/utils/voiceText.ts';
 
 test('engine defaults to the system voice and keeps a saved choice', () => {
   assert.equal(engineOf(undefined), 'mac');
@@ -45,6 +45,15 @@ test('stream drops markdown, code and links; summary stops at the first paragrap
   assert.equal(full, 'Done, see the PR. Next para.');
   const summary = feed(new SpokenStream(false), ['Short answer. More', ' detail.\n\nSecond paragraph is skipped.']).join('');
   assert.equal(summary.trim(), 'Short answer. More detail.');
+});
+
+test('spoken replies stop after two sentences; the brief (Infinity) is read whole', () => {
+  const capped = feed(new SpokenStream(false, 2), ['One thing is due. The deck', ' is next. Then lunch. And more.']).join('');
+  assert.equal(capped.trim(), 'One thing is due. The deck is next.');
+  const brief = feed(new SpokenStream(false, Infinity), ['One. Two. Three.']).join('');
+  assert.equal(brief.trim(), 'One. Two. Three.');
+  assert.equal(firstSentences('A. B? C!', 2), 'A. B?');
+  assert.equal(firstSentences('Only one', 2), 'Only one');
 });
 
 const py = (flag: string, input: string) => JSON.parse(execFileSync('python3', ['-I', 'scripts/roo-tts.py', flag], { input }).toString());

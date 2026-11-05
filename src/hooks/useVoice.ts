@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { LiveSnapshot, Transcript } from '../types';
 import { IS_TAURI } from '../utils/orgSource';
+import { streamedRuns } from '../utils/reply';
 import { DEFAULT_HOTKEY, applyHotkey, loadVoice, speakReply, warmVoice } from '../utils/voice';
 
 // Mounted once in the main window (which stays alive while hidden): reads the front door's
@@ -28,7 +29,7 @@ export function useVoice(live: LiveSnapshot | null, frontDoor: string | null) {
       seen.current.set(r.run_id, r.state);
       // Only a reply seen working in this session: never a backlog read at startup.
       const wasWorking = before === 'running' || before === 'queued';
-      if (!wasWorking || r.state !== 'finished' || QUIET_SOURCES.has(r.source ?? '')) continue;
+      if (!wasWorking || r.state !== 'finished' || QUIET_SOURCES.has(r.source ?? '') || streamedRuns.has(r.run_id)) continue;
       invoke<string>('read_transcript', { runId: r.run_id })
         .then((json) => {
           const t: Transcript = JSON.parse(json);

@@ -57,6 +57,82 @@ pub(crate) fn read_watch_calendar() -> Result<Vec<serde_json::Value>, String> {
     Ok(calendar_rows(&read_portfolio_json(&path)?))
 }
 
+// ==========================================
+// Meeting prep (~/portfolio/bin/meeting_prep.py)
+// ==========================================
+// The watcher writes briefs to watch/prep/<key>.md and an index (watch/prep/index.json) with when
+// each one is due: 10 minutes before, and 8pm the night before for meetings before 9am. Roo offers
+// them ("your meeting with X is in 10 minutes. Want a quick brief?") and tells the watcher it is
+// open and what it offered (watch/desktop.json, every minute). A stale heartbeat or a locked
+// screen means the desktop is closed: the watcher sends the brief to Telegram instead.
+
+const PREP_FIELDS: &[&str] = &["key", "title", "start", "entity", "who", "spoken", "status", "slots", "delivered", "ids"];
+const PREP_OFFERED_MAX: usize = 60;
+
+// A prep key: a date and a title slug ("2026-11-06-brownfield-grant"). Nothing else reaches a path.
+pub(crate) fn is_prep_key(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 80 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') && !s.starts_with('-')
+}
+
+// "<key>:night" or "<key>:pre"
+pub(crate) fn is_prep_tag(s: &str) -> bool {
+    match s.rsplit_once(':') {
+        Some((k, slot)) => is_prep_key(k) && (slot == "night" || slot == "pre"),
+        None => false,
+    }
+}
+
+pub(crate) fn prep_rows(v: &serde_json::Value) -> Vec<serde_json::Value> {
+    let Some(map) = v.get("meetings").and_then(|m| m.as_object()) else { return Vec::new() };
+    map.iter()
+        .filter(|(k, r)| is_prep_key(k) && r.get("start").and_then(|x| x.as_str()).is_some())
+        .map(|(k, r)| {
+            let mut row = pick_fields(r, PREP_FIELDS);
+            row["key"] = serde_json::Value::String(k.clone());
+            row
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub(crate) fn read_meeting_prep() -> Result<Vec<serde_json::Value>, String> {
+    let Some(path) = watch_file("prep/index.json") else { return Ok(Vec::new()) };
+    Ok(prep_rows(&read_portfolio_json(&path)?))
+}
+
+// One brief's markdown, by key (never by path).
+#[tauri::command]
+pub(crate) fn read_prep_brief(key: String) -> Result<String, String> {
+    if !is_prep_key(&key) {
+        return Err("invalid key".to_string());
+    }
+    let root = get_portfolio_dir()?;
+    let path = resolve_portfolio_file(&root, "watch/prep", &format!("{}.md", key))?;
+    super::read_portfolio_text(&path)
+}
+
+pub(crate) fn heartbeat_json(at: &str, screen_locked: Option<bool>, offered: &[String]) -> serde_json::Value {
+    let mut keep: Vec<&String> = offered.iter().filter(|t| is_prep_tag(t)).collect();
+    let skip = keep.len().saturating_sub(PREP_OFFERED_MAX);
+    keep.drain(..skip);
+    serde_json::json!({ "at": at, "app": "roo", "screen_locked": screen_locked, "prep_offered": keep })
+}
+
+// Roo is open: written every minute while the window exists (hidden or not).
+#[tauri::command]
+pub(crate) fn desktop_heartbeat(prep_offered: Vec<String>) -> Result<(), String> {
+    let root = get_portfolio_dir()?;
+    let dir = root.join("watch");
+    let dir = dir.canonicalize().map_err(|_| "~/portfolio/watch not found".to_string())?;
+    if !dir.starts_with(&root) {
+        return Err("path is outside ~/portfolio".to_string());
+    }
+    let body = heartbeat_json(&chrono::Local::now().to_rfc3339(), mac::screen_locked(), &prep_offered);
+    let tmp = dir.join("desktop.json.tmp");
+    std::fs::write(&tmp, body.to_string()).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, dir.join("desktop.json")).map_err(|e| e.to_string())
+}
+
 #[derive(serde::Serialize)]
 pub(crate) struct ProactiveStatus {
     speaking: bool,
@@ -216,6 +292,45 @@ mod tests {
         assert_eq!(rows[0]["summary"], "Quarterly review");
         assert!(rows[0].get("description").is_none());
         assert!(calendar_rows(&serde_json::json!({})).is_empty());
+    }
+
+    #[test]
+    fn prep_keys_and_tags_are_plain() {
+        assert!(is_prep_key("2026-11-06-brownfield-grant"));
+        assert!(!is_prep_key("../x"));
+        assert!(!is_prep_key("a.md"));
+        assert!(!is_prep_key("-x"));
+        assert!(!is_prep_key(""));
+        assert!(is_prep_tag("2026-11-06-call:pre"));
+        assert!(is_prep_tag("2026-11-06-call:night"));
+        assert!(!is_prep_tag("2026-11-06-call:later"));
+        assert!(!is_prep_tag("nocolon"));
+    }
+
+    #[test]
+    fn prep_rows_drop_bad_keys_and_paths() {
+        let v = serde_json::json!({"meetings": {
+            "2026-11-06-call": {"start": "2026-11-06T08:00:00-05:00", "title": "Call", "status": "ready", "path": "/Users/x/secret.md", "short": "phone text"},
+            "../evil": {"start": "2026-11-06T08:00:00-05:00"},
+            "2026-11-06-nostart": {"title": "x"}
+        }});
+        let rows = prep_rows(&v);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["key"], "2026-11-06-call");
+        assert!(rows[0].get("path").is_none());
+        assert!(rows[0].get("short").is_none());
+        assert!(prep_rows(&serde_json::json!({})).is_empty());
+    }
+
+    #[test]
+    fn heartbeat_keeps_only_valid_recent_tags() {
+        let mut offered: Vec<String> = (0..70).map(|i| format!("2026-11-06-m{}:pre", i)).collect();
+        offered.push("../x:pre".to_string());
+        let v = heartbeat_json("2026-11-05T12:00:00-05:00", Some(false), &offered);
+        let list = v["prep_offered"].as_array().unwrap();
+        assert_eq!(list.len(), PREP_OFFERED_MAX);
+        assert_eq!(list.last().unwrap(), "2026-11-06-m69:pre");
+        assert_eq!(v["screen_locked"], false);
     }
 
     #[test]

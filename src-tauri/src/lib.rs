@@ -5,6 +5,7 @@ mod proactive;
 mod ops;
 mod usage;
 mod todos;
+mod quick;
 mod tts;
 
 use chrono::{Datelike, Timelike};
@@ -2449,7 +2450,8 @@ async fn read_activity() -> Result<String, String> {
 // Live runs and transcripts: who is working now, and what they said. Read-only.
 // ==========================================
 // ~/portfolio/bin/live.py writes logs/live/<run_id>.json while a run works and
-// logs/transcripts/<run_id>.jsonl as it goes (already redacted). Roo only reads them.
+// logs/transcripts/<run_id>.jsonl as it goes (already redacted). Roo only reads them, except
+// for its quick lane's own turns (quick.rs), which it writes there in the same format.
 
 const LIVE_MAX_FILES: usize = 200;
 const LIVE_MAX_FILE_BYTES: u64 = 64 * 1024;
@@ -3661,6 +3663,7 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(|app, shortcut, event| jarvis::on_shortcut(app, shortcut, event.state())).build())
         .manage(pty::Ptys::default())
         .manage(jarvis::Voice::default())
+        .manage(quick::Replies::default())
         .setup(|app| {
             jarvis::setup(app.handle());
             let menu = tray_menu(app.handle(), &[], &TrayVoice::default())?;
@@ -3731,6 +3734,9 @@ pub fn run() {
             proactive::read_watch_calendar,
             proactive::proactive_status,
             proactive::proactive_notify,
+            proactive::read_meeting_prep,
+            proactive::read_prep_brief,
+            proactive::desktop_heartbeat,
             act_on_decision,
             read_activity,
             read_live,
@@ -3770,6 +3776,9 @@ pub fn run() {
             jarvis::open_run_in_main,
             jarvis::set_listen_hotkey,
             jarvis::pulse_brief,
+            quick::ask_quick,
+            quick::watch_reply,
+            quick::cancel_reply,
             usage::read_usage,
             usage::read_preferences,
             usage::set_preference_disabled
@@ -3781,6 +3790,7 @@ pub fn run() {
         if let tauri::RunEvent::Exit = event {
             pty::close_all(&app.state::<pty::Ptys>());
             jarvis::close_all(&app.state::<jarvis::Voice>());
+            quick::close_all(&app.state::<quick::Replies>());
         }
         // Clicking the Dock icon brings the hidden window back.
         #[cfg(target_os = "macos")]

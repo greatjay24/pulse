@@ -8,7 +8,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test": "node --experimental-strip-types --no-warnings --test tests/proactive.test.ts tests/voice.test.ts"
+    "test:listen": "sh scripts/test-listen.sh",
+    "test": "node --experimental-strip-types --no-warnings --test tests/proactive.test.ts tests/voice.test.ts tests/listen.test.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.18",

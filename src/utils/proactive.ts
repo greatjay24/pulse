@@ -255,3 +255,87 @@ export function localDay(d = new Date()): string {
 export function isFresh(it: Interrupt, now: number): boolean {
   return it.at > 0 && now - it.at < STALE_MS;
 }
+
+// ------------------------------------------------------------------
+// Meeting prep (~/portfolio/bin/meeting_prep.py writes the briefs and when each is due)
+// ------------------------------------------------------------------
+
+export interface PrepRow {
+  key: string;
+  title?: string;
+  start: string;
+  entity?: string | null;
+  who?: string | null; // "Sam at Northwind": made for speech by the watcher
+  spoken?: string | null; // the brief in at most two sentences
+  status?: string; // ready | pending | thin | prepped_elsewhere | retry | failed
+  slots?: Record<string, string>; // night | pre -> ISO time
+  delivered?: Record<string, unknown>;
+  ids?: string[]; // the calendar event ids it covers
+}
+
+export interface PrepOffer {
+  tag: string; // "<key>:<slot>": what Roo tells the watcher it offered
+  slot: 'night' | 'pre';
+  text: string; // what Roo says and shows
+  spoken: string; // the brief itself, said when the owner says yes
+  draft: string; // the Roo thread's box when the owner opens it
+}
+
+export const PREP_NIGHT_WINDOW_MS = 150 * 60 * 1000; // a night brief not offered by 22:30 waits for the morning
+
+function clockOf(d: Date): string {
+  const h = d.getHours() % 12 || 12;
+  const m = d.getMinutes();
+  return `${h}${m ? `:${String(m).padStart(2, '0')}` : ''} ${d.getHours() < 12 ? 'am' : 'pm'}`;
+}
+
+// The prep due now for one meeting, or null. Ready briefs only; a slot is offered once (here or by
+// Telegram), never after the meeting starts. Quiet hours don't apply: these nudges are deliberate.
+export function prepOffer(r: PrepRow, now: number, offered: Set<string>, name: string | null = null): PrepOffer | null {
+  if (!r || r.status !== 'ready' || typeof r.key !== 'string') return null;
+  const start = Date.parse(r.start);
+  if (!Number.isFinite(start) || now >= start) return null;
+  const slots = (['pre', 'night'] as const).filter((s) => typeof r.slots?.[s] === 'string');
+  for (const slot of slots) {
+    const at = Date.parse(r.slots![slot]);
+    const tag = `${r.key}:${slot}`;
+    if (!Number.isFinite(at) || now < at || offered.has(tag) || r.delivered?.[slot]) continue;
+    if (slot === 'night' && now - at > PREP_NIGHT_WINDOW_MS) continue;
+    const hey = name ? `Hey ${name}, ` : 'Hey, ';
+    const who = short(r.who ?? '', 6);
+    const title = short(r.title ?? '', 6) || 'your meeting';
+    const meeting = who ? `your meeting with ${who}` : title;
+    const mins = Math.max(1, Math.round((start - now) / 60000));
+    const text =
+      slot === 'pre'
+        ? `${hey}${meeting} is in ${mins} minute${mins === 1 ? '' : 's'}. Want a quick brief?`
+        : `${hey}${meeting} is tomorrow at ${clockOf(new Date(start))}. Your brief is ready. Want a quick look?`;
+    return {
+      tag,
+      slot,
+      text,
+      spoken: briefOpening(r.spoken ?? '', 2),
+      draft: `Give me the quick brief for "${r.title ?? ''}". It's in ~/portfolio/watch/prep/${r.key}.md.`,
+    };
+  }
+  return null;
+}
+
+// Calendar ids a ready brief covers: Roo's plain "starts in 10 minutes" stays quiet for those.
+export function preppedIds(rows: PrepRow[]): Set<string> {
+  const out = new Set<string>();
+  for (const r of rows) if (r?.status === 'ready') for (const id of r.ids ?? []) if (typeof id === 'string') out.add(id);
+  return out;
+}
+
+// One reminder per meeting when the same one is on two of the owner's calendars.
+export function dedupeCalendar(rows: CalendarRow[]): CalendarRow[] {
+  const seen = new Set<string>();
+  return rows.filter((e) => {
+    const words = (e.summary ?? '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(Boolean).slice(0, 2).join(' ');
+    const k = `${Date.parse(e.start)}|${words}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}

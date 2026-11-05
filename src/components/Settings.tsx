@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { VoiceSettings } from './VoiceSettings';
+import { ListenSettings } from './ListenSettings';
 import { invoke } from '@tauri-apps/api/core';
 import { useTheme, fontOptions, presets, PresetId, ThemeMode, FontChoice } from '../contexts/ThemeContext';
 import { App, IntegrationType, PROJECT_COLORS, GoogleCalendarConfig } from '../types';
@@ -438,6 +439,7 @@ export function Settings({ apps, onSave, onClose, inline = false, saasMetrics, o
                 />
               </div>
               {IS_TAURI && <VoiceSettings />}
+              {IS_TAURI && <ListenSettings />}
               <div style={{ background: tokens.colors.bgCard, border: `1px solid ${tokens.colors.border}`, borderRadius: tokens.radius.lg, padding: '24px' }}>
                 <ToggleRow
                   label="SaaS metrics"
