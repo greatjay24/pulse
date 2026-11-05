@@ -110,6 +110,8 @@ const HASH_FIELDS: &[(&str, &[&str])] = &[
     ("stripe_refund", &["stripe_id", "amount", "currency", "reason", "subject", "body"]),
     ("stripe_subscription", &["action", "stripe_id", "customer_id", "items", "amount", "currency", "interval", "days_until_due", "subject", "body"]),
     ("resend_email", &["from", "from_name", "reply_to", "to", "cc", "subject", "body", "in_reply_to", "references"]),
+    ("tiktok_post", &["account", "title", "body", "media", "ai_label", "privacy", "schedule", "notes"]),
+    ("youtube_upload", &["channel", "title", "body", "tags", "privacy", "publish_at", "category_id", "made_for_kids", "ai_altered", "media", "notes"]),
 ];
 
 // Mirrors sendguard._part: strings as is, integers in decimal, lists joined with U+001F, null/missing empty.
@@ -579,6 +581,23 @@ mod ops_tests {
         let mut other = item.clone();
         other["from"] = "hello@notify.example.com".into();
         assert_ne!(content_hash(&other).unwrap(), content_hash(&item).unwrap());
+    }
+
+    // Same items and constants as bin/test_outbox.py PULSE_TIKTOK_ITEM / PULSE_YOUTUBE_ITEM.
+    #[test]
+    fn social_hashes_match_python() {
+        let tiktok = serde_json::json!({"kind": "tiktok_post", "entity": "visuo", "account": "@visuo.io", "title": "TikTok 1/3",
+            "body": "Caption – here", "media": ["/v/clip.mp4"], "ai_label": "yes", "privacy": "public", "schedule": null,
+            "notes": "Cover at 0:04"});
+        assert_eq!(content_hash(&tiktok).unwrap(), "d8b9bad70273c312a877fdc846060bdff13a13acd5d52a4deffcac8064d37bfa");
+        let youtube = serde_json::json!({"kind": "youtube_upload", "entity": "visuo", "channel": "visuo", "title": "The Game Cut",
+            "body": "Description", "tags": ["pixel art", "16-bit"], "privacy": "private", "publish_at": "2026-11-10T09:00",
+            "category_id": "10", "made_for_kids": "no", "ai_altered": "no", "media": ["/v/cut.mp4"], "notes": null});
+        assert_eq!(content_hash(&youtube).unwrap(), "ef4f96859bf79e8c865da724dc8e18288d34460a762e184a76c6b0e994de844b");
+        // Privacy is part of what Jay approves.
+        let mut public = youtube.clone();
+        public["privacy"] = "public".into();
+        assert_ne!(content_hash(&public).unwrap(), content_hash(&youtube).unwrap());
     }
 
     #[test]

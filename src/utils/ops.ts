@@ -90,7 +90,7 @@ export function kindOf(m: OutboxMessage): OutboxKind {
   return m.kind ?? 'email';
 }
 
-export const PUBLISH_KINDS: OutboxKind[] = ['post', 'text', 'dm', 'slack'];
+export const PUBLISH_KINDS: OutboxKind[] = ['post', 'text', 'dm', 'slack', 'tiktok_post'];
 export const isEmailKind = (k: OutboxKind) => k === 'email' || k === 'resend_email';
 export const isMoneyKind = (k: OutboxKind) => k.startsWith('stripe_');
 
@@ -100,6 +100,8 @@ const CHANNEL_LABEL: Record<string, string> = {
   x: 'X',
   newsletter: 'Newsletter',
   site: 'Website',
+  youtube: 'YouTube',
+  tiktok: 'TikTok',
   facebook: 'Facebook',
   whatsapp: 'WhatsApp',
   other: 'DM',
@@ -124,6 +126,10 @@ export function kindLabel(m: OutboxMessage): string {
       return `${channelLabel(m.channel)} DM`;
     case 'slack':
       return 'Slack';
+    case 'tiktok_post':
+      return 'TikTok post';
+    case 'youtube_upload':
+      return 'YouTube upload';
     case 'stripe_send_invoice':
       return 'Invoice';
     case 'stripe_send_quote':
@@ -136,7 +142,9 @@ export function kindLabel(m: OutboxMessage): string {
 }
 
 // The one button each kind leads with.
-export function primaryLabel(k: OutboxKind): 'Send' | 'Publish' | 'Approve' {
+export function primaryLabel(k: OutboxKind): 'Send' | 'Publish' | 'Approve' | 'Upload' {
+  if (k === 'youtube_upload') return 'Upload';
+  if (k === 'tiktok_post') return 'Approve';
   if (k === 'post') return 'Publish';
   if (isMoneyKind(k)) return 'Approve';
   return 'Send';
@@ -150,7 +158,51 @@ export const EDITABLE: Partial<Record<OutboxKind, (keyof OutboxEdit)[]>> = {
   text: ['to', 'body'],
   dm: ['to', 'body', 'link'],
   slack: ['body', 'link'],
+  tiktok_post: ['title', 'body'],
+  youtube_upload: ['title', 'body'],
 };
+
+// The channel a post-like item goes to (posts carry it; the social kinds imply it).
+export function socialChannel(m: OutboxMessage): string | null {
+  const k = kindOf(m);
+  if (k === 'tiktok_post') return 'tiktok';
+  if (k === 'youtube_upload') return 'youtube';
+  return k === 'post' ? m.channel ?? null : null;
+}
+
+// The text pasted when finishing by hand. A TikTok caption is just the caption.
+export function pasteText(m: OutboxMessage): string {
+  if (kindOf(m) === 'tiktok_post') return m.body.trimEnd();
+  const parts = [m.title, m.body.trimEnd()];
+  if (kindOf(m) === 'post' && m.link) parts.push(m.link);
+  return parts.filter(Boolean).join('\n\n');
+}
+
+// Where Copy & open lands for a post finished by hand: the compose screen, prefilled when
+// the site accepts it (LinkedIn, X). Instagram has no web compose link; its home has Create.
+export function composeUrl(m: OutboxMessage): string | null {
+  const text = encodeURIComponent(pasteText(m));
+  switch (socialChannel(m)) {
+    case 'linkedin':
+      return `https://www.linkedin.com/feed/?shareActive=true&text=${text}`;
+    case 'x':
+      return `https://x.com/intent/post?text=${text}`;
+    case 'instagram':
+      return 'https://www.instagram.com/';
+    case 'tiktok':
+      return 'https://www.tiktok.com/tiktokstudio/upload';
+    case 'youtube':
+      return 'https://studio.youtube.com/';
+    default:
+      return null;
+  }
+}
+
+// "[his TikTok handle]": text an agent left for the owner to fill in.
+export function placeholders(m: OutboxMessage): string[] {
+  const found = `${m.title ?? ''}\n${m.body}`.match(/\[[^\]\n]{3,80}\]/g) ?? [];
+  return [...new Set(found)];
+}
 
 const ZERO_DECIMAL = new Set(['bif', 'clp', 'djf', 'gnf', 'jpy', 'kmf', 'krw', 'mga', 'pyg', 'rwf', 'ugx', 'vnd', 'vuv', 'xaf', 'xof', 'xpf']);
 

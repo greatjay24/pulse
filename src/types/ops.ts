@@ -9,6 +9,8 @@ export type OutboxKind =
   | 'text'
   | 'dm'
   | 'slack'
+  | 'tiktok_post'
+  | 'youtube_upload'
   | 'stripe_send_invoice'
   | 'stripe_send_quote'
   | 'stripe_refund'
@@ -20,7 +22,7 @@ export interface OutboxMessage {
   id: string;
   kind?: OutboxKind; // missing on items written before kinds existed: email
   entity: string;
-  account: string; // email: which mailbox it goes out from ("resend" for resend_email)
+  account: string; // email: which mailbox it goes out from ("resend" for resend_email); tiktok_post: the @handle
   to: string[]; // email addresses, phone numbers or @handles
   cc: string[];
   subject: string;
@@ -50,6 +52,16 @@ export interface OutboxMessage {
   link?: string | null; // where it goes; after a click, where to finish it or the Stripe page
   media?: string[];
   next_step?: string | null; // what's left for the owner after the click
+  // tiktok_post / youtube_upload ("yes"/"no" flags are strings so they hash like Python)
+  privacy?: string | null; // tiktok: public|friends|followers|private; youtube: private|unlisted|public
+  notes?: string | null; // what to do by hand after (cover frame, pinned comment)
+  ai_label?: 'yes' | 'no' | null; // tiktok: TikTok's "AI-generated content" label
+  schedule?: string | null; // tiktok: post on YYYY-MM-DD[THH:MM]
+  tags?: string[];
+  publish_at?: string | null; // youtube: private until then (local YYYY-MM-DDTHH:MM)
+  category_id?: string | null;
+  made_for_kids?: 'yes' | 'no' | null;
+  ai_altered?: 'yes' | 'no' | null;
   // stripe_*
   stripe_id?: string | null;
   customer_id?: string | null;

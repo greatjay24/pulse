@@ -3,8 +3,9 @@ import { useTheme } from '../contexts/ThemeContext';
 import { PortfolioEntity, PortfolioSnapshot } from '../types';
 import { OutboxEdit, OutboxEntry, OutboxMessage } from '../types/ops';
 import { editOutbox, markPublished, sendOutbox, skipOutbox, useOutbox } from '../hooks/useOps';
-import { EDITABLE, PUBLISH_KINDS, channelLabel, formatMinor, isEmailKind, isMoneyKind, isWebLink, kindLabel, kindOf, primaryLabel, splitAddresses } from '../utils/ops';
+import { EDITABLE, PUBLISH_KINDS, channelLabel, composeUrl, formatMinor, isEmailKind, isMoneyKind, isWebLink, kindLabel, kindOf, pasteText, placeholders, primaryLabel, socialChannel, splitAddresses } from '../utils/ops';
 import { openExternal } from '../utils/tracker';
+import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { showToast } from '../utils/toast';
 import { Card, Notice, PageHeader, SectionHeading, SectionLabel } from './BoardUI';
 import { Icon } from './Icons';
@@ -20,12 +21,19 @@ function ago(at: string | null | undefined, now: number): string {
   return `${Math.round(mins / 1440)}d ago`;
 }
 
-// The text the owner pastes when finishing a post, text, DM or Slack message by hand.
-function pasteText(m: OutboxMessage): string {
-  const parts = [m.title, m.body.trimEnd()];
-  if (kindOf(m) === 'post' && m.link) parts.push(m.link);
-  return parts.filter(Boolean).join('\n\n');
+// Copy & open: the text on the clipboard, the compose screen in the browser.
+async function copyAndOpen(m: OutboxMessage, what?: string) {
+  const url = composeUrl(m);
+  await copy(pasteText(m), what ?? (url ? `Copied. Paste it into ${channelLabel(socialChannel(m))}.` : 'Copied'));
+  if (url) openExternal(url);
 }
+
+function showFile(path: string | undefined) {
+  if (!path || !path.startsWith('/')) return;
+  revealItemInDir(path).catch(() => showToast('Could not show the file in Finder'));
+}
+
+const fileName = (p: string) => p.split('/').pop() || p;
 
 async function copy(text: string, what = 'Copied') {
   try {
@@ -45,6 +53,12 @@ function clickMeans(m: OutboxMessage): string {
       return 'send this message from the right mailbox, threaded, and mark it sent';
     case 'resend_email':
       return `send this message through Resend as ${m.from ?? 'the sender shown'} and mark it sent`;
+    case 'youtube_upload':
+      return m.publish_at
+        ? `upload the video to YouTube (${m.channel}) as private, scheduled to go public ${m.publish_at.replace('T', ' ')}`
+        : `upload the video to YouTube (${m.channel}) as ${m.privacy ?? 'private'}, in the background`;
+    case 'tiktok_post':
+      return 'approve it, copy the caption and open TikTok Studio to upload it';
     case 'stripe_send_invoice':
       return 'check the draft in Stripe, finalize it and have Stripe email it';
     case 'stripe_send_quote':
@@ -145,6 +159,57 @@ function Preview({ m }: { m: OutboxMessage }) {
         )}
         <div style={{ marginTop: '12px', fontSize: tokens.type.micro, color: c.textDim, lineHeight: 1.5 }}>
           Runs in Stripe with the {m.entity} agent key when you click Approve. Stripe is re-checked first; if anything changed, nothing happens.
+        </div>
+      </>
+    );
+  }
+
+  if (kind === 'tiktok_post' || kind === 'youtube_upload') {
+    const video = m.media?.[0];
+    const yt = kind === 'youtube_upload';
+    const flags = yt
+      ? [m.privacy ?? 'private', m.made_for_kids === 'yes' ? 'made for kids' : 'not made for kids', m.ai_altered === 'yes' ? 'altered or synthetic: yes' : null]
+      : [m.privacy ?? 'public', m.ai_label === 'yes' ? 'AI-generated label on' : 'no AI label'];
+    const left = placeholders(m);
+    return (
+      <>
+        <div style={meta}>
+          <Meta label="On">{yt ? `YouTube (${m.channel})` : `TikTok as ${m.account}`}</Meta>
+          {video && (
+            <Meta label="Video">
+              {video.startsWith('/') ? (
+                <button onClick={() => showFile(video)} title={video} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: c.accent, fontSize: 'inherit', fontFamily: 'inherit' }}>
+                  {fileName(video)}
+                </button>
+              ) : (
+                video
+              )}
+            </Meta>
+          )}
+          <Meta label="Settings">{flags.filter(Boolean).join(' · ')}</Meta>
+          {yt && m.publish_at && <Meta label="Goes public">{m.publish_at.replace('T', ' ')}</Meta>}
+          {!yt && m.schedule && <Meta label="Post on">{m.schedule.replace('T', ' ')}</Meta>}
+          {yt && m.tags && m.tags.length > 0 && <Meta label="Tags">{m.tags.join(', ')}</Meta>}
+        </div>
+        {m.title && <div style={{ fontSize: '17px', fontWeight: 600, margin: '12px 0 0' }}>{m.title}</div>}
+        <div style={{ marginTop: '12px' }}>
+          <Body text={m.body} boxed />
+        </div>
+        {left.length > 0 && (
+          <div style={{ marginTop: '10px', fontSize: tokens.type.small, color: c.danger }}>
+            Fill in {left.join(', ')} first (Edit).{yt ? ' Upload refuses until then.' : ''}
+          </div>
+        )}
+        {m.notes && (
+          <div style={{ marginTop: '10px', fontSize: tokens.type.small, color: c.textMuted, lineHeight: 1.5 }}>
+            <span style={{ color: c.textDim }}>By hand after: </span>
+            {m.notes}
+          </div>
+        )}
+        <div style={{ marginTop: '12px', fontSize: tokens.type.micro, color: c.textDim, lineHeight: 1.5 }}>
+          {yt
+            ? 'Upload sends the video to YouTube through its API on your click. Nothing goes up before.'
+            : 'TikTok has no hands-off posting yet: Approve copies the caption and opens TikTok Studio; you upload the video there.'}
         </div>
       </>
     );
@@ -265,11 +330,13 @@ function OutboxItem({ entry, entity, onDone }: { entry: OutboxEntry; entity?: Po
       if (res.warning) showToast(res.warning);
       if (!res.ok) return;
       if (isEmailKind(kind)) showToast(`Sent to ${m.to.join(', ')}${kind === 'resend_email' ? ` as ${m.from}` : ''}`);
+      else if (kind === 'youtube_upload') showToast(res.next_step ?? 'Uploading to YouTube in the background');
+      else if (composeUrl(m)) await copyAndOpen(m, `Approved and copied. Paste it into ${channelLabel(socialChannel(m))}, then mark it published.`);
       else if (PUBLISH_KINDS.includes(kind)) await copy(pasteText(m), 'Approved and copied. Paste it where it goes, then mark it published.');
       else showToast(res.next_step ?? `${kindLabel(m)}: done in Stripe`);
     });
 
-  const busyLabel = { Send: 'Sending…', Publish: 'Approving…', Approve: 'Approving…' }[label];
+  const busyLabel = { Send: 'Sending…', Publish: 'Approving…', Approve: 'Approving…', Upload: 'Starting upload…' }[label];
 
   return (
     <Card>
@@ -299,7 +366,7 @@ function OutboxItem({ entry, entity, onDone }: { entry: OutboxEntry; entity?: Po
       {!editing && (
         <div style={{ display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
           <button className="btn btn-primary" disabled={!!busy} onClick={go} title={`Click to ${clickMeans(m)}`} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Icon name={isEmailKind(kind) ? 'mail' : isMoneyKind(kind) ? 'credit-card' : 'check'} size={14} color="currentColor" /> {busy === 'go' ? busyLabel : label}
+            <Icon name={isEmailKind(kind) ? 'mail' : isMoneyKind(kind) ? 'credit-card' : kind === 'youtube_upload' ? 'cloud' : 'check'} size={14} color="currentColor" /> {busy === 'go' ? busyLabel : label}
           </button>
           {EDITABLE[kind] && (
             <button className="btn btn-secondary" disabled={!!busy} onClick={() => setEditing(true)}>Edit</button>
@@ -349,12 +416,19 @@ function FinishItem({ entry, entity, onDone }: { entry: OutboxEntry; entity?: Po
       </div>
       {error && <div style={{ marginBottom: '8px', fontSize: tokens.type.small, color: c.danger }}>{error}</div>}
       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-        {publishable && (
+        {publishable && composeUrl(m) ? (
+          <button className="btn btn-secondary" onClick={() => copyAndOpen(m)} title="Copy the text and open the place to post it" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Icon name="external-link" size={14} color="currentColor" /> Copy &amp; open {channelLabel(socialChannel(m))}
+          </button>
+        ) : publishable ? (
           <button className="btn btn-secondary" onClick={() => copy(pasteText(m))} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Icon name="download" size={14} color="currentColor" /> Copy text
           </button>
+        ) : null}
+        {kind === 'tiktok_post' && m.media?.[0]?.startsWith('/') && (
+          <button className="btn btn-secondary" onClick={() => showFile(m.media?.[0])}>Show video</button>
         )}
-        {isWebLink(m.link) && (
+        {isWebLink(m.link) && !(publishable && composeUrl(m)) && (
           <button className="btn btn-secondary" onClick={() => openExternal(m.link!)} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Icon name="external-link" size={14} color="currentColor" /> {isMoneyKind(kind) ? 'Open in Stripe' : `Open ${channelLabel(m.channel) || 'link'}`}
           </button>
@@ -380,15 +454,16 @@ function RecentRow({ entry, entity }: { entry: OutboxEntry; entity?: PortfolioEn
       <span style={{ flex: 1, minWidth: 0 }}>
         <span style={{ fontWeight: 600 }}>{m.subject}</span>
         <span style={{ color: c.textMuted }}> · {kindLabel(m)}{who ? ` · ${who}` : ''} · {entity?.name ?? m.entity}</span>
-        {isWebLink(m.link) && isMoneyKind(kindOf(m)) && m.status === 'sent' && (
+        {isWebLink(m.link) && (isMoneyKind(kindOf(m)) || kindOf(m) === 'youtube_upload') && ['sent', 'published'].includes(m.status) && (
           <button onClick={() => openExternal(m.link!)} style={{ marginLeft: '8px', background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: c.accent, fontSize: tokens.type.small, fontFamily: 'inherit' }}>
             open
           </button>
         )}
+        {kindOf(m) === 'youtube_upload' && !m.error && m.next_step && <div style={{ color: c.textMuted }}>{m.next_step}</div>}
         {m.error && (
           <div style={{ color: c.danger }}>
             {m.error}
-            {(m.status === 'sending' || m.status === 'failed') && (isMoneyKind(kindOf(m)) ? ' Check it in Stripe before queueing it again.' : kindOf(m) === 'email' ? ' Check Sent in Gmail before trying again.' : kindOf(m) === 'resend_email' ? ' Check Emails in the Resend dashboard before trying again.' : '')}
+            {(m.status === 'sending' || m.status === 'failed') && (isMoneyKind(kindOf(m)) ? ' Check it in Stripe before queueing it again.' : kindOf(m) === 'email' ? ' Check Sent in Gmail before trying again.' : kindOf(m) === 'resend_email' ? ' Check Emails in the Resend dashboard before trying again.' : kindOf(m) === 'youtube_upload' ? ' Check Content in YouTube Studio before trying again.' : '')}
           </div>
         )}
       </span>
