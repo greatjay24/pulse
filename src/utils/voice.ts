@@ -1,8 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import { IS_TAURI } from './orgSource';
-import { DEFAULT_ENGINE, SpokenStream, VoiceEngine, engineOf, speakable, summaryOf } from './voiceText';
+import { DEFAULT_ENGINE, SPOKEN_SENTENCES, SpokenStream, VoiceEngine, engineOf, firstSentences, speakable, summaryOf } from './voiceText';
 
-export { speakable, summaryOf } from './voiceText';
+export { speakable, summaryOf, firstSentences, SPOKEN_SENTENCES } from './voiceText';
 export type { VoiceEngine } from './voiceText';
 
 // Voice: replies read aloud with Roo's own British voice (Kokoro on this Mac, Rust tts.rs) or
@@ -63,7 +63,7 @@ export function saveVoice(v: VoiceSettings) {
 export async function speak(text: string, full = false) {
   if (!IS_TAURI) return;
   const v = loadVoice();
-  const say = full ? speakable(text) : summaryOf(text);
+  const say = full ? speakable(text) : firstSentences(summaryOf(text), SPOKEN_SENTENCES);
   if (!say) return;
   await invoke('speak', { text: say, voice: v.voice, rate: v.rate, engine: v.engine });
 }
@@ -76,11 +76,11 @@ export interface ReplyStream {
 // A reply read aloud while it streams in: Roo's voice starts on the first complete sentence.
 // Text is markdown as written; it's cleaned for the ear here. full = false speaks the summary
 // (first paragraph) only. Stop with stopSpeaking() as usual. null when there's nothing to do.
-export async function speakStream(full = false): Promise<ReplyStream | null> {
+export async function speakStream(full = false, maxSentences = SPOKEN_SENTENCES): Promise<ReplyStream | null> {
   if (!IS_TAURI) return null;
   const v = loadVoice();
   const id = await invoke<number>('speak_begin', { voice: v.voice, rate: v.rate, engine: v.engine });
-  const spoken = new SpokenStream(full);
+  const spoken = new SpokenStream(full, maxSentences);
   let chain = Promise.resolve(); // keep appends in order
   const send = (text: string) => {
     if (text) chain = chain.then(() => invoke<void>('speak_append', { id, text })).catch(() => {});
@@ -95,9 +95,10 @@ export async function speakStream(full = false): Promise<ReplyStream | null> {
 }
 
 // A streamed reply read aloud per the settings (null when replies aren't read aloud).
-export function speakReplyStream(): Promise<ReplyStream | null> {
+// Summary mode speaks the first SPOKEN_SENTENCES sentences; a brief passes Infinity.
+export function speakReplyStream(maxSentences = SPOKEN_SENTENCES): Promise<ReplyStream | null> {
   const mode = loadVoice().mode;
-  return mode === 'off' ? Promise.resolve(null) : speakStream(mode === 'full');
+  return mode === 'off' ? Promise.resolve(null) : speakStream(mode === 'full', maxSentences);
 }
 
 // Load Roo's voice ahead of the first reply (the model takes about a second to load).

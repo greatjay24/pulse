@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useTheme } from '../contexts/ThemeContext';
 import { PULSE_TARGET, askLead } from '../utils/command';
-import { ListenSettings, helperArgs, listeningHint, loadListen, onHotkey } from '../utils/listen';
+import { ListenSettings, finalText, helperArgs, listeningHint, loadListen, onHotkey } from '../utils/listen';
 import { REPLY_EVENT, ReplyEvent, newTurnId } from '../utils/reply';
 import { HOTKEYS, briefKindOf, briefMe, loadVoice, stopSpeaking, summaryOf } from '../utils/voice';
 import { StrokeIcon } from './Icons';
@@ -100,9 +100,9 @@ export function ListenPanel() {
       }
       setPhase('sending');
       setReply('');
-      const id = newTurnId();
+      const kind = briefKindOf(message);
+      const id = newTurnId(!!kind);
       try {
-        const kind = briefKindOf(message);
         if (kind) {
           turn.current = { id, message, lane: 'full' };
           const r = await briefMe(kind);
@@ -143,8 +143,9 @@ export function ListenPanel() {
 
   // Press to send (or hold to talk): the hotkey again sends, stops, or starts over.
   const sendNow = useCallback(() => {
-    if (phaseRef.current === 'typing') send(textRef.current);
-    else invoke('stop_listening').catch(() => {}); // the helper answers with its final transcript
+    const p = phaseRef.current;
+    if (p === 'typing' || p === 'error') send(textRef.current);
+    else if (p === 'listening' || p === 'starting') invoke('stop_listening').catch(() => {}); // the helper answers with its final transcript
   }, [send]);
 
   // Each open of the panel starts a fresh listen.
@@ -163,8 +164,10 @@ export function ListenPanel() {
       else if (ev.type === 'level') setLevel(ev.value);
       else if (ev.type === 'partial') setText(ev.text);
       else if (ev.type === 'final') {
-        setText(ev.text);
-        if (phaseRef.current === 'listening' || phaseRef.current === 'starting') send(ev.text);
+        // The words on screen win when the final comes back emptier (they are what the owner saw).
+        const said = finalText(ev.text, textRef.current);
+        setText(said);
+        if (phaseRef.current === 'listening' || phaseRef.current === 'starting') send(said);
       } else if (ev.type === 'error') {
         setNote(ev.message);
         setPhase('typing'); // the box still works: type, or dictate with another tool
@@ -287,7 +290,14 @@ export function ListenPanel() {
           </>
         ) : (
           <>
-            <span>{settings.mode === 'hold' ? `Let go of ${hotkey} or Enter sends` : settings.mode === 'press' ? `${hotkey} or Enter sends` : 'Pause or Enter sends'}</span>
+            <button
+              onClick={sendNow}
+              disabled={phase === 'sending' || phase === 'waiting'}
+              style={{ background: 'none', border: 'none', padding: 0, color: c.accent, cursor: 'pointer', fontFamily: 'inherit', fontSize: 'inherit', fontWeight: 600 }}
+            >
+              Send
+            </button>
+            <span>{settings.mode === 'hold' ? `or let go of ${hotkey}, or Enter` : settings.mode === 'press' ? `or ${hotkey} again, or Enter` : 'or pause, or Enter'}</span>
             <span>Esc cancels</span>
             <span style={{ marginLeft: 'auto' }}>On-device speech · nothing leaves this Mac but the text</span>
           </>

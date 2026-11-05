@@ -47,6 +47,17 @@ export function summaryOf(text: string): string {
   return spoken.length > SUMMARY_MAX ? spoken.slice(0, SUMMARY_MAX).replace(/\s+\S*$/, '') + '.' : spoken;
 }
 
+// Spoken replies (summary mode) stop after this many sentences: the ear wants the answer, and the
+// rest is on screen. The brief, written to be heard, is read whole (maxSentences = Infinity).
+export const SPOKEN_SENTENCES = 2;
+
+// The first n sentences of already-speakable text.
+export function firstSentences(text: string, n: number): string {
+  if (!Number.isFinite(n)) return text;
+  const parts = text.split(/(?<=[.!?…]["')\]]?)\s+(?=\S)/);
+  return parts.slice(0, Math.max(1, n)).join(' ');
+}
+
 // A sentence end with more text after it.
 const BOUNDARY = /[.!?…]["')\]]?\s+(?=\S)/g;
 
@@ -61,9 +72,12 @@ export class SpokenStream {
   private finished = false;
   private started = false;
   private full: boolean;
+  private maxSentences: number;
+  private sentences = 0;
 
-  constructor(full: boolean) {
+  constructor(full: boolean, maxSentences = Infinity) {
     this.full = full;
+    this.maxSentences = full ? Infinity : maxSentences;
   }
 
   push(chunk: string): string {
@@ -116,6 +130,16 @@ export class SpokenStream {
     if (!this.full && this.spoken + t.length > SUMMARY_MAX) {
       t = t.slice(0, Math.max(0, SUMMARY_MAX - this.spoken)).replace(/\s+\S*$/, '') + '.';
       this.finished = true;
+    }
+    if (Number.isFinite(this.maxSentences)) {
+      const parts = t.split(/(?<=[.!?…]["')\]]?)\s+(?=\S)/);
+      const room = this.maxSentences - this.sentences;
+      const ends = /[.!?…]["')\]]?$/.test(t) ? parts.length : parts.length - 1; // sentences finished in t
+      if (ends >= room) {
+        t = parts.slice(0, room).join(' ');
+        this.finished = true;
+      }
+      this.sentences += Math.min(ends, room);
     }
     this.spoken += t.length + 1;
     return t + ' ';

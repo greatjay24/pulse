@@ -1,7 +1,7 @@
 // Run: npm test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { HOLD_MIN_MS, MAX_LISTEN_SECS, helperArgs, listeningHint, onHotkey, parseListen } from '../src/utils/listen.ts';
+import { HOLD_MIN_MS, MAX_LISTEN_SECS, finalText, helperArgs, listeningHint, onHotkey, parseListen } from '../src/utils/listen.ts';
 
 test('press to send is the default and pause is bounded', () => {
   assert.deepEqual(parseListen(null), { mode: 'press', pauseSecs: 2.5 });
@@ -33,4 +33,12 @@ test('the hotkey sends, restarts or waits', () => {
   assert.equal(onHotkey(press, 'released', 'listening', 5000), 'none');
   assert.equal(onHotkey(hold, 'released', 'listening', HOLD_MIN_MS + 1), 'send');
   assert.equal(onHotkey(hold, 'released', 'listening', 100), 'none', 'a tap keeps listening');
+});
+
+test('an emptier final never wipes what was said', () => {
+  assert.equal(finalText('', 'What is on my list'), 'What is on my list');
+  assert.equal(finalText('second part', 'first part second part'), 'first part second part');
+  assert.equal(finalText('What is on my list today?', 'what is on my list today'), 'What is on my list today?');
+  assert.equal(finalText('I want to clean this up', 'I wanna clean this up'), 'I want to clean this up');
+  assert.equal(finalText('hi', ''), 'hi');
 });

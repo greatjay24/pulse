@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { IS_TAURI } from '../utils/orgSource';
-import { REPLY_EVENT, ReplyEvent, streamedRuns } from '../utils/reply';
+import { REPLY_EVENT, ReplyEvent, isBriefTurn, streamedRuns } from '../utils/reply';
 import { ReplyStream, speakReplyStream } from '../utils/voice';
 
 // Mounted once in the main window: reads Roo's replies from the listening panel aloud as they
@@ -12,7 +12,7 @@ export function useReplyVoice() {
     if (!IS_TAURI) return;
     const streams = new Map<string, Promise<ReplyStream | null>>();
     const begin = (id: string) => {
-      const s = speakReplyStream().catch(() => null);
+      const s = speakReplyStream(isBriefTurn(id) ? Infinity : undefined).catch(() => null);
       streams.set(id, s);
       return s;
     };

@@ -12,9 +12,12 @@ export interface ReplyEvent {
   run_id?: string; // full: from start; fast: on done (its transcript)
 }
 
-export function newTurnId(): string {
-  return `t-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+// "b-" marks a brief (read aloud whole); "t-" any other turn (the first sentences are spoken).
+export function newTurnId(brief = false): string {
+  return `${brief ? 'b' : 't'}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
+
+export const isBriefTurn = (id: string) => id.startsWith('b-');
 
 // Full runs whose reply is read aloud from the stream (hooks/useReplyVoice.ts), so useVoice
 // doesn't read them again when their live file says finished. Per window; both hooks live in

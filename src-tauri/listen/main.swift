@@ -58,7 +58,7 @@ final class Listener {
     private var request = SFSpeechAudioBufferRecognitionRequest()
     var task: SFSpeechRecognitionTask?
     var recognizer: SFSpeechRecognizer?
-    var committed = ""        // stretches the recognizer already closed (press-to-send)
+    var transcript = Transcript() // across pauses and closed stretches (segments.swift)
     var text = ""
     var lastChange = Date()
     let started = Date()
@@ -112,13 +112,13 @@ final class Listener {
         req.shouldReportPartialResults = true
         if #available(macOS 13, *) { req.addsPunctuation = true }
         lock.lock(); request = req; lock.unlock()
-        let prefix = committed
         task = rec.recognitionTask(with: req) { [weak self] result, error in
             guard let self = self else { return }
             DispatchQueue.main.async {
                 guard req === self.currentRequest() else { return } // a stretch already replaced
                 if let r = result {
-                    let t = joined(prefix, r.bestTranscription.formattedString)
+                    self.transcript.update(r.bestTranscription.formattedString, quiet: Date().timeIntervalSince(self.lastChange))
+                    let t = self.transcript.text
                     if t != self.text {
                         self.text = t
                         self.lastChange = Date()
@@ -139,7 +139,7 @@ final class Listener {
         if finishing || !manual { done(); return }
         restarts += 1
         guard restarts <= 200 else { finish(); return }
-        committed = text
+        transcript.commit()
         beginStretch()
     }
     func level(_ buffer: AVAudioPCMBuffer) {
@@ -170,10 +170,6 @@ final class Listener {
     }
 }
 
-func joined(_ a: String, _ b: String) -> String {
-    let a = a.trimmingCharacters(in: .whitespaces), b = b.trimmingCharacters(in: .whitespaces)
-    return a.isEmpty ? b : b.isEmpty ? a : a + " " + b
-}
 
 let listener = Listener()
 

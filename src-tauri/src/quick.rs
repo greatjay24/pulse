@@ -362,8 +362,9 @@ pub(crate) fn system_prompt(snapshot: &str, history: &[(String, String)], now: c
          or how a business or project is doing ARE answerable: the snapshot is current, so answer from it.\n\
          - Only if the request asks you to do something (draft, send, change, add, look something up, research) or needs facts \
          that are not in the snapshot or the recent exchange, reply with exactly {} and nothing else. Full Roo, with tools, takes it from there.\n\
-         - Otherwise answer directly. Lead with the answer. One to three short spoken sentences; at most five short items if asked for a list. \
-         No headings, tables or markdown.\n\
+         - Otherwise answer directly, out loud: at most two short sentences. Lead with the answer. \
+         For a list, name the top three at most and say how many more. More only if the owner asks for detail. \
+         No headings, bullets, tables or markdown.\n\
          - Never say or imply you did, started, checked, drafted or scheduled anything, and never promise to.\n\
          - Small talk (hi, thanks) gets one short friendly line.\n",
         now.format("%A %B %-d, %Y, %-I:%M %p"),
@@ -964,6 +965,7 @@ mod tests {
         assert!(snap.len() < SNAPSHOT_MAX + 20);
         let sys = system_prompt(&snap, &[("hi".into(), "Hey.".into())], now);
         assert!(sys.contains("HANDOFF") && sys.contains("Owner: hi") && sys.contains("NO tools"));
+        assert!(sys.contains("at most two short sentences"));
         let _ = std::fs::remove_dir_all(&base);
     }
 

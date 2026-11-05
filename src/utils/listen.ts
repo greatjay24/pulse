@@ -76,3 +76,13 @@ export function onHotkey(
   if (phase === 'reply' || phase === 'error' || phase === 'waiting') return 'restart';
   return 'none';
 }
+
+// What to send when the helper's final transcript arrives: its text, unless it came back emptier
+// than the words already on screen (a recognizer reset after a pause), which then win.
+export function finalText(final: string, onScreen: string): string {
+  const f = (final ?? '').trim();
+  const o = (onScreen ?? '').trim();
+  if (!f) return o;
+  if (f.length < o.length && (o.includes(f) || f.length < o.length / 2)) return o;
+  return f;
+}
