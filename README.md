@@ -167,12 +167,42 @@ back to Roo, which sums them up in the same thread. It also keeps follow-ups
   with on-device recognition, through the bundled `pulse-listen` helper), shown live. A
   pause or Enter sends it to Roo, Esc drops it, and the text stays editable, so dictation
   tools work there too. "Brief me" or "end of day recap" asks for a briefing.
-- **Replies aloud**: Roo's replies are read with macOS's own voices (`say`): the first
-  line by default (Roo writes its one-sentence answer there), or the whole reply, or off.
-  Voice, rate and the hotkey are in Settings › General. Any message has "Read aloud".
+- **Replies aloud**: Roo's replies, the proactive voice and "Read aloud" all use the same
+  voice: the system voice by default (`say`; set it in System Settings › Accessibility ›
+  Spoken Content, where Siri voices can be chosen), another macOS voice, or Roo British
+  (see Voice below). A streamed reply is read a sentence at a time with any of them. The first line by default
+  (Roo writes its one-sentence answer there), or the whole reply, or off. Voice, rate and
+  the hotkey are in Settings › General. Esc, Stop, or muting from the menu bar silences it.
+- **Meeting prep**: the org's watcher (`bin/meeting_prep.py`) writes a brief before each real
+  meeting (`watch/prep/`). Roo offers it 10 minutes before ("your meeting with X is in 10
+  minutes. Want a quick brief?"), and at 8pm the night before for meetings before 9am, quiet
+  hours or not. Clicking it says the two-sentence version and opens the Roo thread on it.
+  While open, Roo writes `watch/desktop.json` each minute (open, screen locked, what it
+  offered); when that goes stale the watcher sends the brief to Telegram instead.
 - First use asks for the microphone and speech recognition. On-device speech needs the
   language's Dictation model (turn on Dictation in System Settings › Keyboard once).
   `scripts/build-listen.sh` builds the helper; `tauri build` runs it.
+
+#### Voice: Roo British
+
+An optional voice (Settings › Voice), a blend of Kokoro's British voices (Kokoro-82M, Apache 2.0), made on
+the Mac: nothing goes over the network. "Roo British 1" is 0.7 `bf_emma` + 0.3
+`bf_isabella`, "Roo British 2" is 0.6 `bf_emma` + 0.4 `bf_alice`, both en-GB at normal speed
+with a 30 ms fade at each end.
+
+- `scripts/roo-tts.py` is compiled into the app (`src-tauri/src/tts.rs`) and run as a child
+  process with the voice venv's Python. It loads the model once and stays warm (about a
+  second to load, at app start), talks JSON lines over stdin/stdout, and plays through
+  `afplay`. Text is spoken a sentence at a time, the first while the next is synthesized,
+  so speech starts about half a second after the text arrives. A streamed reply can be
+  spoken as it arrives (`speakStream()` in `src/utils/voice.ts`: push text, then end).
+- Files: `$ROO_VOICE_DIR` (default `~/.local/share/roo-voice`) holds `venv/` (Python 3.11+
+  with `kokoro-onnx` and `soundfile`), `kokoro-v1.0.onnx` and `voices-v1.0.bin` from the
+  [kokoro-onnx releases](https://github.com/thewh1teagle/kokoro-onnx/releases/tag/model-files-v1.0).
+  Set `ROO_VOICE_DIR` in the environment Roo starts with to keep them elsewhere.
+- If any of that is missing, or the voice process fails, Roo reads with the system voice
+  (or the Mac voice last chosen) instead and logs the reason once. Try a voice from the terminal:
+  `$ROO_VOICE_DIR/venv/bin/python scripts/roo-tts.py --say "Morning." --voice british-2`.
 
 ### Mac app
 

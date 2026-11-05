@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 source "$HOME/.cargo/env"
 
 # Build the release version
-npm run tauri build
+npm run tauri build -- --bundles app   # just the .app; the DMG step is for releases and can fail locally
 
 # Find the built app
 APP_PATH="src-tauri/target/release/bundle/macos/Pulse.app"
@@ -18,6 +18,9 @@ if [ ! -d "$APP_PATH" ]; then
     echo "Error: Built app not found at $APP_PATH"
     exit 1
 fi
+
+# A stable code identity keeps the Microphone and Speech Recognition grants across installs.
+./scripts/sign-local.sh "$APP_PATH"
 
 echo "Installing Roo to /Applications..."
 rm -rf /Applications/Pulse.app

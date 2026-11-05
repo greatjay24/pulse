@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
-import { HOTKEYS, InstalledVoice, SpeakMode, VoiceSettings as Settings, applyHotkey, listVoices, loadVoice, saveVoice, speak, stopSpeaking } from '../utils/voice';
+import { PROACTIVE_TEST_EVENT } from '../hooks/useProactiveVoice';
+import { HOTKEYS, InstalledVoice, SpeakMode, VoiceEngineStatus, VoiceSettings as Settings, applyHotkey, listVoices, loadVoice, saveVoice, speak, stopSpeaking, voiceEngineStatus, warmVoice } from '../utils/voice';
+import { ROO_VOICES, choiceValue, parseChoice } from '../utils/voiceText';
 
 // Settings › General: how Roo talks back, and the hotkey that opens the listening panel.
 export function VoiceSettings() {
@@ -9,6 +11,11 @@ export function VoiceSettings() {
   const [v, setV] = useState<Settings>(loadVoice);
   const [voices, setVoices] = useState<InstalledVoice[]>([]);
   const [hotkeyNote, setHotkeyNote] = useState<string | null>(null);
+  const [engine, setEngine] = useState<VoiceEngineStatus | null>(null);
+
+  useEffect(() => {
+    voiceEngineStatus().then(setEngine).catch(() => setEngine(null));
+  }, []);
 
   useEffect(() => {
     listVoices()
@@ -42,7 +49,7 @@ export function VoiceSettings() {
         <div style={{ fontWeight: 600 }}>Voice</div>
         <div style={{ fontSize: tokens.type.small, color: c.textMuted, marginTop: '4px', lineHeight: 1.5 }}>
           Talk to Roo with the hotkey, from anywhere. Speech is turned into text on this Mac (macOS on-device recognition), and replies are
-          read with macOS's own voices. The first time, macOS asks for the microphone and speech recognition.
+          read with the system voice (set it in System Settings › Accessibility › Spoken Content; Siri voices work there) or Roo British, made on this Mac too (nothing leaves it). The first time, macOS asks for the microphone and speech recognition.
         </div>
       </div>
       <div style={row}>
@@ -55,28 +62,52 @@ export function VoiceSettings() {
       </div>
       <div style={row}>
         <span style={label}>Voice</span>
-        <select value={v.voice ?? ''} onChange={(e) => update({ voice: e.target.value || null })} style={select}>
-          <option value="">System voice</option>
-          {voices.map((x) => (
-            <option key={x.name} value={x.name}>
-              {x.name} ({x.locale})
-            </option>
-          ))}
+        <select
+          value={choiceValue(v.engine, v.voice)}
+          onChange={(e) => {
+            const next = parseChoice(e.target.value);
+            update(next);
+            if (next.engine !== 'mac') warmVoice().catch(() => {});
+          }}
+          style={select}
+        >
+          <option value="mac:">System voice</option>
+          <optgroup label="Roo">
+            {ROO_VOICES.map((r) => (
+              <option key={r.engine} value={choiceValue(r.engine, null)}>
+                {r.label}
+              </option>
+            ))}
+          </optgroup>
+          <optgroup label="Mac voices">
+            {voices.map((x) => (
+              <option key={x.name} value={choiceValue('mac', x.name)}>
+                {x.name} ({x.locale})
+              </option>
+            ))}
+          </optgroup>
         </select>
-      </div>
-      <div style={row}>
-        <span style={label}>Rate</span>
-        <input type="range" min={120} max={300} step={10} value={v.rate} onChange={(e) => update({ rate: Number(e.target.value) })} />
-        <span style={{ fontSize: tokens.type.small, color: c.textDim }}>{v.rate} words a minute</span>
         <button
-          onClick={() => speak("Here's your summary. Your lead opened the pull request, and it's waiting on your review.", true).catch(() => {})}
+          onClick={() => speak("Morning. Two things are waiting: a reply to send, and a pull request to review. The rest can wait.", true).catch(() => {})}
           style={{ ...select, cursor: 'pointer' }}
         >
-          Test
+          Try it
         </button>
         <button onClick={() => stopSpeaking().catch(() => {})} style={{ ...select, cursor: 'pointer' }}>
           Stop
         </button>
+      </div>
+      {v.engine !== 'mac' && engine && !engine.installed && (
+        <div style={{ fontSize: tokens.type.micro, color: c.textDim, marginLeft: '162px', lineHeight: 1.5 }}>
+          Roo British isn't installed on this Mac, so the system voice reads instead. See README › Voice to set it up.
+        </div>
+      )}
+      <div style={row}>
+        <span style={label}>{v.engine === 'mac' ? 'Rate' : 'Fallback rate'}</span>
+        <input type="range" min={120} max={300} step={10} value={v.rate} onChange={(e) => update({ rate: Number(e.target.value) })} />
+        <span style={{ fontSize: tokens.type.small, color: c.textDim }}>
+          {v.rate} words a minute{v.engine === 'mac' ? '' : ' (Roo British speaks at its natural pace; this is for the system voice fallback)'}
+        </span>
       </div>
       <div style={row}>
         <span style={label}>Listening hotkey</span>
@@ -88,6 +119,25 @@ export function VoiceSettings() {
           ))}
         </select>
         <span style={{ fontSize: tokens.type.micro, color: hotkeyNote ? c.danger : c.textDim }}>{hotkeyNote ?? '⌥Space is left alone: ChatGPT and Claude use it.'}</span>
+      </div>
+      <div style={row}>
+        <span style={label}>Proactive voice</span>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: tokens.type.small, cursor: 'pointer' }}>
+          <input type="checkbox" checked={v.proactive} onChange={(e) => update({ proactive: e.target.checked })} />
+          Roo speaks first: replies to send, decisions, money, a meeting about to start, and the morning brief
+        </label>
+        <button onClick={() => window.dispatchEvent(new Event(PROACTIVE_TEST_EVENT))} style={{ ...select, cursor: 'pointer' }} title="Speaks a sample and shows its notification; click the notification to open the Roo thread">
+          Try it
+        </button>
+      </div>
+      <div style={row}>
+        <span style={label}>Quiet hours</span>
+        <input type="time" value={v.quietStart} disabled={!v.proactive} onChange={(e) => e.target.value && update({ quietStart: e.target.value })} style={select} />
+        <span style={{ fontSize: tokens.type.small, color: c.textDim }}>to</span>
+        <input type="time" value={v.quietEnd} disabled={!v.proactive} onChange={(e) => e.target.value && update({ quietEnd: e.target.value })} style={select} />
+        <span style={{ fontSize: tokens.type.micro, color: c.textDim }}>
+          Never during a call (mic in use) or with the screen locked. At most once every 10 minutes. Mute for an hour from the menu bar.
+        </span>
       </div>
     </div>
   );

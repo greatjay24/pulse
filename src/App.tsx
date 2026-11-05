@@ -45,6 +45,11 @@ import { CommandBox } from './components/CommandBox';
 import { TerminalPage, TerminalRequest } from './components/TerminalPage';
 import { chiefOf, frontDoorOf } from './utils/command';
 import { useVoice } from './hooks/useVoice';
+import { useReplyVoice } from './hooks/useReplyVoice';
+import { stopSpeaking } from './utils/voice';
+import { useProactiveVoice } from './hooks/useProactiveVoice';
+import { ownerNameOf } from './utils/proactive';
+import { PULSE_THREAD } from './utils/conversations';
 import './index.css';
 
 // Check if running in Tauri environment (Tauri v2 uses __TAURI_INTERNALS__)
@@ -772,9 +777,10 @@ function DashboardContent() {
     }
   }, []);
 
-  // T toggles TV mode, Esc leaves it, Backspace goes from an entity back to where it opened.
+  // T toggles TV mode, Esc leaves it (and silences Roo), Backspace goes from an entity back to where it opened.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') stopSpeaking().catch(() => {});
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -805,7 +811,7 @@ function DashboardContent() {
   }, [setTv, handleNavChange]);
 
   // Conversations opened on one run or one entity's thread (Activity, Working now, the menu bar).
-  const openConversation = useCallback((focus: { runId?: string; entity?: string }) => {
+  const openConversation = useCallback((focus: { runId?: string; entity?: string; draft?: string }) => {
     setTv(false);
     setSelectedEntityId(null);
     setConversationFocus({ ...focus, nonce: Date.now() });
@@ -848,6 +854,23 @@ function DashboardContent() {
   const { signals, cleared } = urgentSignals(boardItems, portfolio.tracker);
   const { live } = useLive();
   useVoice(DEMO ? null : live, frontDoorOf(portfolio.snapshot?.registry));
+  useReplyVoice();
+  // Roo speaks first (interrupts, the morning brief); a click opens its thread with a message ready.
+  const entityNames = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const e of (portfolio.snapshot?.registry as { entities?: { id?: unknown; name?: unknown }[] } | undefined)?.entities ?? []) {
+      if (typeof e.id === 'string' && typeof e.name === 'string') out[e.id] = e.name;
+    }
+    return out;
+  }, [portfolio.snapshot?.registry]);
+  const proactive = useProactiveVoice({
+    live: DEMO ? null : live,
+    frontDoor: DEMO ? null : frontDoorOf(portfolio.snapshot?.registry),
+    names: entityNames,
+    ownerName: ownerNameOf(portfolio.snapshot?.registry),
+    onOpen: (draft) => openConversation({ entity: PULSE_THREAD, draft }),
+    realOrg: !DEMO,
+  });
   // The demo org never reaches the menu bar or notifications: they are for the owner's real org.
   // Without a tracker the picture is complete once ~/portfolio has been read.
   useDesktopSignals({
@@ -858,6 +881,7 @@ function DashboardContent() {
     signals,
     cleared,
     notificationsOn,
+    voice: DEMO ? undefined : proactive,
   });
 
   // An entity opens over the page it was opened from (Today, Board or Money), so the back

@@ -5,6 +5,6 @@
 set -e
 cd "$(dirname "$0")/../src-tauri"
 mkdir -p binaries
-xcrun swiftc -O -o binaries/pulse-listen listen/main.swift \
+xcrun swiftc -O -o binaries/pulse-listen listen/main.swift listen/segments.swift \
   -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker listen/Info.plist
 echo "built src-tauri/binaries/pulse-listen"

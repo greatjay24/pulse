@@ -158,20 +158,20 @@ fn is_outbox_id(s: &str) -> bool {
 }
 
 #[derive(Serialize)]
-struct OutboxItem {
+pub(crate) struct OutboxItem {
     content: String,
-    item: serde_json::Value,
+    pub(crate) item: serde_json::Value,
 }
 
 #[derive(Serialize)]
-struct OutboxSnapshot {
-    items: Vec<OutboxItem>,
+pub(crate) struct OutboxSnapshot {
+    pub(crate) items: Vec<OutboxItem>,
     key: Option<String>,
     errors: Vec<String>,
     read_at: String,
 }
 
-fn read_outbox_at(root: &Path) -> OutboxSnapshot {
+pub(crate) fn read_outbox_at(root: &Path) -> OutboxSnapshot {
     let mut items = Vec::new();
     let mut errors = Vec::new();
     if let Ok(dir) = fs::read_dir(root.join("outbox")) {

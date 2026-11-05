@@ -3120,6 +3120,7 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.2.16",
  "hex",
+ "mac-notification-sys",
  "open",
  "portable-pty",
  "reqwest",

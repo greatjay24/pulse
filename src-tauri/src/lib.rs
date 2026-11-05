@@ -1,9 +1,12 @@
 mod command;
 mod jarvis;
 mod pty;
+mod proactive;
 mod ops;
 mod usage;
 mod todos;
+mod quick;
+mod tts;
 
 use chrono::{Datelike, Timelike};
 use serde::{Deserialize, Serialize};
@@ -2447,7 +2450,8 @@ async fn read_activity() -> Result<String, String> {
 // Live runs and transcripts: who is working now, and what they said. Read-only.
 // ==========================================
 // ~/portfolio/bin/live.py writes logs/live/<run_id>.json while a run works and
-// logs/transcripts/<run_id>.jsonl as it goes (already redacted). Roo only reads them.
+// logs/transcripts/<run_id>.jsonl as it goes (already redacted). Roo only reads them, except
+// for its quick lane's own turns (quick.rs), which it writes there in the same format.
 
 const LIVE_MAX_FILES: usize = 200;
 const LIVE_MAX_FILE_BYTES: u64 = 64 * 1024;
@@ -3591,8 +3595,25 @@ struct TrayRun {
 const TRAY_RUN_PREFIX: &str = "run:";
 const TRAY_RUNS_SHOWN: usize = 8;
 
-fn tray_menu(app: &AppHandle, working: &[TrayRun]) -> tauri::Result<Menu<tauri::Wry>> {
+// What Roo last said on its own (choosing it opens the Roo thread with it), and the mute switch.
+#[derive(Deserialize, Default)]
+struct TrayVoice {
+    muted: bool,
+    said: Option<String>,
+}
+
+const TRAY_SAID_CHARS: usize = 60;
+
+fn tray_menu(app: &AppHandle, working: &[TrayRun], voice: &TrayVoice) -> tauri::Result<Menu<tauri::Wry>> {
     let menu = Menu::new(app)?;
+    if let Some(said) = voice.said.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        let mut label: String = said.chars().take(TRAY_SAID_CHARS).collect();
+        if said.chars().count() > TRAY_SAID_CHARS {
+            label.push('…');
+        }
+        menu.append(&MenuItem::with_id(app, "said", format!("Roo said: {}", label), true, None::<&str>)?)?;
+        menu.append(&PredefinedMenuItem::separator(app)?)?;
+    }
     if !working.is_empty() {
         menu.append(&MenuItem::with_id(app, "working", "Working now", false, None::<&str>)?)?;
         for r in working.iter().filter(|r| is_run_id(&r.run_id)).take(TRAY_RUNS_SHOWN) {
@@ -3604,6 +3625,7 @@ fn tray_menu(app: &AppHandle, working: &[TrayRun]) -> tauri::Result<Menu<tauri::
     menu.append(&MenuItem::with_id(app, "open", "Open Roo", true, None::<&str>)?)?;
     menu.append(&MenuItem::with_id(app, "today", "Today", true, None::<&str>)?)?;
     menu.append(&MenuItem::with_id(app, "conversations", "Conversations", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(app, "mute", if voice.muted { "Unmute Roo" } else { "Mute Roo for 1 hour" }, true, None::<&str>)?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     menu.append(&MenuItem::with_id(app, "quit", "Quit Roo", true, Some("CmdOrCtrl+Q"))?)?;
     Ok(menu)
@@ -3612,11 +3634,11 @@ fn tray_menu(app: &AppHandle, working: &[TrayRun]) -> tauri::Result<Menu<tauri::
 // The webview computes the decision count from the same data as Today, and the working
 // list from read_live, and sends both here.
 #[tauri::command]
-fn set_tray_status(app: AppHandle, count: u32, working: Vec<TrayRun>) -> Result<(), String> {
+fn set_tray_status(app: AppHandle, count: u32, working: Vec<TrayRun>, voice: Option<TrayVoice>) -> Result<(), String> {
     let tray = app.tray_by_id(TRAY_ID).ok_or("menu bar item not created")?;
     tray.set_title(tray_title(count, working.len())).map_err(|e| e.to_string())?;
     tray.set_tooltip(Some(tray_tooltip(count, working.len()))).map_err(|e| e.to_string())?;
-    let menu = tray_menu(&app, &working).map_err(|e| e.to_string())?;
+    let menu = tray_menu(&app, &working, &voice.unwrap_or_default()).map_err(|e| e.to_string())?;
     tray.set_menu(Some(menu)).map_err(|e| e.to_string())
 }
 
@@ -3641,9 +3663,10 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(|app, shortcut, event| jarvis::on_shortcut(app, shortcut, event.state())).build())
         .manage(pty::Ptys::default())
         .manage(jarvis::Voice::default())
+        .manage(quick::Replies::default())
         .setup(|app| {
             jarvis::setup(app.handle());
-            let menu = tray_menu(app.handle(), &[])?;
+            let menu = tray_menu(app.handle(), &[], &TrayVoice::default())?;
 
             // A template image: macOS tints it for light and dark menu bars.
             let icon = Image::from_bytes(include_bytes!("../icons/tray-template@2x.png"))?;
@@ -3660,6 +3683,14 @@ pub fn run() {
                         let _ = app.emit("pulse://navigate", event.id.as_ref());
                     }
                     "quit" => app.exit(0),
+                    // The webview owns the mute timer and what was said; it rebuilds this menu.
+                    "mute" => {
+                        let _ = app.emit_to("main", "pulse://voice-mute", ());
+                    }
+                    "said" => {
+                        show_main_window(app);
+                        let _ = app.emit_to("main", "pulse://proactive-open", "last");
+                    }
                     id => {
                         if let Some(run_id) = id.strip_prefix(TRAY_RUN_PREFIX).filter(|r| is_run_id(r)) {
                             show_main_window(app);
@@ -3699,6 +3730,13 @@ pub fn run() {
             todos::read_todos,
             todos::write_todo,
             set_tray_status,
+            proactive::read_watch_notify,
+            proactive::read_watch_calendar,
+            proactive::proactive_status,
+            proactive::proactive_notify,
+            proactive::read_meeting_prep,
+            proactive::read_prep_brief,
+            proactive::desktop_heartbeat,
             act_on_decision,
             read_activity,
             read_live,
@@ -3724,6 +3762,11 @@ pub fn run() {
             ops::check_connections,
             jarvis::speak,
             jarvis::stop_speaking,
+            jarvis::speak_begin,
+            jarvis::speak_append,
+            jarvis::speak_end,
+            jarvis::voice_warm,
+            jarvis::voice_engine_status,
             jarvis::list_voices,
             jarvis::start_listening,
             jarvis::stop_listening,
@@ -3733,6 +3776,9 @@ pub fn run() {
             jarvis::open_run_in_main,
             jarvis::set_listen_hotkey,
             jarvis::pulse_brief,
+            quick::ask_quick,
+            quick::watch_reply,
+            quick::cancel_reply,
             usage::read_usage,
             usage::read_preferences,
             usage::set_preference_disabled
@@ -3744,6 +3790,7 @@ pub fn run() {
         if let tauri::RunEvent::Exit = event {
             pty::close_all(&app.state::<pty::Ptys>());
             jarvis::close_all(&app.state::<jarvis::Voice>());
+            quick::close_all(&app.state::<quick::Replies>());
         }
         // Clicking the Dock icon brings the hidden window back.
         #[cfg(target_os = "macos")]

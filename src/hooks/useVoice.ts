@@ -2,10 +2,11 @@ import { useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { LiveSnapshot, Transcript } from '../types';
 import { IS_TAURI } from '../utils/orgSource';
-import { DEFAULT_HOTKEY, applyHotkey, loadVoice, speakReply } from '../utils/voice';
+import { streamedRuns } from '../utils/reply';
+import { DEFAULT_HOTKEY, applyHotkey, loadVoice, speakReply, warmVoice } from '../utils/voice';
 
 // Mounted once in the main window (which stays alive while hidden): reads the front door's
-// replies aloud as they finish, and applies the listening hotkey chosen in Settings.
+// replies aloud as they finish, applies the listening hotkey chosen in Settings, and warms Roo's voice.
 // Replies to Telegram messages and scheduled runs stay quiet: the owner isn't at the Mac.
 const QUIET_SOURCES = new Set(['telegram', 'schedule']);
 
@@ -14,8 +15,10 @@ export function useVoice(live: LiveSnapshot | null, frontDoor: string | null) {
 
   useEffect(() => {
     if (!IS_TAURI) return;
-    const hotkey = loadVoice().hotkey;
-    if (hotkey !== DEFAULT_HOTKEY) applyHotkey(hotkey).catch(() => {});
+    const v = loadVoice();
+    if (v.hotkey !== DEFAULT_HOTKEY) applyHotkey(v.hotkey).catch(() => {});
+    // Roo's voice loads once and stays warm, so the first reply isn't a second late.
+    if (v.mode !== 'off' || v.proactive) warmVoice().catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -26,7 +29,7 @@ export function useVoice(live: LiveSnapshot | null, frontDoor: string | null) {
       seen.current.set(r.run_id, r.state);
       // Only a reply seen working in this session: never a backlog read at startup.
       const wasWorking = before === 'running' || before === 'queued';
-      if (!wasWorking || r.state !== 'finished' || QUIET_SOURCES.has(r.source ?? '')) continue;
+      if (!wasWorking || r.state !== 'finished' || QUIET_SOURCES.has(r.source ?? '') || streamedRuns.has(r.run_id)) continue;
       invoke<string>('read_transcript', { runId: r.run_id })
         .then((json) => {
           const t: Transcript = JSON.parse(json);
