@@ -1,7 +1,8 @@
 // ==========================================
 // Voice and the front door: speak replies, listen from a global hotkey, brief on demand
 // ==========================================
-// Speech out is macOS's own `say` (installed voices, no paid TTS). Speech in is pulse-listen,
+// Speech out is Roo's own British voice (Kokoro, local: tts.rs) or macOS's `say` (installed
+// voices), which is also the fallback whenever Kokoro isn't installed or fails. Speech in is pulse-listen,
 // a small Swift helper (src-tauri/listen) that runs the Speech framework on-device and prints
 // JSON lines; its events reach every window as `pulse://listen`. The hotkey opens the small
 // "listen" window (index.html#listen), which sends the transcript to the front door.
@@ -24,6 +25,9 @@ const BRIEF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 #[derive(Default)]
 pub(crate) struct Voice {
     speaking: Mutex<Option<Child>>,
+    kokoro: super::tts::Kokoro,
+    // A reply streamed to `say` (no Roo voice): collected, then read whole at the end.
+    say_stream: Mutex<Option<super::tts::Pending>>,
     listening: Mutex<Option<(Child, Option<ChildStdin>)>>,
     hotkey: Mutex<Option<Shortcut>>,
 }
@@ -61,11 +65,14 @@ fn stop_child(slot: &Mutex<Option<Child>>) {
     }
 }
 
-#[tauri::command]
-pub(crate) fn speak(state: tauri::State<'_, Voice>, text: String, voice: Option<String>, rate: Option<u32>) -> Result<(), String> {
-    let args = say_args(voice.as_deref(), rate)?;
-    let text: String = text.chars().filter(|c| *c != '\0').take(SPEAK_MAX_CHARS).collect();
-    stop_child(&state.speaking);
+fn clean(text: &str) -> String {
+    text.chars().filter(|c| *c != '\0').take(SPEAK_MAX_CHARS).collect()
+}
+
+// Read `text` with `say`, replacing whatever `say` was reading.
+fn say_now(slot: &Mutex<Option<Child>>, text: &str, voice: Option<&str>, rate: Option<u32>) -> Result<(), String> {
+    let args = say_args(voice, rate)?;
+    stop_child(slot);
     if text.trim().is_empty() {
         return Ok(());
     }
@@ -79,12 +86,88 @@ pub(crate) fn speak(state: tauri::State<'_, Voice>, text: String, voice: Option<
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(text.as_bytes());
     }
-    *state.speaking.lock().unwrap() = Some(child);
+    *slot.lock().unwrap() = Some(child);
     Ok(())
 }
 
-// `say` still reading something out.
+// When Kokoro can't finish something, `say` reads it instead.
+fn fallback(app: &AppHandle) -> super::tts::Fallback {
+    let app = app.clone();
+    std::sync::Arc::new(move |p: super::tts::Pending| {
+        let state = app.state::<Voice>();
+        let _ = say_now(&state.speaking, &p.text, p.mac_voice.as_deref(), p.rate);
+    })
+}
+
+// Everything stops: `say`, Roo's voice and its queue, a half-collected stream.
+fn silence(state: &Voice) {
+    stop_child(&state.speaking);
+    state.kokoro.stop();
+    *state.say_stream.lock().unwrap() = None;
+}
+
+// engine: "british-1" / "british-2" (Roo's voice) or "mac" (`say` with `voice` and `rate`).
+#[tauri::command]
+pub(crate) fn speak(app: AppHandle, state: tauri::State<'_, Voice>, text: String, voice: Option<String>, rate: Option<u32>, engine: Option<String>) -> Result<(), String> {
+    say_args(voice.as_deref(), rate)?;
+    let text = clean(&text);
+    silence(&state);
+    if text.trim().is_empty() {
+        return Ok(());
+    }
+    if let Some(e) = engine.as_deref().filter(|e| super::tts::is_kokoro_voice(e)) {
+        if state.kokoro.speak(&text, e, voice.clone(), rate, fallback(&app)).is_ok() {
+            return Ok(());
+        }
+    }
+    say_now(&state.speaking, &text, voice.as_deref(), rate)
+}
+
+// A reply arriving in pieces (streamed reply text): begin, append as text comes, end. With Roo's
+// voice each sentence is spoken as soon as it's complete; with `say` the text is read at the end.
+#[tauri::command]
+pub(crate) fn speak_begin(app: AppHandle, state: tauri::State<'_, Voice>, voice: Option<String>, rate: Option<u32>, engine: Option<String>) -> Result<u64, String> {
+    say_args(voice.as_deref(), rate)?;
+    silence(&state);
+    if let Some(e) = engine.as_deref().filter(|e| super::tts::is_kokoro_voice(e)) {
+        if let Ok(id) = state.kokoro.begin(e, voice.clone(), rate, fallback(&app)) {
+            return Ok(id);
+        }
+    }
+    let id = state.kokoro.new_id();
+    *state.say_stream.lock().unwrap() = Some(super::tts::Pending { id, text: String::new(), mac_voice: voice, rate });
+    Ok(id)
+}
+
+#[tauri::command]
+pub(crate) fn speak_append(state: tauri::State<'_, Voice>, id: u64, text: String) {
+    let text = clean(&text);
+    if let Some(p) = state.say_stream.lock().unwrap().as_mut().filter(|p| p.id == id) {
+        if p.text.len() < SPEAK_MAX_CHARS {
+            p.text.push_str(&text);
+        }
+        return;
+    }
+    state.kokoro.append(id, &text);
+}
+
+#[tauri::command]
+pub(crate) fn speak_end(state: tauri::State<'_, Voice>, id: u64) -> Result<(), String> {
+    let collected = state.say_stream.lock().unwrap().take_if(|p| p.id == id);
+    match collected {
+        Some(p) => say_now(&state.speaking, &p.text, p.mac_voice.as_deref(), p.rate),
+        None => {
+            state.kokoro.end(id);
+            Ok(())
+        }
+    }
+}
+
+// Something is being read out (by either engine).
 pub(crate) fn is_speaking(state: &Voice) -> bool {
+    if state.kokoro.is_speaking() || state.say_stream.lock().unwrap().is_some() {
+        return true;
+    }
     let mut slot = state.speaking.lock().unwrap();
     match slot.as_mut().map(|c| c.try_wait()) {
         Some(Ok(None)) => true,
@@ -98,7 +181,18 @@ pub(crate) fn is_speaking(state: &Voice) -> bool {
 
 #[tauri::command]
 pub(crate) fn stop_speaking(state: tauri::State<'_, Voice>) {
-    stop_child(&state.speaking);
+    silence(&state);
+}
+
+// Load Roo's voice ahead of the first reply (the model takes about a second).
+#[tauri::command]
+pub(crate) fn voice_warm(app: AppHandle, state: tauri::State<'_, Voice>) -> Result<(), String> {
+    state.kokoro.warm(fallback(&app))
+}
+
+#[tauri::command]
+pub(crate) fn voice_engine_status() -> super::tts::VoiceEngineStatus {
+    super::tts::status()
 }
 
 #[derive(serde::Serialize, Debug, PartialEq)]
@@ -282,6 +376,7 @@ pub(crate) fn setup(app: &AppHandle) {
 
 pub(crate) fn close_all(state: &Voice) {
     stop_child(&state.speaking);
+    state.kokoro.shutdown();
     stop_listening_now(state, "cancel");
 }
 

@@ -2,10 +2,10 @@ import { useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { LiveSnapshot, Transcript } from '../types';
 import { IS_TAURI } from '../utils/orgSource';
-import { DEFAULT_HOTKEY, applyHotkey, loadVoice, speakReply } from '../utils/voice';
+import { DEFAULT_HOTKEY, applyHotkey, loadVoice, speakReply, warmVoice } from '../utils/voice';
 
 // Mounted once in the main window (which stays alive while hidden): reads the front door's
-// replies aloud as they finish, and applies the listening hotkey chosen in Settings.
+// replies aloud as they finish, applies the listening hotkey chosen in Settings, and warms Roo's voice.
 // Replies to Telegram messages and scheduled runs stay quiet: the owner isn't at the Mac.
 const QUIET_SOURCES = new Set(['telegram', 'schedule']);
 
@@ -14,8 +14,10 @@ export function useVoice(live: LiveSnapshot | null, frontDoor: string | null) {
 
   useEffect(() => {
     if (!IS_TAURI) return;
-    const hotkey = loadVoice().hotkey;
-    if (hotkey !== DEFAULT_HOTKEY) applyHotkey(hotkey).catch(() => {});
+    const v = loadVoice();
+    if (v.hotkey !== DEFAULT_HOTKEY) applyHotkey(v.hotkey).catch(() => {});
+    // Roo's voice loads once and stays warm, so the first reply isn't a second late.
+    if (v.mode !== 'off' || v.proactive) warmVoice().catch(() => {});
   }, []);
 
   useEffect(() => {

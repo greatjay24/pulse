@@ -45,6 +45,7 @@ import { CommandBox } from './components/CommandBox';
 import { TerminalPage, TerminalRequest } from './components/TerminalPage';
 import { chiefOf, frontDoorOf } from './utils/command';
 import { useVoice } from './hooks/useVoice';
+import { stopSpeaking } from './utils/voice';
 import { useProactiveVoice } from './hooks/useProactiveVoice';
 import { ownerNameOf } from './utils/proactive';
 import { PULSE_THREAD } from './utils/conversations';
@@ -775,9 +776,10 @@ function DashboardContent() {
     }
   }, []);
 
-  // T toggles TV mode, Esc leaves it, Backspace goes from an entity back to where it opened.
+  // T toggles TV mode, Esc leaves it (and silences Roo), Backspace goes from an entity back to where it opened.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') stopSpeaking().catch(() => {});
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;

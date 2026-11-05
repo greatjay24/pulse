@@ -4,12 +4,12 @@ import { listen } from '@tauri-apps/api/event';
 import { useTheme } from '../contexts/ThemeContext';
 import { LiveSnapshot, Transcript } from '../types';
 import { PULSE_TARGET, askLead } from '../utils/command';
-import { briefKindOf, briefMe, summaryOf } from '../utils/voice';
+import { briefKindOf, briefMe, stopSpeaking, summaryOf } from '../utils/voice';
 import { StrokeIcon } from './Icons';
 
 // The listening panel: its own small window (index.html#listen), opened by the global hotkey,
 // ⌘K's mic or the Roo thread's Talk. It transcribes on-device (pulse-listen) and sends the
-// text to Roo when the owner pauses or presses Enter. Esc drops it. The words stay editable,
+// text to Roo when the owner pauses or presses Enter. Esc drops it (and silences Roo). The words stay editable,
 // so a slip can be fixed, or typed (Wispr Flow dictation works here too).
 // The main window reads Roo's reply aloud; this panel shows its summary line.
 
@@ -137,6 +137,7 @@ export function ListenPanel() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
+        stopSpeaking().catch(() => {});
         hide();
       }
     };

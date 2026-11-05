@@ -5,6 +5,7 @@ mod proactive;
 mod ops;
 mod usage;
 mod todos;
+mod tts;
 
 use chrono::{Datelike, Timelike};
 use serde::{Deserialize, Serialize};
@@ -3755,6 +3756,11 @@ pub fn run() {
             ops::check_connections,
             jarvis::speak,
             jarvis::stop_speaking,
+            jarvis::speak_begin,
+            jarvis::speak_append,
+            jarvis::speak_end,
+            jarvis::voice_warm,
+            jarvis::voice_engine_status,
             jarvis::list_voices,
             jarvis::start_listening,
             jarvis::stop_listening,
