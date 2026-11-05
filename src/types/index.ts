@@ -738,11 +738,29 @@ export interface OutboxActionRow {
   link?: string | null;
 }
 
+// watch/autonomous.jsonl: what agents did on their own ("action" rows) and the undos ("undo" rows, ref = action id).
+export interface AutonomousRow {
+  id: string;
+  type?: 'action' | 'undo';
+  at: string;
+  entity?: string | null;
+  what?: string;
+  why?: string;
+  links?: string[];
+  undo?: { kind: string; ref: string | null };
+  by?: string | null;
+  run_id?: string | null;
+  ref?: string; // undo rows: the action they reversed
+  ok?: boolean;
+  result?: string;
+}
+
 export interface ActivitySnapshot {
   runs: { file: string; data: AgentRun[] | AgentRun }[];
   decisions: { entity: string; rows: DecisionRow[] }[];
   drafts: DraftRow[];
   actions?: OutboxActionRow[]; // missing from builds before the Outbox actions log
+  autonomous?: AutonomousRow[]; // missing from builds before Phase 2
   commits: { hash: string; at: string; subject: string }[];
   errors: string[];
   read_at: string;

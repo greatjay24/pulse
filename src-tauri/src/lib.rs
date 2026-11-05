@@ -2389,6 +2389,9 @@ const JSONL_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const DRAFT_FIELDS: &[&str] = &["date", "entity", "prospect", "vertical", "subject", "variant", "source"];
 // logs/outbox-actions.jsonl (bin/outbox.py log_action): what Jay's Outbox clicks carried out.
 const ACTION_FIELDS: &[&str] = &["at", "id", "kind", "entity", "status", "ok", "what", "link"];
+// watch/autonomous.jsonl (bin/watch_store.py log_action): what agents did on their own, each with its undo,
+// and the undo rows (type "undo", ref = the action id) that reversed one.
+const AUTO_FIELDS: &[&str] = &["id", "type", "at", "entity", "what", "why", "links", "undo", "by", "run_id", "ref", "ok", "result"];
 
 #[derive(Serialize)]
 struct ActivityRunFile {
@@ -2415,6 +2418,7 @@ struct ActivitySnapshot {
     decisions: Vec<ActivityEntityRows>,
     drafts: Vec<serde_json::Value>,
     actions: Vec<serde_json::Value>,
+    autonomous: Vec<serde_json::Value>,
     commits: Vec<ActivityCommit>,
     errors: Vec<String>,
     read_at: String,
@@ -2518,6 +2522,16 @@ fn read_activity_at(root: &Path) -> ActivitySnapshot {
         }
     };
 
+    // Done on its own (the watcher and the leads it starts), with undo info.
+    let autonomous = match resolve_portfolio_file(root, "watch", "autonomous.jsonl").and_then(|p| read_jsonl_tail(&p, ACTIVITY_MAX_ROWS)) {
+        Ok(rows) => rows.iter().map(|r| pick_fields(r, AUTO_FIELDS)).collect(),
+        Err(e) if e == "missing" => vec![],
+        Err(e) => {
+            errors.push(format!("watch/autonomous.jsonl: {}", e));
+            vec![]
+        }
+    };
+
     // git log, fixed arguments, read-only.
     let commits = match std::process::Command::new("/usr/bin/git")
         .arg("-C")
@@ -2537,7 +2551,7 @@ fn read_activity_at(root: &Path) -> ActivitySnapshot {
         }
     };
 
-    ActivitySnapshot { runs, decisions, drafts, actions, commits, errors, read_at: chrono::Local::now().to_rfc3339() }
+    ActivitySnapshot { runs, decisions, drafts, actions, autonomous, commits, errors, read_at: chrono::Local::now().to_rfc3339() }
 }
 
 #[tauri::command]
@@ -3857,6 +3871,7 @@ pub fn run() {
             ops::read_outbox,
             ops::outbox_edit,
             ops::outbox_skip,
+            ops::undo_action,
             ops::outbox_mark_published,
             ops::outbox_send,
             ops::read_goals,
