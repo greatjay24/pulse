@@ -243,6 +243,8 @@ function OutboxItem({ entry, entity, onDone }: { entry: OutboxEntry; entity?: Po
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState<'go' | 'save' | 'skip' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [skipping, setSkipping] = useState(false);
+  const [skipWhy, setSkipWhy] = useState('');
   const now = Date.now();
 
   const run = async (what: 'go' | 'save' | 'skip', fn: () => Promise<unknown>) => {
@@ -304,15 +306,35 @@ function OutboxItem({ entry, entity, onDone }: { entry: OutboxEntry; entity?: Po
           {EDITABLE[kind] && (
             <button className="btn btn-secondary" disabled={!!busy} onClick={() => setEditing(true)}>Edit</button>
           )}
-          <button className="btn btn-secondary" disabled={!!busy} onClick={() => run('skip', () => skipOutbox(m.id))}>
+          <button className="btn btn-secondary" disabled={!!busy} onClick={() => setSkipping((v) => !v)}>
             {busy === 'skip' ? 'Skipping…' : 'Skip'}
           </button>
           {isMoneyKind(kind) && <span style={{ fontSize: tokens.type.micro, color: c.textDim }}>To change it, ask the lead to edit it in Stripe and queue it again.</span>}
         </div>
       )}
+
+      {!editing && skipping && (
+        <div style={{ display: 'flex', gap: '6px', marginTop: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={{ fontSize: tokens.type.micro, color: c.textDim }}>Why? Roo learns from it.</span>
+          {SKIP_REASONS.map((r) => (
+            <button key={r} className="btn btn-secondary" disabled={!!busy} style={{ fontSize: tokens.type.micro, padding: '3px 8px' }}
+              onClick={() => run('skip', () => skipOutbox(m.id, r))}>{r}</button>
+          ))}
+          <input value={skipWhy} onChange={(e) => setSkipWhy(e.target.value)} maxLength={300} placeholder="Or say why"
+            onKeyDown={(e) => { if (e.key === 'Enter' && !busy) run('skip', () => skipOutbox(m.id, skipWhy)); }}
+            style={{ flex: '1 1 140px', minWidth: 0, fontSize: tokens.type.small, padding: '4px 8px', borderRadius: tokens.radius.sm,
+              border: `1px solid ${c.border}`, background: c.bgElevated, color: c.text }} />
+          <button className="btn btn-secondary" disabled={!!busy} onClick={() => run('skip', () => skipOutbox(m.id, skipWhy))}>
+            {skipWhy.trim() ? 'Skip' : 'Skip, no reason'}
+          </button>
+        </div>
+      )}
     </Card>
   );
 }
+
+// One click skips with that reason; bin/outbox_learn.py groups repeated reasons into lessons.
+const SKIP_REASONS = ['Not needed', 'Too long', 'Wrong tone', 'No hook', "I'll handle it", 'Someone else handles it'];
 
 // ---------- approved, waiting on the owner's hands ----------
 
