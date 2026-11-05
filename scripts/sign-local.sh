@@ -12,6 +12,11 @@
 set -e
 APP="${1:?usage: sign-local.sh path/to/Pulse.app}"
 IDENTITY="${ROO_SIGN_IDENTITY:-Roo Local Code Signing}"
+# No override and no self-signed identity: use an existing "Apple Development" one, if any.
+if [ -z "${ROO_SIGN_IDENTITY:-}" ] && ! security find-identity -p codesigning 2>/dev/null | grep -qF "\"$IDENTITY\""; then
+  DEV=$(security find-identity -p codesigning -v 2>/dev/null | grep -o '"Apple Development[^"]*"' | head -1 | tr -d '"')
+  [ -n "$DEV" ] && IDENTITY="$DEV"
+fi
 APP_ID="com.pulse.app"
 LISTEN_ID="com.pulse.app.listen"
 LISTEN="$APP/Contents/MacOS/pulse-listen"
