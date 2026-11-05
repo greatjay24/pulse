@@ -26,8 +26,8 @@ const BRIEF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 pub(crate) struct Voice {
     speaking: Mutex<Option<Child>>,
     kokoro: super::tts::Kokoro,
-    // A reply streamed to `say` (no Roo voice): collected, then read whole at the end.
-    say_stream: Mutex<Option<super::tts::Pending>>,
+    // A reply streamed to `say`: its sentences, read one after another as they arrive.
+    say_stream: Mutex<Option<SayStream>>,
     listening: Mutex<Option<(Child, Option<ChildStdin>)>>,
     hotkey: Mutex<Option<Shortcut>>,
 }
@@ -99,6 +99,56 @@ fn fallback(app: &AppHandle) -> super::tts::Fallback {
     })
 }
 
+pub(crate) struct SayStream {
+    id: u64,
+    voice: Option<String>,
+    rate: Option<u32>,
+    queue: std::collections::VecDeque<String>,
+    ended: bool,
+}
+
+// Reads a streamed reply with `say`, a sentence at a time, until it ends or is stopped (stop
+// clears the stream and kills the current `say`).
+fn say_stream_worker(app: AppHandle, id: u64) {
+    let tick = std::time::Duration::from_millis(30);
+    loop {
+        let state = app.state::<Voice>();
+        let next = {
+            let mut slot = state.say_stream.lock().unwrap();
+            match slot.as_mut() {
+                // Whatever has queued up goes in one `say`: fewer gaps between sentences.
+                Some(st) if st.id == id => match st.queue.is_empty() {
+                    false => Some((st.queue.drain(..).collect::<Vec<_>>().join(" "), st.voice.clone(), st.rate)),
+                    true if st.ended => {
+                        *slot = None;
+                        return;
+                    }
+                    true => None,
+                },
+                _ => return, // stopped or replaced
+            }
+        };
+        let Some((text, voice, rate)) = next else {
+            std::thread::sleep(tick);
+            continue;
+        };
+        if say_now(&state.speaking, &text, voice.as_deref(), rate).is_err() {
+            continue;
+        }
+        // Wait for this sentence (or a stop) before the next.
+        loop {
+            {
+                let mut child = state.speaking.lock().unwrap();
+                match child.as_mut().map(|c| c.try_wait()) {
+                    Some(Ok(None)) => {}
+                    _ => break,
+                }
+            }
+            std::thread::sleep(tick);
+        }
+    }
+}
+
 // Everything stops: `say`, Roo's voice and its queue, a half-collected stream.
 fn silence(state: &Voice) {
     stop_child(&state.speaking);
@@ -123,8 +173,8 @@ pub(crate) fn speak(app: AppHandle, state: tauri::State<'_, Voice>, text: String
     say_now(&state.speaking, &text, voice.as_deref(), rate)
 }
 
-// A reply arriving in pieces (streamed reply text): begin, append as text comes, end. With Roo's
-// voice each sentence is spoken as soon as it's complete; with `say` the text is read at the end.
+// A reply arriving in pieces (streamed reply text): begin, append as text comes, end. Each
+// sentence is spoken as soon as it's complete, with Roo's voice or with `say`.
 #[tauri::command]
 pub(crate) fn speak_begin(app: AppHandle, state: tauri::State<'_, Voice>, voice: Option<String>, rate: Option<u32>, engine: Option<String>) -> Result<u64, String> {
     say_args(voice.as_deref(), rate)?;
@@ -135,16 +185,18 @@ pub(crate) fn speak_begin(app: AppHandle, state: tauri::State<'_, Voice>, voice:
         }
     }
     let id = state.kokoro.new_id();
-    *state.say_stream.lock().unwrap() = Some(super::tts::Pending { id, text: String::new(), mac_voice: voice, rate });
+    *state.say_stream.lock().unwrap() = Some(SayStream { id, voice, rate, queue: Default::default(), ended: false });
+    std::thread::spawn(move || say_stream_worker(app, id));
     Ok(id)
 }
 
+// Text appended here is already cleaned and cut at sentence ends (SpokenStream in voiceText.ts).
 #[tauri::command]
 pub(crate) fn speak_append(state: tauri::State<'_, Voice>, id: u64, text: String) {
     let text = clean(&text);
-    if let Some(p) = state.say_stream.lock().unwrap().as_mut().filter(|p| p.id == id) {
-        if p.text.len() < SPEAK_MAX_CHARS {
-            p.text.push_str(&text);
+    if let Some(st) = state.say_stream.lock().unwrap().as_mut().filter(|st| st.id == id) {
+        if !text.trim().is_empty() && st.queue.len() < 200 {
+            st.queue.push_back(text);
         }
         return;
     }
@@ -152,15 +204,12 @@ pub(crate) fn speak_append(state: tauri::State<'_, Voice>, id: u64, text: String
 }
 
 #[tauri::command]
-pub(crate) fn speak_end(state: tauri::State<'_, Voice>, id: u64) -> Result<(), String> {
-    let collected = state.say_stream.lock().unwrap().take_if(|p| p.id == id);
-    match collected {
-        Some(p) => say_now(&state.speaking, &p.text, p.mac_voice.as_deref(), p.rate),
-        None => {
-            state.kokoro.end(id);
-            Ok(())
-        }
+pub(crate) fn speak_end(state: tauri::State<'_, Voice>, id: u64) {
+    if let Some(st) = state.say_stream.lock().unwrap().as_mut().filter(|st| st.id == id) {
+        st.ended = true;
+        return;
     }
+    state.kokoro.end(id);
 }
 
 // Something is being read out (by either engine).

@@ -13,9 +13,9 @@ export type SpeakMode = 'summary' | 'full' | 'off';
 
 export interface VoiceSettings {
   mode: SpeakMode; // summary: the first paragraph only (default); full: the whole reply
-  engine: VoiceEngine; // Roo British 1 (default) or 2, or 'mac' for the voice below
-  voice: string | null; // an installed Mac voice; null = the system voice (also the fallback)
-  rate: number; // words a minute (Mac voices)
+  engine: VoiceEngine; // 'mac' (default) for the voice below, or Roo British 1 or 2
+  voice: string | null; // an installed Mac voice; null = the system voice (default; also Roo British's fallback)
+  rate: number; // words a minute (Mac and system voices)
   hotkey: string; // Tauri accelerator for the listening panel
   proactive: boolean; // Roo speaks first: interrupts and the morning brief (hooks/useProactiveVoice.ts)
   quietStart: string; // "HH:MM": no proactive speech from here...

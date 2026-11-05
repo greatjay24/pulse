@@ -168,7 +168,9 @@ back to Roo, which sums them up in the same thread. It also keeps follow-ups
   pause or Enter sends it to Roo, Esc drops it, and the text stays editable, so dictation
   tools work there too. "Brief me" or "end of day recap" asks for a briefing.
 - **Replies aloud**: Roo's replies, the proactive voice and "Read aloud" all use the same
-  voice: Roo's own (see Voice below) or a macOS voice (`say`). The first line by default
+  voice: the system voice by default (`say`; set it in System Settings › Accessibility ›
+  Spoken Content, where Siri voices can be chosen), another macOS voice, or Roo British
+  (see Voice below). A streamed reply is read a sentence at a time with any of them. The first line by default
   (Roo writes its one-sentence answer there), or the whole reply, or off. Voice, rate and
   the hotkey are in Settings › General. Esc, Stop, or muting from the menu bar silences it.
 - First use asks for the microphone and speech recognition. On-device speech needs the
@@ -177,7 +179,7 @@ back to Roo, which sums them up in the same thread. It also keeps follow-ups
 
 #### Voice: Roo British
 
-Roo's default voice is a blend of Kokoro's British voices (Kokoro-82M, Apache 2.0), made on
+An optional voice (Settings › Voice), a blend of Kokoro's British voices (Kokoro-82M, Apache 2.0), made on
 the Mac: nothing goes over the network. "Roo British 1" is 0.7 `bf_emma` + 0.3
 `bf_isabella`, "Roo British 2" is 0.6 `bf_emma` + 0.4 `bf_alice`, both en-GB at normal speed
 with a 30 ms fade at each end.
@@ -192,8 +194,8 @@ with a 30 ms fade at each end.
   with `kokoro-onnx` and `soundfile`), `kokoro-v1.0.onnx` and `voices-v1.0.bin` from the
   [kokoro-onnx releases](https://github.com/thewh1teagle/kokoro-onnx/releases/tag/model-files-v1.0).
   Set `ROO_VOICE_DIR` in the environment Roo starts with to keep them elsewhere.
-- If any of that is missing, or the voice process fails, Roo reads with the Mac voice
-  chosen in Settings instead and logs the reason once. Try a voice from the terminal:
+- If any of that is missing, or the voice process fails, Roo reads with the system voice
+  (or the Mac voice last chosen) instead and logs the reason once. Try a voice from the terminal:
   `$ROO_VOICE_DIR/venv/bin/python scripts/roo-tts.py --say "Morning." --voice british-2`.
 
 ### Mac app

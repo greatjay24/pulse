@@ -49,7 +49,7 @@ export function VoiceSettings() {
         <div style={{ fontWeight: 600 }}>Voice</div>
         <div style={{ fontSize: tokens.type.small, color: c.textMuted, marginTop: '4px', lineHeight: 1.5 }}>
           Talk to Roo with the hotkey, from anywhere. Speech is turned into text on this Mac (macOS on-device recognition), and replies are
-          read in Roo's own voice, made on this Mac too (nothing leaves it). The first time, macOS asks for the microphone and speech recognition.
+          read with the system voice (set it in System Settings › Accessibility › Spoken Content; Siri voices work there) or Roo British, made on this Mac too (nothing leaves it). The first time, macOS asks for the microphone and speech recognition.
         </div>
       </div>
       <div style={row}>
@@ -71,6 +71,7 @@ export function VoiceSettings() {
           }}
           style={select}
         >
+          <option value="mac:">System voice</option>
           <optgroup label="Roo">
             {ROO_VOICES.map((r) => (
               <option key={r.engine} value={choiceValue(r.engine, null)}>
@@ -79,7 +80,6 @@ export function VoiceSettings() {
             ))}
           </optgroup>
           <optgroup label="Mac voices">
-            <option value="mac:">System voice</option>
             {voices.map((x) => (
               <option key={x.name} value={choiceValue('mac', x.name)}>
                 {x.name} ({x.locale})
@@ -99,14 +99,14 @@ export function VoiceSettings() {
       </div>
       {v.engine !== 'mac' && engine && !engine.installed && (
         <div style={{ fontSize: tokens.type.micro, color: c.textDim, marginLeft: '162px', lineHeight: 1.5 }}>
-          Roo's voice isn't installed on this Mac, so the Mac voice below reads instead. See README › Voice to set it up.
+          Roo British isn't installed on this Mac, so the system voice reads instead. See README › Voice to set it up.
         </div>
       )}
       <div style={row}>
-        <span style={label}>{v.engine === 'mac' ? 'Rate' : 'Mac voice rate'}</span>
+        <span style={label}>{v.engine === 'mac' ? 'Rate' : 'Fallback rate'}</span>
         <input type="range" min={120} max={300} step={10} value={v.rate} onChange={(e) => update({ rate: Number(e.target.value) })} />
         <span style={{ fontSize: tokens.type.small, color: c.textDim }}>
-          {v.rate} words a minute{v.engine === 'mac' ? '' : ' (Roo speaks at its natural pace; this is for the Mac voice fallback)'}
+          {v.rate} words a minute{v.engine === 'mac' ? '' : ' (Roo British speaks at its natural pace; this is for the system voice fallback)'}
         </span>
       </div>
       <div style={row}>

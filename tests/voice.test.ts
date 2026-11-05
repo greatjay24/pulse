@@ -5,11 +5,11 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { SpokenStream, choiceValue, engineOf, parseChoice, speakable, summaryOf } from '../src/utils/voiceText.ts';
 
-test('engine defaults to Roo British 1', () => {
-  assert.equal(engineOf(undefined), 'british-1');
+test('engine defaults to the system voice and keeps a saved choice', () => {
+  assert.equal(engineOf(undefined), 'mac');
+  assert.equal(engineOf('british-1'), 'british-1');
   assert.equal(engineOf('british-2'), 'british-2');
-  assert.equal(engineOf('mac'), 'mac');
-  assert.equal(engineOf('nope'), 'british-1');
+  assert.equal(engineOf('nope'), 'mac');
 });
 
 test('settings choice round-trips', () => {

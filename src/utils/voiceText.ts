@@ -1,8 +1,9 @@
 // Voice text and choices, kept free of imports so node's test runner can load it (tests/voice.test.ts).
 
-// Which voice reads aloud: Roo's own British voices (Kokoro, on this Mac) or macOS `say`.
+// Which voice reads aloud: macOS `say` (default: the system voice, which can be a Siri voice) or
+// Roo's own British voices (Kokoro, on this Mac).
 export type VoiceEngine = 'british-1' | 'british-2' | 'mac';
-export const DEFAULT_ENGINE: VoiceEngine = 'british-1';
+export const DEFAULT_ENGINE: VoiceEngine = 'mac';
 export const ROO_VOICES: { engine: VoiceEngine; label: string }[] = [
   { engine: 'british-1', label: 'Roo British 1' },
   { engine: 'british-2', label: 'Roo British 2' },
