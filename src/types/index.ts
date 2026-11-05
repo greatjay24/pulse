@@ -725,10 +725,24 @@ export interface DraftRow {
   source?: string;
 }
 
+// ~/portfolio/logs/outbox-actions.jsonl (bin/outbox.py log_action): one row per Outbox click
+// that ran (email sent, Resend email sent, Stripe action, approval). No recipients or bodies.
+export interface OutboxActionRow {
+  at: string;
+  id: string;
+  kind: string;
+  entity: string;
+  status?: string;
+  ok: boolean;
+  what: string;
+  link?: string | null;
+}
+
 export interface ActivitySnapshot {
   runs: { file: string; data: AgentRun[] | AgentRun }[];
   decisions: { entity: string; rows: DecisionRow[] }[];
   drafts: DraftRow[];
+  actions?: OutboxActionRow[]; // missing from builds before the Outbox actions log
   commits: { hash: string; at: string; subject: string }[];
   errors: string[];
   read_at: string;

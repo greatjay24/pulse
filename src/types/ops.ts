@@ -4,6 +4,7 @@ export type OutboxStatus = 'pending' | 'sending' | 'sent' | 'approved' | 'publis
 
 export type OutboxKind =
   | 'email'
+  | 'resend_email'
   | 'post'
   | 'text'
   | 'dm'
@@ -19,7 +20,7 @@ export interface OutboxMessage {
   id: string;
   kind?: OutboxKind; // missing on items written before kinds existed: email
   entity: string;
-  account: string; // email: which mailbox it goes out from
+  account: string; // email: which mailbox it goes out from ("resend" for resend_email)
   to: string[]; // email addresses, phone numbers or @handles
   cc: string[];
   subject: string;
@@ -38,6 +39,11 @@ export interface OutboxMessage {
   approved_at?: string | null;
   published_at?: string | null;
   error?: string | null;
+  // resend_email: sent through Resend from a verified domain, not a mailbox
+  from?: string | null;
+  from_name?: string | null;
+  reply_to?: string | null;
+  resend_id?: string | null;
   // post / dm / slack
   channel?: string | null;
   title?: string | null;

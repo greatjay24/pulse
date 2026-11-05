@@ -3,7 +3,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { PortfolioEntity, PortfolioSnapshot } from '../types';
 import { OutboxEdit, OutboxEntry, OutboxMessage } from '../types/ops';
 import { editOutbox, markPublished, sendOutbox, skipOutbox, useOutbox } from '../hooks/useOps';
-import { EDITABLE, PUBLISH_KINDS, channelLabel, formatMinor, isMoneyKind, isWebLink, kindLabel, kindOf, primaryLabel, splitAddresses } from '../utils/ops';
+import { EDITABLE, PUBLISH_KINDS, channelLabel, formatMinor, isEmailKind, isMoneyKind, isWebLink, kindLabel, kindOf, primaryLabel, splitAddresses } from '../utils/ops';
 import { openExternal } from '../utils/tracker';
 import { showToast } from '../utils/toast';
 import { Card, Notice, PageHeader, SectionHeading, SectionLabel } from './BoardUI';
@@ -43,6 +43,8 @@ function clickMeans(m: OutboxMessage): string {
   switch (kindOf(m)) {
     case 'email':
       return 'send this message from the right mailbox, threaded, and mark it sent';
+    case 'resend_email':
+      return `send this message through Resend as ${m.from ?? 'the sender shown'} and mark it sent`;
     case 'stripe_send_invoice':
       return 'check the draft in Stripe, finalize it and have Stripe email it';
     case 'stripe_send_quote':
@@ -93,11 +95,18 @@ function Preview({ m }: { m: OutboxMessage }) {
   const meta = { fontSize: tokens.type.small, color: c.textMuted, lineHeight: 1.6 } as const;
   const kind = kindOf(m);
 
-  if (kind === 'email') {
+  if (isEmailKind(kind)) {
     return (
       <>
         <div style={meta}>
-          <Meta label="From">{m.account} mailbox</Meta>
+          {kind === 'resend_email' ? (
+            <Meta label="From">
+              {m.from_name ? `${m.from_name} <${m.from}>` : m.from} <span style={{ color: c.textDim }}>via Resend</span>
+            </Meta>
+          ) : (
+            <Meta label="From">{m.account} mailbox</Meta>
+          )}
+          {m.reply_to && <Meta label="Replies to">{m.reply_to}</Meta>}
           <Meta label="To">{m.to.join(', ')}</Meta>
           {m.cc.length > 0 && <Meta label="Cc">{m.cc.join(', ')}</Meta>}
           {m.in_reply_to && <div style={{ color: c.textDim }}>Reply in the existing thread</div>}
@@ -255,7 +264,7 @@ function OutboxItem({ entry, entity, onDone }: { entry: OutboxEntry; entity?: Po
       const res = await sendOutbox(m.id, entry.content, clickMeans(m));
       if (res.warning) showToast(res.warning);
       if (!res.ok) return;
-      if (kind === 'email') showToast(`Sent to ${m.to.join(', ')}`);
+      if (isEmailKind(kind)) showToast(`Sent to ${m.to.join(', ')}${kind === 'resend_email' ? ` as ${m.from}` : ''}`);
       else if (PUBLISH_KINDS.includes(kind)) await copy(pasteText(m), 'Approved and copied. Paste it where it goes, then mark it published.');
       else showToast(res.next_step ?? `${kindLabel(m)}: done in Stripe`);
     });
@@ -290,7 +299,7 @@ function OutboxItem({ entry, entity, onDone }: { entry: OutboxEntry; entity?: Po
       {!editing && (
         <div style={{ display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
           <button className="btn btn-primary" disabled={!!busy} onClick={go} title={`Click to ${clickMeans(m)}`} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Icon name={kind === 'email' ? 'mail' : isMoneyKind(kind) ? 'credit-card' : 'check'} size={14} color="currentColor" /> {busy === 'go' ? busyLabel : label}
+            <Icon name={isEmailKind(kind) ? 'mail' : isMoneyKind(kind) ? 'credit-card' : 'check'} size={14} color="currentColor" /> {busy === 'go' ? busyLabel : label}
           </button>
           {EDITABLE[kind] && (
             <button className="btn btn-secondary" disabled={!!busy} onClick={() => setEditing(true)}>Edit</button>
@@ -379,7 +388,7 @@ function RecentRow({ entry, entity }: { entry: OutboxEntry; entity?: PortfolioEn
         {m.error && (
           <div style={{ color: c.danger }}>
             {m.error}
-            {(m.status === 'sending' || m.status === 'failed') && (isMoneyKind(kindOf(m)) ? ' Check it in Stripe before queueing it again.' : kindOf(m) === 'email' ? ' Check Sent in Gmail before trying again.' : '')}
+            {(m.status === 'sending' || m.status === 'failed') && (isMoneyKind(kindOf(m)) ? ' Check it in Stripe before queueing it again.' : kindOf(m) === 'email' ? ' Check Sent in Gmail before trying again.' : kindOf(m) === 'resend_email' ? ' Check Emails in the Resend dashboard before trying again.' : '')}
           </div>
         )}
       </span>
@@ -478,7 +487,7 @@ export function OutboxCard({ snapshot, onOpen }: { snapshot: PortfolioSnapshot |
             <span style={{ fontWeight: 600 }}>{entities.find((x) => x.id === e.item.entity)?.name ?? e.item.entity}</span>{' '}
             <span style={{ color: c.textMuted }}>
               {kindLabel(e.item)}: {e.item.subject}
-              {e.item.to.length > 0 && kindOf(e.item) === 'email' ? ` → ${e.item.to.join(', ')}` : ''}
+              {e.item.to.length > 0 && isEmailKind(kindOf(e.item)) ? ` → ${e.item.to.join(', ')}` : ''}
             </span>
           </li>
         ))}
