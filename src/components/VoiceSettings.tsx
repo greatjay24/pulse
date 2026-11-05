@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
+import { PROACTIVE_TEST_EVENT } from '../hooks/useProactiveVoice';
 import { HOTKEYS, InstalledVoice, SpeakMode, VoiceSettings as Settings, applyHotkey, listVoices, loadVoice, saveVoice, speak, stopSpeaking } from '../utils/voice';
 
 // Settings › General: how Roo talks back, and the hotkey that opens the listening panel.
@@ -88,6 +89,25 @@ export function VoiceSettings() {
           ))}
         </select>
         <span style={{ fontSize: tokens.type.micro, color: hotkeyNote ? c.danger : c.textDim }}>{hotkeyNote ?? '⌥Space is left alone: ChatGPT and Claude use it.'}</span>
+      </div>
+      <div style={row}>
+        <span style={label}>Proactive voice</span>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: tokens.type.small, cursor: 'pointer' }}>
+          <input type="checkbox" checked={v.proactive} onChange={(e) => update({ proactive: e.target.checked })} />
+          Roo speaks first: replies to send, decisions, money, a meeting about to start, and the morning brief
+        </label>
+        <button onClick={() => window.dispatchEvent(new Event(PROACTIVE_TEST_EVENT))} style={{ ...select, cursor: 'pointer' }} title="Speaks a sample and shows its notification; click the notification to open the Roo thread">
+          Try it
+        </button>
+      </div>
+      <div style={row}>
+        <span style={label}>Quiet hours</span>
+        <input type="time" value={v.quietStart} disabled={!v.proactive} onChange={(e) => e.target.value && update({ quietStart: e.target.value })} style={select} />
+        <span style={{ fontSize: tokens.type.small, color: c.textDim }}>to</span>
+        <input type="time" value={v.quietEnd} disabled={!v.proactive} onChange={(e) => e.target.value && update({ quietEnd: e.target.value })} style={select} />
+        <span style={{ fontSize: tokens.type.micro, color: c.textDim }}>
+          Never during a call (mic in use) or with the screen locked. At most once every 10 minutes. Mute for an hour from the menu bar.
+        </span>
       </div>
     </div>
   );

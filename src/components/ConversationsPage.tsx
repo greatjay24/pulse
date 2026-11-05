@@ -25,6 +25,7 @@ type RunItem = Extract<ConvItem, { type: 'run' }>;
 export interface ConversationFocus {
   runId?: string;
   entity?: string;
+  draft?: string; // a message to fill the box with (Roo's spoken interrupts), not sent
   nonce: number; // a repeat click on the same run still scrolls to it
 }
 
@@ -656,6 +657,7 @@ export function ConversationsPage({ snapshot, focus, onOpenTerminal }: { snapsho
                 replying={replying}
                 queued={queued}
                 onSent={setSentRun}
+                prefill={focus?.draft && current.id === (focus.entity ?? ORG_THREAD) ? { text: focus.draft, nonce: focus.nonce } : null}
               />
             )}
           </section>

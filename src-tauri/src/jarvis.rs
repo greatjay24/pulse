@@ -83,6 +83,19 @@ pub(crate) fn speak(state: tauri::State<'_, Voice>, text: String, voice: Option<
     Ok(())
 }
 
+// `say` still reading something out.
+pub(crate) fn is_speaking(state: &Voice) -> bool {
+    let mut slot = state.speaking.lock().unwrap();
+    match slot.as_mut().map(|c| c.try_wait()) {
+        Some(Ok(None)) => true,
+        Some(_) => {
+            *slot = None;
+            false
+        }
+        None => false,
+    }
+}
+
 #[tauri::command]
 pub(crate) fn stop_speaking(state: tauri::State<'_, Voice>) {
     stop_child(&state.speaking);

@@ -11,11 +11,15 @@ export interface VoiceSettings {
   voice: string | null; // an installed voice; null = the system voice
   rate: number; // words a minute
   hotkey: string; // Tauri accelerator for the listening panel
+  proactive: boolean; // Roo speaks first: interrupts and the morning brief (hooks/useProactiveVoice.ts)
+  quietStart: string; // "HH:MM": no proactive speech from here...
+  quietEnd: string; // ...until here
 }
 
 export const DEFAULT_HOTKEY = 'Alt+Shift+Space';
 const KEY = 'pulse-voice';
-const DEFAULTS: VoiceSettings = { mode: 'summary', voice: null, rate: 190, hotkey: DEFAULT_HOTKEY };
+const DEFAULTS: VoiceSettings = { mode: 'summary', voice: null, rate: 190, hotkey: DEFAULT_HOTKEY, proactive: true, quietStart: '21:00', quietEnd: '08:00' };
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 // Shortcuts that don't collide with common Mac apps (⌥Space is ChatGPT's and Claude's launcher).
 export const HOTKEYS: { value: string; label: string }[] = [
   { value: 'Alt+Shift+Space', label: '⌥⇧Space' },
@@ -32,6 +36,9 @@ export function loadVoice(): VoiceSettings {
       voice: typeof v.voice === 'string' && v.voice ? v.voice : null,
       rate: typeof v.rate === 'number' && v.rate >= 80 && v.rate <= 400 ? v.rate : DEFAULTS.rate,
       hotkey: typeof v.hotkey === 'string' && v.hotkey ? v.hotkey : DEFAULT_HOTKEY,
+      proactive: v.proactive !== false,
+      quietStart: typeof v.quietStart === 'string' && HHMM.test(v.quietStart) ? v.quietStart : DEFAULTS.quietStart,
+      quietEnd: typeof v.quietEnd === 'string' && HHMM.test(v.quietEnd) ? v.quietEnd : DEFAULTS.quietEnd,
     };
   } catch {
     return { ...DEFAULTS };

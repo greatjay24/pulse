@@ -14,12 +14,14 @@ export function Composer({
   replying,
   queued,
   onSent,
+  prefill = null,
 }: {
   target: string;
   lead: string;
   replying: LiveRun | null; // this lead's chat run in progress
   queued: number; // messages waiting behind it
   onSent: (runId: string) => void;
+  prefill?: { text: string; nonce: number } | null; // filled in once per nonce, never sent by itself
 }) {
   const { tokens } = useTheme();
   const c = tokens.colors;
@@ -34,6 +36,14 @@ export function Composer({
     setFresh(false);
     setError(null);
   }, [target]);
+
+  const filled = useRef<number | null>(null);
+  useEffect(() => {
+    if (!prefill || filled.current === prefill.nonce) return;
+    filled.current = prefill.nonce;
+    setText(prefill.text);
+    ref.current?.focus();
+  }, [target, prefill]);
 
   const send = async (stopFirst: boolean) => {
     const message = text.trim();

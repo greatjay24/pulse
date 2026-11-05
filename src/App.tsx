@@ -45,6 +45,9 @@ import { CommandBox } from './components/CommandBox';
 import { TerminalPage, TerminalRequest } from './components/TerminalPage';
 import { chiefOf, frontDoorOf } from './utils/command';
 import { useVoice } from './hooks/useVoice';
+import { useProactiveVoice } from './hooks/useProactiveVoice';
+import { ownerNameOf } from './utils/proactive';
+import { PULSE_THREAD } from './utils/conversations';
 import './index.css';
 
 // Check if running in Tauri environment (Tauri v2 uses __TAURI_INTERNALS__)
@@ -805,7 +808,7 @@ function DashboardContent() {
   }, [setTv, handleNavChange]);
 
   // Conversations opened on one run or one entity's thread (Activity, Working now, the menu bar).
-  const openConversation = useCallback((focus: { runId?: string; entity?: string }) => {
+  const openConversation = useCallback((focus: { runId?: string; entity?: string; draft?: string }) => {
     setTv(false);
     setSelectedEntityId(null);
     setConversationFocus({ ...focus, nonce: Date.now() });
@@ -848,6 +851,21 @@ function DashboardContent() {
   const { signals, cleared } = urgentSignals(boardItems, portfolio.tracker);
   const { live } = useLive();
   useVoice(DEMO ? null : live, frontDoorOf(portfolio.snapshot?.registry));
+  // Roo speaks first (interrupts, the morning brief); a click opens its thread with a message ready.
+  const entityNames = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const e of (portfolio.snapshot?.registry as { entities?: { id?: unknown; name?: unknown }[] } | undefined)?.entities ?? []) {
+      if (typeof e.id === 'string' && typeof e.name === 'string') out[e.id] = e.name;
+    }
+    return out;
+  }, [portfolio.snapshot?.registry]);
+  const proactive = useProactiveVoice({
+    live: DEMO ? null : live,
+    frontDoor: DEMO ? null : frontDoorOf(portfolio.snapshot?.registry),
+    names: entityNames,
+    ownerName: ownerNameOf(portfolio.snapshot?.registry),
+    onOpen: (draft) => openConversation({ entity: PULSE_THREAD, draft }),
+  });
   // The demo org never reaches the menu bar or notifications: they are for the owner's real org.
   // Without a tracker the picture is complete once ~/portfolio has been read.
   useDesktopSignals({
@@ -858,6 +876,7 @@ function DashboardContent() {
     signals,
     cleared,
     notificationsOn,
+    voice: DEMO ? undefined : proactive,
   });
 
   // An entity opens over the page it was opened from (Today, Board or Money), so the back
