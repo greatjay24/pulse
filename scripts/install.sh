@@ -8,6 +8,11 @@ cd "$(dirname "$0")/.."
 # Source cargo environment
 source "$HOME/.cargo/env"
 
+# Keep node_modules in step with package-lock.json (new deps arrive with merged PRs)
+if [ ! -f node_modules/.package-lock.json ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
+    npm ci --no-audit --no-fund
+fi
+
 # Build the release version
 npm run tauri build -- --bundles app   # just the .app; the DMG step is for releases and can fail locally
 
