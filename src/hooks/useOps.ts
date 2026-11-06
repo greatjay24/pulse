@@ -69,9 +69,10 @@ export async function markPublished(id: string) {
   await invoke<string>('outbox_mark_published', { id });
 }
 
-export async function skipOutbox(id: string) {
+// note: Jay's reason ("too long", "no hook"). Roo's nightly learning turns repeated reasons into lessons.
+export async function skipOutbox(id: string, note?: string) {
   if (DEMO) return demo('mark it skipped; the Gmail draft stays where it is');
-  await invoke<string>('outbox_skip', { id });
+  await invoke<string>('outbox_skip', { id, note: note?.trim() || null });
 }
 
 export async function saveGoal(entityId: string, goal: Partial<Goal> & { id: string }): Promise<Goal | null> {

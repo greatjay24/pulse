@@ -158,6 +158,16 @@ fn is_outbox_id(s: &str) -> bool {
     is_slug(s) && !s.contains('_')
 }
 
+// Jay's skip reason: one line, no control characters, at most 300 characters (outbox.py clips too).
+fn skip_note(note: Option<&str>) -> Option<String> {
+    let clean: String = note?.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let clean = clean.split_whitespace().collect::<Vec<_>>().join(" ");
+    if clean.is_empty() {
+        return None;
+    }
+    Some(clean.chars().take(300).collect())
+}
+
 #[derive(Serialize)]
 pub(crate) struct OutboxItem {
     content: String,
@@ -247,11 +257,18 @@ pub async fn outbox_mark_published(id: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn outbox_skip(id: String) -> Result<String, String> {
+pub async fn outbox_skip(id: String, note: Option<String>) -> Result<String, String> {
     if !is_outbox_id(&id) {
         return Err("invalid outbox id".to_string());
     }
-    let v = run_script_async("outbox.py", vec!["skip".into(), id], None, SCRIPT_TIMEOUT).await?;
+    // Why Jay skipped it ("too long", "no hook"): outbox.py keeps it in the item's history and
+    // bin/outbox_learn.py turns repeated reasons into lessons for the agent that drafted it.
+    let mut args = vec!["skip".to_string(), id];
+    if let Some(n) = skip_note(note.as_deref()) {
+        args.push("--note".into());
+        args.push(n);
+    }
+    let v = run_script_async("outbox.py", args, None, SCRIPT_TIMEOUT).await?;
     Ok(v.to_string())
 }
 
@@ -509,6 +526,14 @@ pub async fn check_connections() -> Result<String, String> {
 
 #[cfg(test)]
 mod ops_tests {
+    #[test]
+    fn skip_note_is_one_clean_line() {
+        assert_eq!(super::skip_note(None), None);
+        assert_eq!(super::skip_note(Some("   \n ")), None);
+        assert_eq!(super::skip_note(Some(" too\nlong\t ")).as_deref(), Some("too long"));
+        assert_eq!(super::skip_note(Some(&"x".repeat(400))).map(|n| n.len()), Some(300));
+    }
+
     use super::*;
 
     // The same constants as bin/test_outbox.py: Roo signs, Python verifies.
