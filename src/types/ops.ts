@@ -14,7 +14,8 @@ export type OutboxKind =
   | 'stripe_send_invoice'
   | 'stripe_send_quote'
   | 'stripe_refund'
-  | 'stripe_subscription';
+  | 'stripe_subscription'
+  | 'stripe_charge';
 
 // ~/portfolio/outbox/<id>.json, written by bin/outbox_add.py (and bin/stripe_agent.py for money).
 // Field meanings per kind are in bin/outbox.py.
@@ -74,6 +75,11 @@ export interface OutboxMessage {
   items?: string[]; // "price_...:qty"
   interval?: string | null;
   days_until_due?: number | null;
+  // stripe_charge: a saved card charged off-session on the click
+  payment_method?: string | null; // pm_...
+  card?: string | null; // "Visa •••• 4242, exp 04/28"
+  description?: string | null; // on the customer's receipt
+  statement_descriptor_suffix?: string | null;
   result?: Record<string, unknown> | null;
 }
 
