@@ -1,130 +1,70 @@
 # Roo Roadmap
 
-This file tracks planned improvements. When starting a new Claude session, reference this file to continue work.
+Roo is Jay's one assistant (desktop app here; Telegram via ~/project-tracker/jaybot).
+Agents prepare, Jay decides: nothing is sent, posted, charged or merged without his click.
+Org scripts live in ~/portfolio (watcher, Outbox, memory); this repo is the app.
+
+Status as of 2026-11-05.
 
 ---
 
-## In Progress
+## Phase 1: One assistant you talk to ✅
 
-### Widget Picker Inline Configuration
-**Status:** Planned
-**Priority:** High
-**Goal:** Let users configure integrations directly when adding widgets instead of redirecting to Settings.
+- Roo chat, Telegram, morning brief and end-of-day recap
+- Voice: press to send, quick lane with streaming, British System voice (Kokoro optional)
+- Proactive voice: Roo speaks up when something needs Jay
 
-**Files to create:**
-- `src/hooks/useGoogleOAuth.ts` - Extract OAuth logic from Settings.tsx
-- `src/components/IntegrationConfigForm.tsx` - Form for API key/credential input
-- `src/components/ProjectCredentialsGrid.tsx` - Multi-project setup grid for Overview page
+## Phase 2: Always watching, acting on its own 🟡
 
-**Files to modify:**
-- `src/components/WidgetPicker.tsx` - Add step-based flow (select → configure → done)
-- `src/App.tsx` - Pass new props, remove redirect logic
+Done:
+- Watcher every 15 min (`~/portfolio/bin/watch.py`): email, calendar, GitHub, Vercel, Stripe, deadlines
+- Follow-up nudges, 6pm "what I did without you" digest, undo
+- Meeting notes routed to each team (Ayson → Meghan/Felicia, Crafted → Marcus/Sebastian)
+- Meeting prep: brief 10 min before; before-9am meetings get it the night before (#21)
 
-**Implementation notes:**
-- Step 1 (select): Current grid, but clicking "needs integration" goes to Step 2
-- Step 2 (configure): Shows IntegrationConfigForm or ProjectCredentialsGrid based on context
-- On submit: Update settings via callback, add widget, close modal
-- OAuth should work inline using the extracted hook
+Left:
+- Google Voice text alerts (built; Jay installs)
+- Mercury bank watching (needs read-only token)
+- Auto-accept meetings from an approved list (built, off)
+- Chase overdue invoices, fix broken deploys as PRs, draft replies before asked
 
----
+## Phase 3: Full reach 🟠
 
-## Planned
+Done:
+- Resend email from visuo.io and notify.craftco.io; Stripe invoices, quotes, refunds, subscriptions (#22). Keys in Keychain only.
 
-### Onboarding Flow
-**Status:** Not started
-**Priority:** Medium
-**Goal:** Guide new users through first-time setup.
+Left:
+- Real posting from the Outbox: TikTok (via Higgsfield), YouTube; copy-and-open for Instagram/LinkedIn
+- Slack, LinkedIn, ads and analytics
+- Loosen Stripe key (Payment Intents write) when Jay wants direct charges
 
-**Implementation:**
-- Create `src/components/Onboarding.tsx` modal wizard
-- Add `hasCompletedOnboarding: boolean` to Settings type in `src/types/index.ts`
-- Steps: Welcome → Create project → Connect first integration → Done
-- Show automatically when `settings.apps.length === 0` and `!hasCompletedOnboarding`
+## Phase 4: Learns Jay 🟡
 
----
+Done (#24):
+- One shared memory: `~/portfolio/memory/facts/`, CLI `~/portfolio/bin/memory.py`, entity-scoped
+- Nightly learning from Outbox decisions: approval stats, lessons, auto-approve candidates (proposals only)
+- Skip asks why
 
-### Keyboard Shortcuts
-**Status:** Not started
-**Priority:** Low
-**Goal:** Quick navigation without mouse.
-
-**Implementation:**
-- Add `useEffect` with `keydown` listener in `App.tsx`
-- Shortcuts:
-  - `Cmd/Ctrl + 1` → Overview
-  - `Cmd/Ctrl + 2-9` → Project by index
-  - `Cmd/Ctrl + ,` → Settings
-  - `Cmd/Ctrl + N` → New project
-  - `Cmd/Ctrl + E` → Toggle edit layout mode
-  - `Cmd/Ctrl + ?` → Show shortcuts modal
+Left:
+- Point every agent at shared memory (`~/portfolio/bin/roo-memory-prompt.sh`, Jay runs)
+- Roo screen for stats and auto-approve candidates
+- Wording pass on lessons
 
 ---
 
-### Data Refresh Controls
-**Status:** Not started
-**Priority:** Medium
-**Goal:** Manual refresh and auto-refresh for widgets.
+## App polish (backlog)
 
-**Implementation:**
-- Add refresh icon button to widget headers in `DashboardGrid.tsx`
-- Add `lastRefreshed: Date` state per widget
-- Show "Updated X minutes ago" tooltip
-- Optional: Add `refreshInterval` setting (off, 1min, 5min, 15min)
+- Dashboard clarity: Jay's top 3 annoyances (pending)
+- Loading and error states per widget, manual refresh
+- Keyboard shortcuts (Cmd+1..9 pages, Cmd+, settings)
+- Code splitting (bundle ~929KB)
+- Bundle id `com.pulse.app` ends in `.app` (Tauri warns); changing it resets macOS grants, so only with a planned re-grant
 
----
-
-### Loading & Error States
-**Status:** Not started
-**Priority:** Medium
-**Goal:** Better feedback during data fetching.
-
-**Implementation:**
-- Create `src/components/WidgetSkeleton.tsx` with animated placeholders
-- Add `isLoading`, `error`, `retry()` props to widget components
-- Show skeleton during initial load
-- Show error message + retry button on failure
-- Consider `react-error-boundary` for catching render errors
-
----
-
-### Code Splitting
-**Status:** Not started
-**Priority:** Low
-**Goal:** Reduce initial bundle size (currently 929KB).
-
-**Implementation:**
-- Use `React.lazy()` for page components:
-  ```tsx
-  const Settings = lazy(() => import('./pages/Settings'));
-  ```
-- Wrap lazy components in `<Suspense fallback={<Loading />}>`
-- Consider splitting heavy dependencies (charts, etc.)
-
----
-
-## Completed
-
-- [x] Resizable/draggable dashboard grid with react-grid-layout
-- [x] Edit Layout mode with save/cancel
-- [x] Add Widget card in grid
-- [x] GitHub Actions release workflow for DMG/MSI/AppImage builds
-- [x] Environment variables for OAuth credentials (not hardcoded)
-- [x] Terminal setup script with auto-launch prompt (`scripts/setup.sh`)
-- [x] Auto-launch Settings toggle (Settings > Appearance)
-
----
-
-## Quick Start for New Sessions
+## Working on it
 
 ```bash
-# Start the dev server
-npm run tauri dev
-
-# Build for production (test before pushing)
-npm run build
-
-# Create a release (after pushing to main)
-git tag v0.x.x && git push origin v0.x.x
+bash scripts/install.sh   # build, sign with a stable identity, install to /Applications
+npm run tauri dev         # dev
 ```
 
-To work on a feature, tell Claude: "Let's implement [feature name] from ROADMAP.md"
+Branch per change, PR to main; merges are Jay's click.
