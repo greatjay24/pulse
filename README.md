@@ -131,6 +131,16 @@ Agents queue; the Outbox click carries it out. Keys live in the macOS Keychain (
 |---|---|
 | `stripe-action:<business>` | An Approve click on an invoice, quote, refund or subscription (`stripe_api.approved_call`). Also the old Stripe widget (falls back to the read-only `stripe:<business>`). |
 | `resend:send` | A Send click on an "Email via Resend" item (`outbox_add.py --via resend --from <address>`), from a domain listed in `~/portfolio/resend_domains.json`. |
+| `youtube:<channel>` | An Upload click on a "YouTube upload" item (`outbox_add.py --kind youtube_upload`). Written once by `~/portfolio/bin/connect_youtube.py <channel> --client-file <OAuth client JSON>`, where you do Google's consent yourself. The click checks the file, the connection and any unfilled `[...]` first, then uploads in the background; Activity gets the video link. Privacy defaults to private. |
+
+Social posts:
+- **YouTube** (`youtube_upload`): uploaded through the YouTube Data API on the click (title,
+  description, tags, privacy, optional publish time, made-for-kids, altered-content flag).
+- **TikTok** (`tiktok_post`): Approve copies the caption and opens TikTok Studio, and the video
+  is one click away in Finder. Higgsfield's TikTok tools need their interactive publish form,
+  so there's no hands-off path yet.
+- **Instagram, LinkedIn, X**: Approve, then "Copy & open" copies the text and opens the compose
+  screen (prefilled on LinkedIn and X).
 
 - Every click that runs adds a row to `~/portfolio/logs/outbox-actions.jsonl`, shown in
   Activity as "Your click" (kind, sender, subject; never recipients or bodies).
