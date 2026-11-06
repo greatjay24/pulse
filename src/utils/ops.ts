@@ -138,6 +138,8 @@ export function kindLabel(m: OutboxMessage): string {
       return 'Refund';
     case 'stripe_subscription':
       return m.action === 'update' ? 'Subscription change' : 'New subscription';
+    case 'stripe_charge':
+      return 'Card charge';
   }
 }
 

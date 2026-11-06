@@ -109,6 +109,7 @@ const HASH_FIELDS: &[(&str, &[&str])] = &[
     ("stripe_send_quote", &["stripe_id", "customer_id", "amount", "currency", "subject", "body"]),
     ("stripe_refund", &["stripe_id", "amount", "currency", "reason", "subject", "body"]),
     ("stripe_subscription", &["action", "stripe_id", "customer_id", "items", "amount", "currency", "interval", "days_until_due", "subject", "body"]),
+    ("stripe_charge", &["customer_id", "customer", "payment_method", "card", "amount", "currency", "description", "statement_descriptor_suffix", "subject", "body"]),
     ("resend_email", &["from", "from_name", "reply_to", "to", "cc", "subject", "body", "in_reply_to", "references"]),
     ("tiktok_post", &["account", "title", "body", "media", "ai_label", "privacy", "schedule", "notes"]),
     ("youtube_upload", &["channel", "title", "body", "tags", "privacy", "publish_at", "category_id", "made_for_kids", "ai_altered", "media", "notes"]),
@@ -618,6 +619,24 @@ mod ops_tests {
         assert_ne!(content_hash(&more).unwrap(), content_hash(&item).unwrap());
         assert!(content_hash(&serde_json::json!({"kind": "fax"})).is_err());
         assert!(content_hash(&serde_json::json!({"kind": "stripe_refund", "amount": 1.5})).is_err());
+    }
+
+    // Same item and constant as bin/test_outbox.py PULSE_CHARGE_ITEM / `test_charge_hash_matches_pulse`.
+    #[test]
+    fn charge_hash_matches_python() {
+        let item = serde_json::json!({"kind": "stripe_charge", "entity": "acme", "customer_id": "cus_TEST123456",
+            "customer": "Northwind Co <ap@northwind.example>", "payment_method": "pm_TESTVISA4242",
+            "card": "Visa •••• 4242, exp 04/28", "amount": 25000, "currency": "usd", "description": "November retainer",
+            "statement_descriptor_suffix": "RETAINER", "subject": "Charge $250.00 to Northwind Co",
+            "body": "November retainer\nCard: Visa •••• 4242, exp 04/28"});
+        assert_eq!(content_hash(&item).unwrap(), "eac0e278694226f0e47806ac76ba9883f69394973455dbb758d021196b085ab9");
+        // The card and the amount are part of what Jay approves.
+        let mut other = item.clone();
+        other["payment_method"] = "pm_TESTAMEX0005".into();
+        assert_ne!(content_hash(&other).unwrap(), content_hash(&item).unwrap());
+        let mut more = item.clone();
+        more["amount"] = 25001.into();
+        assert_ne!(content_hash(&more).unwrap(), content_hash(&item).unwrap());
     }
 
     // Same item and constant as bin/test_outbox.py `test_hash_matches_pulse` (class Resend).
