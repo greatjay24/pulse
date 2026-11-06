@@ -275,6 +275,32 @@ pub async fn outbox_skip(id: String, note: Option<String>) -> Result<String, Str
 }
 
 // ------------------------------------------
+// Undo something an agent did on its own (bin/undo.py): skip the Outbox item, close the PR,
+// stop the run, set an auto-accepted invite back to Maybe. Only on the owner's click.
+// ------------------------------------------
+
+// watch_store.new_id("a"): "a-20261105-161502-3f9c"
+fn is_action_id(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 22
+        && s.starts_with("a-")
+        && b[10] == b'-'
+        && b[17] == b'-'
+        && b[2..10].iter().chain(&b[11..17]).all(|c| c.is_ascii_digit())
+        && b[18..].iter().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+}
+
+#[tauri::command]
+pub async fn undo_action(id: String) -> Result<String, String> {
+    if !is_action_id(&id) {
+        return Err("invalid action id".to_string());
+    }
+    // An invite undo is a short scoped claude call; give it the connector check's time.
+    let v = run_script_async("undo.py", vec![id], None, CHECK_TIMEOUT).await?;
+    Ok(v.to_string())
+}
+
+// ------------------------------------------
 // The send key: Keychain-held Ed25519, public half in .cache/outbox/send_key.pub
 // ------------------------------------------
 
@@ -696,5 +722,18 @@ mod ops_tests {
         assert_eq!(snap.items[0].content, content_hash(&snap.items[0].item).unwrap());
         assert_eq!(snap.errors.len(), 1);
         let _ = fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod undo_tests {
+    use super::is_action_id;
+
+    #[test]
+    fn action_ids() {
+        assert!(is_action_id("a-20261105-161502-3f9c"));
+        for bad in ["a-20261105-161502-3F9C", "a-20261105-161502-3f9", "u-20261105-161502-3f9c", "a-2026110x-161502-3f9c", "--help", ""] {
+            assert!(!is_action_id(bad), "{}", bad);
+        }
     }
 }

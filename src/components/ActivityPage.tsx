@@ -1,8 +1,10 @@
 import { useMemo, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { showToast } from '../utils/toast';
 import { useTheme } from '../contexts/ThemeContext';
 import { PortfolioSnapshot } from '../types';
 import { useOrgActivity } from '../hooks/useOrgActivity';
-import { ActivityItem, ActivityKind, activityItems, formatCost, formatSecs, formatTokens, localDay, startOfDay, usage, usageBetween, usageLine } from '../utils/activity';
+import { ActivityItem, ActivityKind, UNDO_LABEL, activityItems, formatCost, formatSecs, formatTokens, localDay, startOfDay, usage, usageBetween, usageLine } from '../utils/activity';
 import { openExternal } from '../utils/tracker';
 import { deployedLine } from '../utils/live';
 import { Card, Notice, PageHeader, SectionLabel } from './BoardUI';
@@ -18,7 +20,54 @@ const KIND_LABEL: Record<ActivityKind, string> = {
   report: 'Lead',
   drafts: 'Drafts',
   sent: 'Your click',
+  auto: 'On its own',
 };
+
+// Reverses one autonomous action through bin/undo.py. Never automatic: only this click.
+function UndoButton({ item, onDone }: { item: ActivityItem; onDone: () => void }) {
+  const { tokens } = useTheme();
+  const c = tokens.colors;
+  const [busy, setBusy] = useState(false);
+  if (!item.actionId || !item.undoKind) return null;
+  if (item.undone) {
+    return <span style={{ fontSize: tokens.type.micro, color: c.textDim, marginTop: '4px', whiteSpace: 'nowrap' }}>Undone</span>;
+  }
+  const run = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = JSON.parse(await invoke<string>('undo_action', { id: item.actionId }));
+      showToast(res.result ? `Undone: ${res.result}` : 'Undone');
+      onDone();
+    } catch (err) {
+      showToast(`Couldn't undo: ${String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button
+      onClick={run}
+      disabled={busy}
+      title="Reverse what the agent did"
+      style={{
+        padding: '4px 10px',
+        borderRadius: '999px',
+        border: `1px solid ${c.border}`,
+        background: 'transparent',
+        color: c.textMuted,
+        fontFamily: 'inherit',
+        fontSize: tokens.type.micro,
+        cursor: busy ? 'default' : 'pointer',
+        whiteSpace: 'nowrap',
+        marginTop: '2px',
+      }}
+    >
+      {busy ? 'Undoing…' : UNDO_LABEL[item.undoKind] ?? 'Undo'}
+    </button>
+  );
+}
 
 function dayLabel(day: string, now: number): string {
   if (day === localDay(now)) return 'Today';
@@ -55,7 +104,7 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
 // Runs open their conversation; answers and replies open their entity's thread.
 const CONVERSATION_KINDS: ActivityKind[] = ['run', 'act', 'answer', 'report'];
 
-function Row({ item, entityName, onOpen }: { item: ActivityItem; entityName: string | null; onOpen?: () => void }) {
+function Row({ item, entityName, onOpen, onUndone }: { item: ActivityItem; entityName: string | null; onOpen?: () => void; onUndone?: () => void }) {
   const { tokens } = useTheme();
   const c = tokens.colors;
   const tone = item.ok === false ? c.danger : item.running ? c.accent : item.kind === 'answer' ? c.accent : c.textDim;
@@ -99,6 +148,7 @@ function Row({ item, entityName, onOpen }: { item: ActivityItem; entityName: str
         )}
         <span style={{ display: 'block', fontSize: tokens.type.micro, color: c.textDim, marginTop: '4px' }}>{meta.join(' · ')}</span>
       </span>
+      <UndoButton item={item} onDone={() => onUndone?.()} />
       {item.link && /^https?:\/\//.test(item.link) && (
         <button onClick={(e) => (e.stopPropagation(), openExternal(item.link!))} title={item.link} style={{ background: 'none', border: 'none', cursor: 'pointer', marginTop: '3px' }}>
           <Icon name="external-link" size={13} color={c.textDim} />
@@ -216,10 +266,11 @@ export function ActivityPage({ snapshot, onOpenConversation }: {
                     item={i}
                     entityName={entity === 'all' ? nameOf(i.entity) : null}
                     onOpen={
-                      CONVERSATION_KINDS.includes(i.kind)
+                      CONVERSATION_KINDS.includes(i.kind) || (i.kind === 'auto' && i.runId)
                         ? () => onOpenConversation(i.runId ? { runId: i.runId } : { entity: i.entity ?? undefined })
                         : undefined
                     }
+                    onUndone={refresh}
                   />
                 ))}
               </div>

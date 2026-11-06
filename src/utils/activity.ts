@@ -5,7 +5,18 @@ import { agentName } from './command';
 // One line on the Activity timeline. Built only from files the organization wrote:
 // run logs, git commits, status.json `done`, decisions.jsonl, the sales ledgers and the
 // Outbox actions log (what Jay's clicks carried out).
-export type ActivityKind = 'run' | 'act' | 'commit' | 'done' | 'answer' | 'report' | 'drafts' | 'sent';
+export type ActivityKind = 'run' | 'act' | 'commit' | 'done' | 'answer' | 'report' | 'drafts' | 'sent' | 'auto';
+
+// Undo kinds bin/undo.py can reverse; "none" and unknown kinds get no button.
+const UNDOABLE = new Set(['outbox', 'pr', 'calendar', 'invite', 'run', 'followup']);
+export const UNDO_LABEL: Record<string, string> = {
+  outbox: 'Skip the draft',
+  pr: 'Close the PR',
+  calendar: 'Remove the hold',
+  invite: 'Set back to Maybe',
+  run: 'Stop the run',
+  followup: 'Drop the follow-up',
+};
 
 export interface ActivityItem {
   key: string;
@@ -23,6 +34,9 @@ export interface ActivityItem {
   link?: string | null;
   runId?: string; // the run's transcript, for Conversations
   agents?: number; // subagents the run deployed; 0 = worked solo
+  actionId?: string; // 'auto': the watch/autonomous.jsonl row undo.py takes
+  undoKind?: string; // 'auto': set when undo.py can reverse it
+  undone?: { ok: boolean; result?: string };
 }
 
 export function localDay(ms: number): string {
@@ -192,6 +206,31 @@ export function activityItems(activity: ActivitySnapshot | null, snapshot: Portf
       title: a.what,
       ok: a.ok,
       link: a.link ?? null,
+    });
+  }
+
+  // Done on its own: the watcher's actions and what the leads it started logged, each with its undo.
+  const undos = new Map<string, { ok: boolean; result?: string }>();
+  for (const r of activity?.autonomous ?? []) {
+    if (r.type === 'undo' && r.ref && r.ok) undos.set(r.ref, { ok: true, result: r.result });
+  }
+  for (const r of activity?.autonomous ?? []) {
+    if (r.type === 'undo' || !r.what) continue;
+    const at = dateMs(r.at);
+    if (at === null) continue;
+    const kind = r.undo?.kind;
+    push({
+      key: `auto-${r.id}`,
+      at,
+      entity: r.entity && ids.has(r.entity) ? r.entity : null,
+      kind: 'auto',
+      title: r.what,
+      detail: r.why || undefined,
+      link: r.links?.[0] ?? null,
+      runId: r.run_id ?? undefined,
+      actionId: r.id,
+      undoKind: kind && UNDOABLE.has(kind) ? kind : undefined,
+      undone: undos.get(r.id),
     });
   }
 
