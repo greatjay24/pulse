@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useTheme } from '../contexts/ThemeContext';
 import { PULSE_TARGET, askLead } from '../utils/command';
-import { ListenSettings, finalText, helperArgs, listeningHint, loadListen, onHotkey } from '../utils/listen';
+import { Converse, ConverseAction, ListenSettings, finalText, helperArgs, listeningHint, loadListen, onHotkey, saveListen } from '../utils/listen';
 import { REPLY_EVENT, ReplyEvent, newTurnId } from '../utils/reply';
 import { HOTKEYS, briefKindOf, briefMe, loadVoice, stopSpeaking, summaryOf } from '../utils/voice';
 import { StrokeIcon } from './Icons';
@@ -18,18 +18,26 @@ import { StrokeIcon } from './Icons';
 // owner's files), which streams its answer here in a second or two; work, or anything the
 // snapshot can't answer, goes to full Roo (ask_lead) as before. Both lanes push the reply on
 // `pulse://roo-reply`; the main window reads it aloud as it streams (hooks/useReplyVoice.ts).
+//
+// Conversation mode (the panel's toggle, remembered): the mic stays open (pulse-listen --converse,
+// echo-cancelled, on-device, nothing recorded). A pause ends a turn and it goes through the same
+// send() as above; talking over Roo stops it at once and becomes the next turn. The turn-taking
+// is utils/listen.ts's Converse. It ends with the toggle, Esc, closing the panel, or five quiet
+// minutes (which closes the panel).
 
 type Phase = 'starting' | 'listening' | 'typing' | 'sending' | 'waiting' | 'reply' | 'error';
 
 type ListenEvent =
-  | { type: 'ready' }
+  | { type: 'ready'; aec?: boolean }
   | { type: 'level'; value: number }
-  | { type: 'partial'; text: string }
+  | { type: 'partial'; text: string; turn?: number }
   | { type: 'final'; text: string }
   | { type: 'error'; message: string }
+  | { type: 'idle' }
   | { type: 'end' };
 
 const HIDE_AFTER_REPLY_MS = 15_000;
+const CONVERSE_TICK_MS = 150;
 
 function hotkeyLabel(): string {
   const key = loadVoice().hotkey;
@@ -56,6 +64,13 @@ export function ListenPanel() {
   const openedAt = useRef(0);
   const turn = useRef<{ id: string; message: string; lane: 'fast' | 'full' } | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // Conversation mode
+  const [converse, setConverse] = useState(false);
+  const [heard, setHeard] = useState(''); // the owner's words this turn, Roo's echo taken out
+  const [aec, setAec] = useState<boolean | null>(null);
+  const conv = useRef<Converse | null>(null); // set while conversation mode is on
+  const echo = useRef(''); // what Roo is saying, or just said (the echo gate's reference)
+  const speaking = useRef(false);
 
   // A quick-lane answer still being written is dropped; a full run keeps going (and is read
   // aloud when it finishes, as before).
@@ -67,7 +82,9 @@ export function ListenPanel() {
 
   const hide = () => {
     dropTurn();
-    invoke('hide_listen_panel').catch(() => {});
+    conv.current = null;
+    setConverse(false);
+    invoke('hide_listen_panel').catch(() => {}); // stops the helper: the mic is off
   };
 
   const fail = (e: unknown) => {
@@ -138,9 +155,58 @@ export function ListenPanel() {
     setLevel(0);
     setNote(null);
     setRunId(null);
+    setHeard('');
+    setAec(null);
     setPhase('starting');
+    if (s.converse) {
+      conv.current = new Converse(s.endpointSecs, Date.now());
+      setConverse(true);
+      invoke('start_listening', { converse: true }).catch((e) => {
+        conv.current = null;
+        setConverse(false);
+        fail(e);
+      });
+      return;
+    }
+    conv.current = null;
+    setConverse(false);
     invoke('start_listening', helperArgs(s)).catch(fail);
   }, []);
+
+  // The toggle: remembered, so the next open starts the same way. Off goes back to press to send.
+  const toggleConverse = useCallback(() => {
+    saveListen({ ...loadListen(), converse: !conv.current });
+    start();
+  }, [start]);
+
+  // Conversation mode: act on what the turn-taking decided.
+  const act = useCallback(
+    (a: ConverseAction | null) => {
+      if (!a) return;
+      if (a.type === 'barge') {
+        stopSpeaking().catch(() => {});
+        speaking.current = false;
+        dropTurn(); // a quick answer still being written stops too
+        setReply('');
+        setNote(null);
+        setPhase('listening');
+        return;
+      }
+      if (a.type === 'idle') {
+        hide();
+        return;
+      }
+      invoke('listen_next').catch(() => {});
+      setHeard('');
+      if (a.type === 'send') {
+        if (speaking.current) stopSpeaking().catch(() => {});
+        dropTurn();
+        setText(a.text);
+        send(a.text);
+      }
+    },
+    [send],
+  );
 
   // Press to send (or hold to talk): the hotkey again sends, stops, or starts over.
   const sendNow = useCallback(() => {
@@ -154,12 +220,36 @@ export function ListenPanel() {
     start();
     const offOpen = listen('pulse://listen-open', () => start());
     const offHotkey = listen<'pressed' | 'released'>('pulse://listen-hotkey', (e) => {
-      const act = onHotkey(settingsRef.current, e.payload, phaseRef.current, Date.now() - openedAt.current);
-      if (act === 'send') sendNow();
-      else if (act === 'restart') start();
+      // Conversation mode: the hotkey takes the turn now, without waiting for the pause.
+      if (conv.current) {
+        if (e.payload === 'pressed') act(conv.current.takeNow(Date.now(), echo.current));
+        return;
+      }
+      const what = onHotkey(settingsRef.current, e.payload, phaseRef.current, Date.now() - openedAt.current);
+      if (what === 'send') sendNow();
+      else if (what === 'restart') start();
     });
     const offEvents = listen<ListenEvent>('pulse://listen', (e) => {
       const ev = e.payload;
+      const c = conv.current;
+      if (c) {
+        if (ev.type === 'ready') {
+          setAec(ev.aec ?? null);
+          setPhase((p) => (p === 'starting' ? 'listening' : p));
+        } else if (ev.type === 'level') setLevel(ev.value);
+        else if (ev.type === 'partial') {
+          const a = c.partial(ev.turn ?? 0, ev.text, Date.now(), speaking.current, echo.current);
+          setHeard(c.own(echo.current));
+          act(a);
+        } else if (ev.type === 'idle') hide();
+        else if (ev.type === 'error') {
+          conv.current = null;
+          setConverse(false);
+          setNote(ev.message);
+          setPhase('error');
+        }
+        return;
+      }
       if (phaseRef.current === 'typing') return;
       if (ev.type === 'ready') setPhase((p) => (p === 'starting' ? 'listening' : p));
       else if (ev.type === 'level') setLevel(ev.value);
@@ -208,13 +298,40 @@ export function ListenPanel() {
       offEvents.then((u) => u());
       offReply.then((u) => u());
     };
-  }, [start, send, sendNow, toFullRoo]);
+  }, [start, send, sendNow, toFullRoo, act]);
+
+  // Conversation mode: what Roo is saying is the echo gate's reference; it stays until the next
+  // reply, since the recognizer lags the voice.
+  useEffect(() => {
+    if (reply) echo.current = reply;
+  }, [reply]);
+
+  // Conversation mode: watch whether Roo is talking, and let a pause end the turn.
+  useEffect(() => {
+    if (!converse) return;
+    let polling = false;
+    const t = setInterval(() => {
+      const c = conv.current;
+      if (!c) return;
+      if (!polling) {
+        polling = true;
+        invoke<boolean>('voice_speaking')
+          .then((v) => (speaking.current = v))
+          .catch(() => {})
+          .finally(() => (polling = false));
+      }
+      const now = Date.now();
+      if (phaseRef.current === 'sending' || phaseRef.current === 'waiting') c.touch(now); // Roo is working
+      act(c.tick(now, speaking.current, echo.current));
+    }, CONVERSE_TICK_MS);
+    return () => clearInterval(t);
+  }, [converse, act]);
 
   useEffect(() => {
-    if (phase !== 'reply' || hover) return;
+    if (phase !== 'reply' || hover || converse) return;
     const t = setTimeout(hide, HIDE_AFTER_REPLY_MS);
     return () => clearTimeout(t);
-  }, [phase, hover, reply]);
+  }, [phase, hover, reply, converse]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -238,6 +355,67 @@ export function ListenPanel() {
     error: note ?? 'Something went wrong.',
   };
   const listening = phase === 'listening' || phase === 'starting';
+  const link = { background: 'none', border: 'none', padding: 0, color: c.accent, cursor: 'pointer', fontFamily: 'inherit', fontSize: 'inherit' } as const;
+  const converseButton = (
+    <button onClick={toggleConverse} title="Always listening: pause to send, talk over Roo to interrupt" style={link}>
+      Conversation mode
+    </button>
+  );
+
+  if (converse) {
+    // The mic is open the whole time: the dot and the banner say so in every state.
+    const converseLabel: Record<Phase, string> = {
+      starting: 'Starting the microphone…',
+      listening: 'Listening. Just talk, pause to send.',
+      typing: 'Listening.',
+      sending: 'Sending to Roo…',
+      waiting: note ?? 'Roo is on it…',
+      reply: 'Roo · talk over it to interrupt',
+      error: note ?? 'Something went wrong.',
+    };
+    return (
+      <div
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        style={{ height: '100vh', boxSizing: 'border-box', background: c.bgElevated, color: c.text, fontFamily: tokens.fonts.sans, border: `2px solid ${c.accent}`, padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: '8px' }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span
+            aria-hidden
+            style={{ width: 30, height: 30, borderRadius: '50%', display: 'grid', placeItems: 'center', background: c.accent, transform: `scale(${1 + level * 0.35})`, transition: 'transform 0.1s' }}
+          >
+            <StrokeIcon name="mic" size={15} color={c.accentInk} />
+          </span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: tokens.type.micro, fontWeight: 600, color: c.danger, whiteSpace: 'nowrap' }}>
+            <span aria-hidden style={{ width: 8, height: 8, borderRadius: '50%', background: c.danger }} />
+            Conversation on · mic open
+          </span>
+          <span style={{ fontSize: tokens.type.small, color: phase === 'error' ? c.danger : c.textMuted, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{converseLabel[phase]}</span>
+          <button onClick={hide} aria-label="End conversation and close" style={{ background: 'none', border: 'none', color: c.textDim, cursor: 'pointer', fontSize: tokens.type.small, fontFamily: 'inherit' }}>
+            Esc
+          </button>
+        </div>
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', fontSize: '15px', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+          {reply || (phase === 'sending' || phase === 'waiting' ? <span style={{ color: c.textDim }}>{text}</span> : null)}
+        </div>
+        <div style={{ fontSize: '15px', color: heard ? c.text : c.textDim, fontStyle: heard ? 'normal' : 'italic', whiteSpace: 'nowrap', overflow: 'hidden' }}>
+          {heard ? (heard.length > 70 ? '…' + heard.slice(-70) : heard) : 'Say something…'}
+        </div>
+        <div style={{ display: 'flex', gap: '14px', fontSize: tokens.type.micro, color: c.textDim }}>
+          <button onClick={toggleConverse} style={{ ...link, fontWeight: 600 }}>
+            End conversation
+          </button>
+          {runId && phase === 'reply' && (
+            <button onClick={() => invoke('open_run_in_main', { runId }).then(hide).catch(() => {})} style={link}>
+              Open in Roo
+            </button>
+          )}
+          <span>Talk over Roo to interrupt</span>
+          <span style={{ marginLeft: 'auto' }}>{aec === false ? 'No echo cancelling: headphones help' : 'On-device · nothing recorded'}</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -288,6 +466,7 @@ export function ListenPanel() {
             <button onClick={start} style={{ background: 'none', border: 'none', padding: 0, color: c.accent, cursor: 'pointer', fontFamily: 'inherit', fontSize: 'inherit' }}>
               Ask something else
             </button>
+            {converseButton}
           </>
         ) : (
           <>
@@ -300,7 +479,8 @@ export function ListenPanel() {
             </button>
             <span>{settings.mode === 'hold' ? `or let go of ${hotkey}, or Enter` : settings.mode === 'press' ? `or ${hotkey} again, or Enter` : 'or pause, or Enter'}</span>
             <span>Esc cancels</span>
-            <span style={{ marginLeft: 'auto' }}>On-device speech · nothing leaves this Mac but the text</span>
+            {converseButton}
+            <span style={{ marginLeft: 'auto' }} title="Nothing leaves this Mac but the text">On-device speech</span>
           </>
         )}
       </div>
