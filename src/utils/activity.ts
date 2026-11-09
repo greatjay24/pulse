@@ -1,6 +1,7 @@
 import { ActivitySnapshot, AgentRun, PortfolioEntity, PortfolioSnapshot, RunTokens } from '../types';
 import { decisionId } from './decisions';
 import { agentName } from './command';
+import { formatPlanShare, planScale } from './planScale';
 
 // One line on the Activity timeline. Built only from files the organization wrote:
 // run logs, git commits, status.json `done`, decisions.jsonl, the sales ledgers and the
@@ -274,8 +275,9 @@ export function startOfDay(ms: number): number {
   return d.getTime();
 }
 
+// Shown as a share of the weekly plan (utils/planScale), never as dollars.
 export function formatCost(usd: number): string {
-  return usd < 10 ? `$${usd.toFixed(2)}` : `$${Math.round(usd)}`;
+  return formatPlanShare(usd);
 }
 
 export function formatTokens(t: RunTokens): string {
@@ -304,7 +306,7 @@ export function usage(runs: { cost?: number | null; tokens?: RunTokens }[]): { c
 // One line for a usage: "$1.30", "84k tokens", "$1.30 + 84k tokens", or null.
 export function usageLine(u: { cost: number | null; tokens: RunTokens | undefined }, hideZeroCost = true): string | null {
   const parts = [
-    u.cost !== null && !(hideZeroCost && u.cost === 0) ? formatCost(u.cost) : null,
+    u.cost !== null && !(hideZeroCost && u.cost === 0) && planScale() ? formatCost(u.cost) : null,
     u.tokens ? formatTokens(u.tokens) : null,
   ].filter(Boolean);
   return parts.length ? parts.join(' + ') : null;

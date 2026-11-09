@@ -187,7 +187,7 @@ export function ActivityPage({ snapshot, onOpenConversation }: {
   const tile = (period: string, u: ReturnType<typeof usage>): { label: string; value: string; sub?: string } =>
     u.cost === null && u.tokens
       ? { label: `Agent use · ${period}`, value: formatTokens(u.tokens) }
-      : { label: `Agent cost · ${period}`, value: formatCost(u.cost ?? 0), sub: u.tokens ? `+ ${formatTokens(u.tokens)} (runners that report tokens only)` : undefined };
+      : { label: `Plan used · ${period}`, value: formatCost(u.cost ?? 0), sub: u.tokens ? `+ ${formatTokens(u.tokens)} (runners that report tokens only)` : undefined };
   const runsWeek = byEntity.filter((i) => (i.kind === 'run' || i.kind === 'act') && i.at >= weekAgo).length;
   const failedWeek = byEntity.filter((i) => i.ok === false && i.at >= weekAgo).length;
 

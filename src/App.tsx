@@ -50,6 +50,7 @@ import { stopSpeaking } from './utils/voice';
 import { useProactiveVoice } from './hooks/useProactiveVoice';
 import { ownerNameOf } from './utils/proactive';
 import { PULSE_THREAD } from './utils/conversations';
+import { loadPlanScale } from './utils/planScale';
 import './index.css';
 
 // Check if running in Tauri environment (Tauri v2 uses __TAURI_INTERNALS__)
@@ -454,6 +455,11 @@ function DashboardContent() {
   useEffect(() => {
     loadSettings();
   }, [loadSettings]);
+
+  // Usage is shown as a share of the weekly plan; read the scale once from the last report.
+  useEffect(() => {
+    loadPlanScale();
+  }, []);
 
   // Fetch calendar events when settings are loaded (for apps with calendar connected)
   useEffect(() => {

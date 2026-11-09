@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "test:listen": "sh scripts/test-listen.sh",
-    "test": "node --experimental-strip-types --no-warnings --test tests/proactive.test.ts tests/voice.test.ts tests/listen.test.ts"
+    "test": "node --experimental-strip-types --no-warnings --test tests/proactive.test.ts tests/voice.test.ts tests/listen.test.ts tests/planScale.test.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.18",
