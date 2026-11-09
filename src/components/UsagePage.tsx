@@ -4,15 +4,17 @@ import { PortfolioSnapshot } from '../types';
 import { PlanWindow, UsageReport, UsageRun, UsageWindow } from '../types/usage';
 import { useUsage } from '../hooks/useUsage';
 import {
-  Grain, Tally, bucketLabel, buckets, byModel, formatAgo, formatCount, formatPct, formatUsd, groupBy, kindLabel,
+  Grain, Tally, bucketLabel, buckets, byModel, formatAgo, formatCount, formatPct, groupBy, kindLabel,
   modelLabel, nextBucket, tallyBuckets, topRuns, totalTokens,
 } from '../utils/usage';
 import { Card, Notice, PageHeader, SectionLabel } from './BoardUI';
 import { Icon } from './Icons';
 import { agentName } from '../utils/command';
+import { formatPlanShare, scaleFromSnapshot } from '../utils/planScale';
 
 // Usage: where the Claude plan goes. Everything runs on a Max subscription, so dollars are
-// API-equivalent estimates and the plan's limits are what matter. Charts follow the dataviz
+// API-equivalent estimates and the plan's limits are what matter, so every estimate is shown as
+// a share of the weekly plan (utils/planScale), not in dollars. Charts follow the dataviz
 // rules: one series per chart in the theme's chart hue, text in text tokens, thin marks with
 // 4px rounded data-ends, a hover/focus tooltip on every mark, and the numbers written out.
 
@@ -93,15 +95,15 @@ function LimitCard({ name, plan, planAge, ours, implied }: {
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', fontSize: tokens.type.small, marginBottom: '8px' }}>
           <span style={{ color: c.textMuted }}>Our estimate</span>
           <span style={{ color: c.text, fontVariantNumeric: 'tabular-nums' }}>
-            {ours ? formatUsd(ours.cost_usd) : '—'}
-            {ours?.budget_usd ? <span style={{ color: c.textDim }}> of {formatUsd(ours.budget_usd)} · {formatPct(ours.used ?? 0)}</span> : null}
+            {ours ? formatPlanShare(ours.cost_usd) : '—'}
+            {ours?.budget_usd ? <span style={{ color: c.textDim }}> · {formatPct(ours.used ?? 0)} of soft budget</span> : null}
           </span>
         </div>
         {ours?.budget_usd ? <Meter value={ours.used ?? 0} warn={ours.warn} label={`${WINDOW_LABEL[name]}: our estimate against the soft budget`} /> : null}
         <div style={{ fontSize: tokens.type.micro, color: c.textDim, marginTop: '8px', lineHeight: 1.5 }}>
           {ours ? `${ours.runs} run${ours.runs === 1 ? '' : 's'}, ${formatCount(totalTokens(ours.tokens))} tokens in the last ${name === 'five_hour' ? '5 hours' : '7 days'}. ` : ''}
           {ours?.budget_usd ? 'Soft budget from portfolio.json "usage".' : 'Set a soft budget in portfolio.json "usage".'}
-          {implied ? ` The plan's reading puts a full window near ${formatUsd(implied)}.` : ''}
+          {implied && name === 'seven_day' ? ' Shares are scaled from the plan\'s last weekly reading.' : ''}
         </div>
       </div>
     </Card>
@@ -113,7 +115,7 @@ function LimitCard({ name, plan, planAge, ours, implied }: {
 // ------------------------------------------
 
 function tip(t: Tally): string {
-  return `${formatUsd(t.cost)}${t.estimated ? ' (part estimated)' : ''} · ${formatCount(totalTokens(t.tokens))} tokens · ${t.runs} run${t.runs === 1 ? '' : 's'}`;
+  return `${formatPlanShare(t.cost)}${t.estimated ? ' (part estimated)' : ''} · ${formatCount(totalTokens(t.tokens))} tokens · ${t.runs} run${t.runs === 1 ? '' : 's'}`;
 }
 
 function Columns({ data, grain, metric, height = 160 }: { data: { start: number; tally: Tally }[]; grain: Grain; metric: Metric; height?: number }) {
@@ -121,7 +123,7 @@ function Columns({ data, grain, metric, height = 160 }: { data: { start: number;
   const c = tokens.colors;
   const [active, setActive] = useState<number | null>(null);
   const val = (t: Tally) => (metric === 'cost' ? t.cost : totalTokens(t.tokens));
-  const fmt = (v: number) => (metric === 'cost' ? formatUsd(v) : formatCount(v));
+  const fmt = (v: number) => (metric === 'cost' ? formatPlanShare(v) : formatCount(v));
   const max = Math.max(0, ...data.map((d) => val(d.tally)));
   const peak = data.find((d) => max > 0 && val(d.tally) === max)?.start;
   const latest = data[data.length - 1]?.start;
@@ -182,7 +184,7 @@ function Ranked({ rows, total, metric }: { rows: { key: string; label: ReactNode
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
               <span style={{ flex: 1, minWidth: 0, fontSize: tokens.type.small, color: c.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.label}</span>
               <span style={{ fontSize: tokens.type.small, fontWeight: 600, color: c.text, fontVariantNumeric: 'tabular-nums' }}>
-                {metric === 'cost' ? formatUsd(v) : formatCount(v)}
+                {metric === 'cost' ? formatPlanShare(v) : formatCount(v)}
               </span>
               <span style={{ width: '38px', textAlign: 'right', fontSize: tokens.type.micro, color: c.textDim, fontVariantNumeric: 'tabular-nums' }}>
                 {total > 0 ? formatPct(v / total) : ''}
@@ -267,13 +269,13 @@ function Body({ report, names, onOpenConversation }: { report: UsageReport; name
       {/* Filters: one row above the charts */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginBottom: '16px' }}>
         <Segmented label="Group by" value={grain} onChange={setGrain} options={[{ id: 'day', label: 'Day' }, { id: 'week', label: 'Week' }, { id: 'month', label: 'Month' }]} />
-        <Segmented label="Measure" value={metric} onChange={setMetric} options={[{ id: 'cost', label: 'Est. cost' }, { id: 'tokens', label: 'Tokens' }]} />
-        <span style={{ fontSize: tokens.type.small, color: c.textMuted }}>{rangeLabel}: {formatUsd(totalCost)} API-equivalent</span>
+        <Segmented label="Measure" value={metric} onChange={setMetric} options={[{ id: 'cost', label: 'Plan share' }, { id: 'tokens', label: 'Tokens' }]} />
+        <span style={{ fontSize: tokens.type.small, color: c.textMuted }}>{rangeLabel}: {formatPlanShare(totalCost)}</span>
       </div>
 
       <Card style={{ marginBottom: '16px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '16px' }}>
-          <SectionLabel style={{ marginBottom: 0 }}>{metric === 'cost' ? 'Estimated cost' : 'Tokens'} by {grain}</SectionLabel>
+          <SectionLabel style={{ marginBottom: 0 }}>{metric === 'cost' ? 'Share of weekly plan' : 'Tokens'} by {grain}</SectionLabel>
           <button onClick={() => setTable((t) => !t)} style={{ background: 'none', border: 'none', color: c.textMuted, fontSize: tokens.type.micro, cursor: 'pointer', fontFamily: 'inherit' }}>
             {table ? 'Show chart' : 'Show as table'}
           </button>
@@ -288,7 +290,7 @@ function Body({ report, names, onOpenConversation }: { report: UsageReport; name
               {[...series].reverse().map(({ start, tally }) => (
                 <tr key={start} style={{ borderTop: `1px solid ${c.border}` }}>
                   <td style={{ ...td, textAlign: 'left', paddingLeft: 0 }}>{bucketLabel(start, grain, true)}</td>
-                  <td style={td}>{formatUsd(tally.cost)}</td><td style={td}>{formatCount(totalTokens(tally.tokens))}</td><td style={td}>{tally.runs}</td>
+                  <td style={td}>{formatPlanShare(tally.cost)}</td><td style={td}>{formatCount(totalTokens(tally.tokens))}</td><td style={td}>{tally.runs}</td>
                 </tr>
               ))}
             </tbody>
@@ -319,7 +321,7 @@ function Body({ report, names, onOpenConversation }: { report: UsageReport; name
                 <td style={{ ...td, textAlign: 'left', paddingLeft: 0 }}>{modelLabel(m.key)}</td>
                 <td style={td}>{formatCount(m.tally.tokens.input)}</td><td style={td}>{formatCount(m.tally.tokens.output)}</td>
                 <td style={td}>{formatCount(m.tally.tokens.cache_read)}</td><td style={td}>{formatCount(m.tally.tokens.cache_write)}</td>
-                <td style={td}>{formatUsd(m.tally.cost)}</td>
+                <td style={td}>{formatPlanShare(m.tally.cost)}</td>
               </tr>
             ))}
           </tbody>
@@ -349,8 +351,8 @@ function Body({ report, names, onOpenConversation }: { report: UsageReport; name
                   </div>
                 </div>
                 <span style={{ fontSize: tokens.type.micro, color: c.textDim, fontVariantNumeric: 'tabular-nums' }}>{formatCount(totalTokens(run.tokens) * share)} tokens</span>
-                <span style={{ width: '64px', textAlign: 'right', fontSize: tokens.type.small, fontWeight: 600, color: c.text, fontVariantNumeric: 'tabular-nums' }}>
-                  {formatUsd(cost)}
+                <span style={{ minWidth: '96px', textAlign: 'right', fontSize: tokens.type.small, fontWeight: 600, color: c.text, fontVariantNumeric: 'tabular-nums' }}>
+                  {formatPlanShare(cost)}
                 </span>
                 {open ? <Icon name="external-link" size={13} color={c.textDim} /> : <span style={{ width: 13 }} />}
               </div>
@@ -373,6 +375,7 @@ function Body({ report, names, onOpenConversation }: { report: UsageReport; name
 export function UsagePage({ snapshot, onOpenConversation }: { snapshot: PortfolioSnapshot | null; onOpenConversation: (f: { runId?: string; entity?: string }) => void }) {
   const { tokens } = useTheme();
   const { data, error, refreshing, refresh } = useUsage();
+  scaleFromSnapshot(data);
   const names = useNames(snapshot);
   const report = data?.report ?? null;
   return (
