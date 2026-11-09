@@ -401,12 +401,36 @@ fn open_panel(app: &AppHandle, from_hotkey: bool) {
 // was first made on) and centres on the screen the pointer is on, in its upper third.
 fn place_on_active_screen(app: &AppHandle, w: &tauri::WebviewWindow) {
     let _ = w.set_visible_on_all_workspaces(true);
+    float_over_full_screen(w);
     let Ok(cursor) = app.cursor_position() else { return };
     let Ok(Some(m)) = app.monitor_from_point(cursor.x, cursor.y) else { return };
     let Ok(size) = w.outer_size() else { return };
     let (x, y) = panel_origin((m.position().x, m.position().y), (m.size().width, m.size().height), (size.width, size.height));
     let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
 }
+
+// macOS keeps ordinary windows out of another app's full-screen Space, even ones on every Space.
+// "Full-screen auxiliary" is the flag that lets an overlay (Spotlight-style) show there, and the
+// status level keeps it above that app. Tauri has no setter for either, so set them on the NSWindow.
+#[cfg(target_os = "macos")]
+fn float_over_full_screen(w: &tauri::WebviewWindow) {
+    use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
+    let Ok(ptr) = w.ns_window() else { return };
+    let ptr = ptr as usize;
+    let _ = w.run_on_main_thread(move || {
+        // SAFETY: Tauri's live NSWindow for this webview window, touched on the main thread.
+        let ns: &NSWindow = unsafe { &*(ptr as *const NSWindow) };
+        ns.setCollectionBehavior(
+            NSWindowCollectionBehavior::CanJoinAllSpaces
+                | NSWindowCollectionBehavior::FullScreenAuxiliary
+                | NSWindowCollectionBehavior::IgnoresCycle,
+        );
+        ns.setLevel(25); // NSStatusWindowLevel: above full-screen apps' windows
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn float_over_full_screen(_w: &tauri::WebviewWindow) {}
 
 // Top-left corner for a panel of `panel` size on a monitor at `origin` with `screen` size
 // (all physical pixels): centred across, a third of the way down.
