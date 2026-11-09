@@ -55,6 +55,11 @@ func fail(_ message: String) -> Never {
     exit(1)
 }
 
+func describe(_ error: Error) -> String {
+    let e = error as NSError
+    return "\(e.localizedDescription) (\(e.domain) \(e.code))"
+}
+
 func option(_ name: String, _ fallback: String) -> String {
     let args = CommandLine.arguments
     if let i = args.firstIndex(of: name), i + 1 < args.count { return args[i + 1] }
@@ -107,6 +112,19 @@ final class Listener {
     var lastHeard = Date()            // converse: last time any words came in
     var recentRestarts: [Date] = []   // converse: tasks the recognizer closed on its own
 
+    func tapAndStart(_ input: AVAudioInputNode) throws {
+        let format = input.outputFormat(forBus: 0)
+        guard format.sampleRate > 0 else { fail("No microphone found.") }
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+            guard let self = self else { return }
+            let b = mono(buffer)
+            self.currentRequest().append(b)
+            self.level(b)
+        }
+        engine.prepare()
+        try engine.start()
+    }
+
     func start() {
         guard let rec = SFSpeechRecognizer(locale: Locale(identifier: localeID)) ?? SFSpeechRecognizer() else {
             fail("Speech recognition isn't available for \(localeID).")
@@ -135,16 +153,20 @@ final class Listener {
             }
             _ = engine.mainMixerNode // voice processing runs input and output as one unit
         }
-        let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0 else { fail("No microphone found.") }
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-            guard let self = self else { return }
-            let b = mono(buffer)
-            self.currentRequest().append(b)
-            self.level(b)
+        // Bluetooth headset mics (and some device pairs) refuse voice processing: the engine
+        // won't start with it on. Then start plain; headphones don't echo, and the panel's text
+        // gate still covers speakers.
+        do {
+            try tapAndStart(input)
+        } catch where aec {
+            engine.stop()
+            input.removeTap(onBus: 0)
+            try? input.setVoiceProcessingEnabled(false)
+            aec = false
+            do { try tapAndStart(input) } catch { fail("Couldn't start the microphone: \(describe(error))") }
+        } catch {
+            fail("Couldn't start the microphone: \(describe(error))")
         }
-        engine.prepare()
-        do { try engine.start() } catch { fail("Couldn't start the microphone: \(error.localizedDescription)") }
 
         beginStretch()
         emit(converse ? ["type": "ready", "aec": aec] : ["type": "ready"])
