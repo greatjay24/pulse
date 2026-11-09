@@ -3121,6 +3121,7 @@ dependencies = [
  "getrandom 0.2.16",
  "hex",
  "mac-notification-sys",
+ "objc2-app-kit",
  "open",
  "portable-pty",
  "reqwest",
