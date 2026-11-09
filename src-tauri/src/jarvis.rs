@@ -299,9 +299,9 @@ fn stop_listening_now(state: &Voice, how: &str) {
 }
 
 #[tauri::command]
-pub(crate) fn start_listening(app: AppHandle, state: tauri::State<'_, Voice>, locale: Option<String>, pause: Option<f64>, max: Option<u32>) -> Result<(), String> {
+pub(crate) fn start_listening(app: AppHandle, state: tauri::State<'_, Voice>, locale: Option<String>, pause: Option<f64>, max: Option<u32>, converse: Option<bool>) -> Result<(), String> {
     let mut cmd = Command::new(listen_helper()?);
-    cmd.args(listen_args(locale.as_deref(), pause, max)?);
+    cmd.args(listen_args(locale.as_deref(), pause, max, converse.unwrap_or(false))?);
     stop_listening_now(&state, "cancel");
     let mut child = cmd
         .stdin(Stdio::piped())
@@ -327,7 +327,9 @@ pub(crate) fn start_listening(app: AppHandle, state: tauri::State<'_, Voice>, lo
 
 // pulse-listen's flags. pause: seconds of silence that send (0.6 to 10), or 0 for press-to-send,
 // where only the hotkey or Enter sends; max: the longest one listen may run, in seconds.
-pub(crate) fn listen_args(locale: Option<&str>, pause: Option<f64>, max: Option<u32>) -> Result<Vec<String>, String> {
+// converse: conversation mode (always listening, echo-cancelled, turns taken by the panel with
+// listen_next); pause and max don't apply to it.
+pub(crate) fn listen_args(locale: Option<&str>, pause: Option<f64>, max: Option<u32>, converse: bool) -> Result<Vec<String>, String> {
     let mut args = Vec::new();
     if let Some(l) = locale.filter(|l| !l.is_empty()) {
         if !(l.len() <= 16 && l.starts_with(|c: char| c.is_ascii_alphabetic()) && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')) {
@@ -347,7 +349,24 @@ pub(crate) fn listen_args(locale: Option<&str>, pause: Option<f64>, max: Option<
         }
         args.extend(["--max".to_string(), m.to_string()]);
     }
+    if converse {
+        args.push("--converse".to_string());
+    }
     Ok(args)
+}
+
+// Conversation mode: the panel took the turn; the helper forgets it and hears the next one.
+#[tauri::command]
+pub(crate) fn listen_next(state: tauri::State<'_, Voice>) {
+    if let Some((_, Some(stdin))) = state.listening.lock().unwrap().as_mut() {
+        let _ = writeln!(stdin, "next");
+    }
+}
+
+// Conversation mode: whether Roo is talking (barge-in and the echo gate key off it).
+#[tauri::command]
+pub(crate) fn voice_speaking(state: tauri::State<'_, Voice>) -> bool {
+    is_speaking(&state)
 }
 
 // Enter: stop now and keep what was said (the helper sends its final transcript).
@@ -568,14 +587,20 @@ mod tests {
 
     #[test]
     fn listen_args_validate_pause_and_max() {
-        assert_eq!(listen_args(None, None, None).unwrap(), Vec::<String>::new());
-        assert_eq!(listen_args(Some("en-US"), Some(0.0), Some(180)).unwrap(), vec!["--locale", "en-US", "--pause", "0", "--max", "180"]);
-        assert_eq!(listen_args(None, Some(2.5), None).unwrap(), vec!["--pause", "2.5"]);
-        assert!(listen_args(None, Some(0.3), None).is_err());
-        assert!(listen_args(None, Some(f64::NAN), None).is_err());
-        assert!(listen_args(None, Some(11.0), None).is_err());
-        assert!(listen_args(None, None, Some(5)).is_err());
-        assert!(listen_args(Some("--max"), None, None).is_err());
+        assert_eq!(listen_args(None, None, None, false).unwrap(), Vec::<String>::new());
+        assert_eq!(listen_args(Some("en-US"), Some(0.0), Some(180), false).unwrap(), vec!["--locale", "en-US", "--pause", "0", "--max", "180"]);
+        assert_eq!(listen_args(None, Some(2.5), None, false).unwrap(), vec!["--pause", "2.5"]);
+        assert!(listen_args(None, Some(0.3), None, false).is_err());
+        assert!(listen_args(None, Some(f64::NAN), None, false).is_err());
+        assert!(listen_args(None, Some(11.0), None, false).is_err());
+        assert!(listen_args(None, None, Some(5), false).is_err());
+        assert!(listen_args(Some("--max"), None, None, false).is_err());
+    }
+
+    #[test]
+    fn conversation_mode_flag() {
+        assert_eq!(listen_args(None, None, None, true).unwrap(), vec!["--converse"]);
+        assert_eq!(listen_args(Some("en-GB"), None, None, true).unwrap(), vec!["--locale", "en-GB", "--converse"]);
     }
 
     #[test]

@@ -17,7 +17,22 @@
 // recognizer may still close a stretch of speech on its own after a long quiet spell; the
 // helper keeps what was said and starts a new stretch, so a pause never cuts the owner off.
 //
-// Usage: pulse-listen [--locale en-US] [--pause 1.6 | --pause 0] [--max 60]
+// --converse is conversation mode (the panel's always-listening, full-duplex mode). The mic
+// stays open with voice processing on (acoustic echo cancellation, so Roo's own voice is mostly
+// removed from what the recognizer hears), and the helper never finishes by itself:
+//
+//   {"type":"ready","aec":true|false}         listening; aec: whether echo cancellation is on
+//   {"type":"partial","text":"...","turn":n}  what's been heard in turn n so far
+//   {"type":"idle"}                           --idle seconds with nothing heard; the helper exits
+//
+// The panel decides when a turn ends (a pause, utils/listen.ts) and writes "next" on stdin: the
+// helper drops what it heard and starts turn n+1 on a fresh recognition task. The recognizer's
+// ~1 minute limit per task is handled here: a long-running task is swapped for a new one at the
+// next short pause (or at 58 s regardless), keeping the turn's words. --pause and --max don't
+// apply; it quits after --idle seconds (default 600) with nothing heard, a backstop for the
+// panel's own quiet timeout. No audio is ever written anywhere.
+//
+// Usage: pulse-listen [--locale en-US] [--pause 1.6 | --pause 0] [--max 60] [--converse [--idle 600]]
 //
 // The usage strings the permission prompts show are embedded in this binary's __info_plist
 // (see scripts/build-listen.sh) and repeated in Roo's own Info.plist.
@@ -51,6 +66,28 @@ let pauseArg = Double(option("--pause", "1.6")) ?? 1.6
 let manual = pauseArg <= 0                       // press-to-send: only "stop" finishes
 let pauseSecs = max(0.6, pauseArg)
 let maxSecs = min(600.0, max(5.0, Double(option("--max", "60")) ?? 60))
+let converse = CommandLine.arguments.contains("--converse")
+let idleSecs = min(3600.0, max(30.0, Double(option("--idle", "600")) ?? 600))
+let taskSoftLimit = 50.0 // seconds: swap the recognition task at the next pause after this
+let taskHardLimit = 58.0 // ...or now, before the recognizer's own ~1 minute cut-off
+
+// The voice-processed input can come with several channels; the recognizer wants one.
+func mono(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer {
+    let fmt = buffer.format
+    guard fmt.channelCount > 1, let src = buffer.floatChannelData,
+          let monoFmt = AVAudioFormat(standardFormatWithSampleRate: fmt.sampleRate, channels: 1),
+          let out = AVAudioPCMBuffer(pcmFormat: monoFmt, frameCapacity: buffer.frameLength),
+          let dst = out.floatChannelData else { return buffer }
+    out.frameLength = buffer.frameLength
+    let n = Int(buffer.frameLength)
+    if fmt.isInterleaved {
+        let ch = Int(fmt.channelCount)
+        for i in 0..<n { dst[0][i] = src[0][i * ch] }
+    } else {
+        dst[0].update(from: src[0], count: n)
+    }
+    return out
+}
 
 final class Listener {
     let engine = AVAudioEngine()
@@ -65,6 +102,10 @@ final class Listener {
     var finishing = false
     var lastLevel = Date.distantPast
     var restarts = 0
+    var turn = 0                      // converse: the turn being heard
+    var stretchStarted = Date()       // converse: when the current recognition task began
+    var lastHeard = Date()            // converse: last time any words came in
+    var recentRestarts: [Date] = []   // converse: tasks the recognizer closed on its own
 
     func start() {
         guard let rec = SFSpeechRecognizer(locale: Locale(identifier: localeID)) ?? SFSpeechRecognizer() else {
@@ -77,26 +118,75 @@ final class Listener {
         recognizer = rec
 
         let input = engine.inputNode
+        // Conversation mode: Apple's voice processing (echo cancellation, as in FaceTime) so the
+        // mic can stay open while Roo talks. Ducking of other audio is kept to the minimum, or
+        // Roo's own voice would drop to a whisper. Without it, the panel's text gate still applies.
+        var aec = false
+        if converse {
+            do {
+                try input.setVoiceProcessingEnabled(true)
+                aec = input.isVoiceProcessingEnabled
+                if #available(macOS 14.0, *) {
+                    input.voiceProcessingOtherAudioDuckingConfiguration =
+                        AVAudioVoiceProcessingOtherAudioDuckingConfiguration(enableAdvancedDucking: false, duckingLevel: .min)
+                }
+            } catch {
+                aec = false
+            }
+            _ = engine.mainMixerNode // voice processing runs input and output as one unit
+        }
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0 else { fail("No microphone found.") }
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             guard let self = self else { return }
-            self.currentRequest().append(buffer)
-            self.level(buffer)
+            let b = mono(buffer)
+            self.currentRequest().append(b)
+            self.level(b)
         }
         engine.prepare()
         do { try engine.start() } catch { fail("Couldn't start the microphone: \(error.localizedDescription)") }
 
         beginStretch()
-        emit(["type": "ready"])
+        emit(converse ? ["type": "ready", "aec": aec] : ["type": "ready"])
 
         Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
             guard let self = self, !self.finishing else { return }
-            let quiet = Date().timeIntervalSince(self.lastChange)
-            if (!manual && !self.text.isEmpty && quiet >= pauseSecs) || Date().timeIntervalSince(self.started) >= maxSecs {
+            let now = Date()
+            if converse {
+                let age = now.timeIntervalSince(self.stretchStarted)
+                let quiet = now.timeIntervalSince(self.lastChange)
+                if age >= taskHardLimit || (age >= taskSoftLimit && quiet >= 0.6) { self.renewTask() }
+                if now.timeIntervalSince(self.lastHeard) >= idleSecs {
+                    emit(["type": "idle"])
+                    exit(0)
+                }
+                return
+            }
+            let quiet = now.timeIntervalSince(self.lastChange)
+            if (!manual && !self.text.isEmpty && quiet >= pauseSecs) || now.timeIntervalSince(self.started) >= maxSecs {
                 self.finish()
             }
         }
+    }
+
+    // Converse: a fresh recognition task, keeping the turn's words (the ~1 minute limit).
+    func renewTask() {
+        let old = task
+        transcript.commit()
+        beginStretch()
+        old?.cancel()
+    }
+
+    // Converse: the panel took the turn. Forget it and listen for the next one.
+    func nextTurn() {
+        guard converse, !finishing else { return }
+        turn += 1
+        transcript = Transcript()
+        text = ""
+        lastChange = Date()
+        let old = task
+        beginStretch()
+        old?.cancel()
     }
 
     func currentRequest() -> SFSpeechAudioBufferRecognitionRequest {
@@ -112,6 +202,7 @@ final class Listener {
         req.shouldReportPartialResults = true
         if #available(macOS 13, *) { req.addsPunctuation = true }
         lock.lock(); request = req; lock.unlock()
+        stretchStarted = Date()
         task = rec.recognitionTask(with: req) { [weak self] result, error in
             guard let self = self else { return }
             DispatchQueue.main.async {
@@ -122,13 +213,15 @@ final class Listener {
                     if t != self.text {
                         self.text = t
                         self.lastChange = Date()
-                        emit(["type": "partial", "text": t])
+                        self.lastHeard = self.lastChange
+                        if converse { emit(["type": "partial", "text": t, "turn": self.turn]) }
+                        else { emit(["type": "partial", "text": t]) }
                     }
                     if r.isFinal { self.stretchEnded() }
                 } else if error != nil {
                     // After endAudio an error with no result means nothing more was heard.
                     if self.finishing { self.done() }
-                    else if manual { self.stretchEnded() }
+                    else if manual || converse { self.stretchEnded() }
                     else { fail(error!.localizedDescription) }
                 }
             }
@@ -136,6 +229,16 @@ final class Listener {
     }
 
     func stretchEnded() {
+        if converse && !finishing {
+            // The recognizer closes tasks on its own (silence, its time limit). Start another,
+            // unless it keeps failing at once (no speech service): then say so and quit.
+            let now = Date()
+            recentRestarts = recentRestarts.filter { now.timeIntervalSince($0) < 10 } + [now]
+            if recentRestarts.count > 20 { fail("Speech recognition keeps stopping. Try again in a moment.") }
+            transcript.commit()
+            beginStretch()
+            return
+        }
         if finishing || !manual { done(); return }
         restarts += 1
         guard restarts <= 200 else { finish(); return }
@@ -179,6 +282,7 @@ Thread.detachNewThread {
         let cmd = line.trimmingCharacters(in: .whitespaces)
         if cmd == "cancel" { exit(0) }
         if cmd == "stop" { DispatchQueue.main.async { listener.finish() } }
+        if cmd == "next" { DispatchQueue.main.async { listener.nextTurn() } }
     }
     DispatchQueue.main.async { listener.finish() }
 }

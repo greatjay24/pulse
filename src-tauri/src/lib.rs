@@ -3889,6 +3889,8 @@ pub fn run() {
             jarvis::start_listening,
             jarvis::stop_listening,
             jarvis::cancel_listening,
+            jarvis::listen_next,
+            jarvis::voice_speaking,
             jarvis::open_listen_panel,
             jarvis::hide_listen_panel,
             jarvis::open_run_in_main,
