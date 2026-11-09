@@ -41,8 +41,9 @@ const HANDOFF: &str = "HANDOFF";
 const MESSAGE_MAX: usize = 2000; // longer than this is never a quick question
 const SNAPSHOT_MAX: usize = 9000;
 const LINE_MAX: usize = 180;
-const HISTORY_TURNS: usize = 3;
-const HISTORY_FRESH: Duration = Duration::from_secs(15 * 60);
+const HISTORY_TURNS: usize = 5;
+const HISTORY_FRESH: Duration = Duration::from_secs(30 * 60);
+const CARRY_MAX: usize = 6000; // context carried into full Roo; ask.py takes 8000 in all
 const WATCH_EVERY: Duration = Duration::from_millis(120);
 const WATCH_MAX: Duration = Duration::from_secs(3 * 3600);
 // The variables that would bill an API key or route to another provider (same list as ask.py).
@@ -60,7 +61,14 @@ const BILLING_ENV: &[&str] = &[
 #[derive(Default)]
 pub(crate) struct Replies {
     turns: Mutex<HashMap<String, Turn>>,
-    history: Mutex<Vec<(Instant, String, String)>>, // recent quick exchanges: (when, asked, answered)
+    history: Mutex<Vec<Exchange>>, // the panel's recent exchanges, both lanes
+}
+
+struct Exchange {
+    at: Instant,
+    asked: String,
+    answered: String,
+    full: bool, // answered by full Roo, whose own session already holds it
 }
 
 struct Turn {
@@ -564,13 +572,45 @@ fn write_transcript(asked: &str, answer: &str, secs: f64) -> Option<String> {
 
 fn recent_history(state: &Replies) -> Vec<(String, String)> {
     let mut h = state.history.lock().unwrap();
-    h.retain(|(at, _, _)| at.elapsed() < HISTORY_FRESH);
-    h.iter().rev().take(HISTORY_TURNS).rev().map(|(_, q, a)| (q.clone(), a.clone())).collect()
+    h.retain(|e| e.at.elapsed() < HISTORY_FRESH);
+    h.iter().rev().take(HISTORY_TURNS).rev().map(|e| (e.asked.clone(), e.answered.clone())).collect()
 }
 
-fn remember(state: &Replies, asked: &str, answer: &str) {
+// Quick-lane exchanges full Roo hasn't seen: the fresh ones since its last answer.
+fn unseen_by_full(state: &Replies) -> Vec<(String, String)> {
     let mut h = state.history.lock().unwrap();
-    h.push((Instant::now(), asked.to_string(), answer.to_string()));
+    h.retain(|e| e.at.elapsed() < HISTORY_FRESH);
+    let since = h.iter().rposition(|e| e.full).map(|i| i + 1).unwrap_or(0);
+    h[since..].iter().map(|e| (e.asked.clone(), e.answered.clone())).collect()
+}
+
+// The message full Roo gets: what was just said in the quick lane, then the question, so a
+// follow-up that moves lanes keeps its thread.
+pub(crate) fn with_carried(message: &str, carried: &[(String, String)]) -> String {
+    if carried.is_empty() {
+        return message.to_string();
+    }
+    let mut ctx = String::from("(Earlier in this conversation, answered by Roo's quick lane:\n");
+    for (q, a) in carried {
+        ctx.push_str(&format!("Jay: {}\nRoo: {}\n", q.trim(), a.trim()));
+    }
+    ctx.push_str(")\n\n");
+    if ctx.chars().count() > CARRY_MAX {
+        // Keep the newest part: it's what the follow-up refers to.
+        let skip = ctx.chars().count() - CARRY_MAX;
+        ctx = format!("(…{}", ctx.chars().skip(skip + 2).collect::<String>());
+    }
+    format!("{}{}", ctx, message)
+}
+
+#[tauri::command]
+pub(crate) fn full_lane_message(app: AppHandle, message: String) -> String {
+    with_carried(&message, &unseen_by_full(&app.state::<Replies>()))
+}
+
+fn remember(state: &Replies, asked: &str, answer: &str, full: bool) {
+    let mut h = state.history.lock().unwrap();
+    h.push(Exchange { at: Instant::now(), asked: asked.to_string(), answered: answer.to_string(), full });
     let n = h.len();
     if n > HISTORY_TURNS * 2 {
         h.drain(..n - HISTORY_TURNS * 2);
@@ -721,7 +761,7 @@ pub(crate) async fn ask_quick(app: AppHandle, id: String, message: String) -> Re
             if let Some(s) = sentences.flush() {
                 emit(&app2, event(id, "fast", "sentence", Some(s)));
             }
-            remember(&app2.state::<Replies>(), &message, &answer);
+            remember(&app2.state::<Replies>(), &message, &answer, false);
             let run_id = write_transcript(&message, &answer, started.elapsed().as_secs_f64());
             emit(&app2, ReplyEvent { ok: Some(true), run_id, ..event(id, "fast", "done", Some(answer)) });
         }
@@ -753,7 +793,10 @@ pub(crate) fn transcript_events(chunk: &str) -> (Vec<String>, Option<(bool, Stri
     (texts, result)
 }
 
-fn emit_done_full(app: &AppHandle, id: &str, run_id: &str, ok: bool, text: String) {
+fn emit_done_full(app: &AppHandle, id: &str, run_id: &str, asked: Option<&str>, ok: bool, text: String) {
+    if let (Some(q), true) = (asked, ok && !text.trim().is_empty()) {
+        remember(&app.state::<Replies>(), q, text.trim(), true);
+    }
     let mut s = Sentences::default();
     for sentence in s.push(&text).into_iter().chain(s.flush()) {
         emit(app, event(id, "full", "sentence", Some(sentence)));
@@ -764,7 +807,7 @@ fn emit_done_full(app: &AppHandle, id: &str, run_id: &str, ok: bool, text: Strin
 // Follows a run that ask_lead started and pushes its reply on `pulse://roo-reply`. It checks the
 // two files every 120 ms (a stat each; a read only when they grew).
 #[tauri::command]
-pub(crate) fn watch_reply(app: AppHandle, id: String, run_id: String) -> Result<(), String> {
+pub(crate) fn watch_reply(app: AppHandle, id: String, run_id: String, message: Option<String>) -> Result<(), String> {
     if !is_turn_id(&id) || !is_run_id(&run_id) {
         return Err("invalid id".to_string());
     }
@@ -792,7 +835,7 @@ pub(crate) fn watch_reply(app: AppHandle, id: String, run_id: String) -> Result<
                             emit(&app, event(&id, "full", "delta", Some(t)));
                         }
                         if let Some((ok, text)) = result {
-                            emit_done_full(&app, &id, &run_id, ok, text);
+                            emit_done_full(&app, &id, &run_id, message.as_deref(), ok, text);
                             break;
                         }
                     }
@@ -808,7 +851,7 @@ pub(crate) fn watch_reply(app: AppHandle, id: String, run_id: String) -> Result<
                 if matches!(str_of(&v, "state"), "finished" | "failed") {
                     let t = *ended_at.get_or_insert_with(Instant::now);
                     if t.elapsed() > Duration::from_secs(2) {
-                        emit_done_full(&app, &id, &run_id, str_of(&v, "state") == "finished", str_of(&v, "result").to_string());
+                        emit_done_full(&app, &id, &run_id, message.as_deref(), str_of(&v, "state") == "finished", str_of(&v, "result").to_string());
                         break;
                     }
                 }
@@ -837,6 +880,35 @@ pub(crate) fn close_all(state: &Replies) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ex(asked: &str, full: bool) -> Exchange {
+        Exchange { at: Instant::now(), asked: asked.into(), answered: format!("re {}", asked), full }
+    }
+
+    #[test]
+    fn full_roo_gets_only_quick_turns_it_missed() {
+        let r = Replies::default();
+        assert!(unseen_by_full(&r).is_empty());
+        r.history.lock().unwrap().extend([ex("a", false), ex("b", true), ex("c", false), ex("d", false)]);
+        let got: Vec<String> = unseen_by_full(&r).into_iter().map(|(q, _)| q).collect();
+        assert_eq!(got, vec!["c", "d"]);
+        // Everything is in the quick lane's own history, both lanes.
+        assert_eq!(recent_history(&r).len(), 4);
+        r.history.lock().unwrap().push(ex("e", true));
+        assert!(unseen_by_full(&r).is_empty());
+    }
+
+    #[test]
+    fn carried_context_wraps_and_stays_bounded() {
+        assert_eq!(with_carried("hi", &[]), "hi");
+        let m = with_carried("and the second one?", &[("who are the leads?".into(), "Willis and Aero.".into())]);
+        assert!(m.starts_with("(Earlier in this conversation"));
+        assert!(m.contains("Jay: who are the leads?\nRoo: Willis and Aero."));
+        assert!(m.ends_with("\n\nand the second one?"));
+        let long = with_carried("q", &[("x".into(), "y".repeat(20_000))]);
+        assert!(long.chars().count() <= CARRY_MAX + 1);
+        assert!(long.starts_with("(…") && long.ends_with(")\n\nq"));
+    }
 
     #[test]
     fn work_goes_straight_to_full_roo() {
