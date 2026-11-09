@@ -67,6 +67,8 @@ function clickMeans(m: OutboxMessage): string {
       return 'check the charge in Stripe and create the refund';
     case 'stripe_subscription':
       return m.action === 'update' ? 'check the prices and change the subscription in Stripe' : 'check the prices and start the subscription in Stripe';
+    case 'stripe_charge':
+      return `charge ${formatMinor(m.amount, m.currency)} to ${m.card ?? 'the saved card'} now, without the customer present`;
     default:
       return 'approve it and copy it, ready for you to paste where it goes';
   }
@@ -134,6 +136,10 @@ function Preview({ m }: { m: OutboxMessage }) {
   if (isMoneyKind(kind)) {
     const rows: [string, ReactNode][] = [];
     if (m.customer) rows.push(['Customer', m.customer]);
+    if (kind === 'stripe_charge') {
+      rows.push(['Card', m.card ?? 'card on file'], ['Receipt says', m.description ?? '']);
+      if (m.statement_descriptor_suffix) rows.push(['Statement', `…${m.statement_descriptor_suffix}`]);
+    }
     if (kind === 'stripe_send_invoice') rows.push(['Due', m.due_date ?? 'per invoice terms']);
     if (kind === 'stripe_refund') rows.push(['Of', <code key="c" style={{ fontFamily: tokens.fonts.mono, fontSize: tokens.type.micro }}>{m.stripe_id}</code>], ['Reason', m.reason?.replace(/_/g, ' ') ?? 'not given']);
     if (kind === 'stripe_subscription') {
@@ -310,6 +316,7 @@ function OutboxItem({ entry, entity, onDone }: { entry: OutboxEntry; entity?: Po
   const [error, setError] = useState<string | null>(null);
   const [skipping, setSkipping] = useState(false);
   const [skipWhy, setSkipWhy] = useState('');
+  const [confirming, setConfirming] = useState(false);
   const now = Date.now();
 
   const run = async (what: 'go' | 'save' | 'skip', fn: () => Promise<unknown>) => {
@@ -328,6 +335,7 @@ function OutboxItem({ entry, entity, onDone }: { entry: OutboxEntry; entity?: Po
 
   const go = () =>
     run('go', async () => {
+      setConfirming(false);
       const res = await sendOutbox(m.id, entry.content, clickMeans(m));
       if (res.warning) showToast(res.warning);
       if (!res.ok) return;
@@ -337,6 +345,9 @@ function OutboxItem({ entry, entity, onDone }: { entry: OutboxEntry; entity?: Po
       else if (PUBLISH_KINDS.includes(kind)) await copy(pasteText(m), 'Approved and copied. Paste it where it goes, then mark it published.');
       else showToast(res.next_step ?? `${kindLabel(m)}: done in Stripe`);
     });
+
+  // Money moves on this click: confirm it in a second step first.
+  const approve = () => (isMoneyKind(kind) ? setConfirming(true) : go());
 
   const busyLabel = { Send: 'Sending…', Publish: 'Approving…', Approve: 'Approving…', Upload: 'Starting upload…' }[label];
 
@@ -367,7 +378,7 @@ function OutboxItem({ entry, entity, onDone }: { entry: OutboxEntry; entity?: Po
 
       {!editing && (
         <div style={{ display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
-          <button className="btn btn-primary" disabled={!!busy} onClick={go} title={`Click to ${clickMeans(m)}`} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <button className="btn btn-primary" disabled={!!busy} onClick={approve} title={`Click to ${clickMeans(m)}`} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Icon name={isEmailKind(kind) ? 'mail' : isMoneyKind(kind) ? 'credit-card' : kind === 'youtube_upload' ? 'cloud' : 'check'} size={14} color="currentColor" /> {busy === 'go' ? busyLabel : label}
           </button>
           {EDITABLE[kind] && (
@@ -379,6 +390,8 @@ function OutboxItem({ entry, entity, onDone }: { entry: OutboxEntry; entity?: Po
           {isMoneyKind(kind) && <span style={{ fontSize: tokens.type.micro, color: c.textDim }}>To change it, ask the lead to edit it in Stripe and queue it again.</span>}
         </div>
       )}
+
+      {confirming && <ConfirmMoney m={m} busy={busy === 'go'} onCancel={() => setConfirming(false)} onConfirm={go} />}
 
       {!editing && skipping && (
         <div style={{ display: 'flex', gap: '6px', marginTop: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -397,6 +410,49 @@ function OutboxItem({ entry, entity, onDone }: { entry: OutboxEntry; entity?: Po
         </div>
       )}
     </Card>
+  );
+}
+
+function ConfirmMoney({ m, busy, onCancel, onConfirm }: { m: OutboxMessage; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
+  const { tokens } = useTheme();
+  const c = tokens.colors;
+  const charge = kindOf(m) === 'stripe_charge';
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Confirm money action"
+      onClick={onCancel}
+      onKeyDown={(e) => e.key === 'Escape' && onCancel()}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '24px' }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ width: '100%', maxWidth: '480px', background: c.bgCard, border: `1px solid ${c.border}`, borderRadius: tokens.radius.lg, padding: '24px 26px', color: c.text }}
+      >
+        <div style={{ fontSize: tokens.type.micro, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.09em', color: c.warning, marginBottom: '10px' }}>
+          {kindLabel(m)} · {m.entity}
+        </div>
+        <div style={{ fontSize: '34px', fontWeight: 600, letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums', marginBottom: '6px' }}>
+          {formatMinor(m.amount, m.currency)}
+        </div>
+        {m.customer && <div style={{ fontSize: tokens.type.body, marginBottom: '4px' }}>{m.customer}</div>}
+        {charge && m.card && <div style={{ fontSize: tokens.type.small, color: c.textMuted, marginBottom: '4px' }}>{m.card}</div>}
+        <p style={{ fontSize: tokens.type.small, lineHeight: 1.55, color: c.textMuted, margin: '14px 0 20px' }}>
+          {charge
+            ? 'This charges their saved card right now, without them present. If the card declines or the bank asks them to authenticate, nothing is charged and it shows in Activity.'
+            : `Roo will ${clickMeans(m)}. Stripe is re-checked first; if anything changed, nothing happens.`}
+        </p>
+        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+          <button className="btn btn-secondary" onClick={onCancel} autoFocus>
+            Cancel
+          </button>
+          <button className="btn btn-primary" onClick={onConfirm} disabled={busy}>
+            {busy ? 'Approving…' : charge ? `Charge ${formatMinor(m.amount, m.currency)}` : 'Approve'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
