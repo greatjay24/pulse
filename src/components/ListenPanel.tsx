@@ -79,12 +79,13 @@ export function ListenPanel() {
   const toFullRoo = useCallback(async (id: string, message: string) => {
     turn.current = { id, message, lane: 'full' };
     try {
-      const r = await askLead(PULSE_TARGET, message);
+      const carried = await invoke<string>('full_lane_message', { message }).catch(() => message);
+      const r = await askLead(PULSE_TARGET, carried);
       if (turn.current?.id !== id) return;
       setRunId(r.run_id);
       setNote(r.queued ? 'Queued behind the reply Roo is writing…' : 'Roo is on it…');
       setPhase('waiting');
-      await invoke('watch_reply', { id, runId: r.run_id });
+      await invoke('watch_reply', { id, runId: r.run_id, message });
     } catch (e) {
       if (turn.current?.id === id) fail(e);
     }
@@ -109,7 +110,7 @@ export function ListenPanel() {
           setRunId(r.run_id);
           setNote('Roo is writing your brief…');
           setPhase('waiting');
-          await invoke('watch_reply', { id, runId: r.run_id });
+          await invoke('watch_reply', { id, runId: r.run_id, message });
           return;
         }
         turn.current = { id, message, lane: 'fast' };

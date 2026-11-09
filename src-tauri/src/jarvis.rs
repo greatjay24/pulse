@@ -374,6 +374,7 @@ fn open_panel(app: &AppHandle, from_hotkey: bool) {
             let _ = app.emit_to(LISTEN_WINDOW, "pulse://listen-hotkey", "pressed");
             return;
         }
+        place_on_active_screen(app, &w);
         let _ = w.show();
         let _ = w.set_focus();
         let _ = app.emit_to(LISTEN_WINDOW, "pulse://listen-open", ());
@@ -387,11 +388,32 @@ fn open_panel(app: &AppHandle, from_hotkey: bool) {
         .always_on_top(true)
         .skip_taskbar(true)
         .center()
+        .visible_on_all_workspaces(true)
         .focused(true)
         .build();
-    if let Err(e) = built {
-        eprintln!("listen panel: {}", e);
+    match built {
+        Ok(w) => place_on_active_screen(app, &w),
+        Err(e) => eprintln!("listen panel: {}", e),
     }
+}
+
+// The panel follows Jay: it joins every Space (so opening it never jumps back to the desktop it
+// was first made on) and centres on the screen the pointer is on, in its upper third.
+fn place_on_active_screen(app: &AppHandle, w: &tauri::WebviewWindow) {
+    let _ = w.set_visible_on_all_workspaces(true);
+    let Ok(cursor) = app.cursor_position() else { return };
+    let Ok(Some(m)) = app.monitor_from_point(cursor.x, cursor.y) else { return };
+    let Ok(size) = w.outer_size() else { return };
+    let (x, y) = panel_origin((m.position().x, m.position().y), (m.size().width, m.size().height), (size.width, size.height));
+    let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
+// Top-left corner for a panel of `panel` size on a monitor at `origin` with `screen` size
+// (all physical pixels): centred across, a third of the way down.
+pub(crate) fn panel_origin(origin: (i32, i32), screen: (u32, u32), panel: (u32, u32)) -> (i32, i32) {
+    let x = origin.0 + (screen.0 as i32 - panel.0 as i32) / 2;
+    let y = origin.1 + (screen.1 as i32 - panel.1 as i32) / 3;
+    (x, y)
 }
 
 #[tauri::command]
@@ -482,6 +504,15 @@ pub(crate) async fn pulse_brief(kind: String) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn panel_lands_on_the_given_screen() {
+        // Main 1512x982 retina at 2x = 3024x1964 physical; panel 1120x420.
+        assert_eq!(panel_origin((0, 0), (3024, 1964), (1120, 420)), (952, 514));
+        // A second screen to the left, and one above with negative coordinates.
+        assert_eq!(panel_origin((-1920, 0), (1920, 1080), (560, 210)), (-1240, 290));
+        assert_eq!(panel_origin((0, -1080), (1920, 1080), (560, 210)), (680, -790));
+    }
 
     #[test]
     fn say_args_validate_voice_and_rate() {

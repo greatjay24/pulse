@@ -3896,6 +3896,7 @@ pub fn run() {
             jarvis::pulse_brief,
             quick::ask_quick,
             quick::watch_reply,
+            quick::full_lane_message,
             quick::cancel_reply,
             usage::read_usage,
             usage::read_preferences,
