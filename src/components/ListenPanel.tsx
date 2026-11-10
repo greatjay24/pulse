@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { useTheme } from '../contexts/ThemeContext';
+import { Attachment, defaultQuestion, imageFile, isScreenPermissionError, wantsScreen } from '../utils/attach';
 import { PULSE_TARGET, askLead } from '../utils/command';
 import { Converse, ConverseAction, ListenSettings, finalText, helperArgs, listeningHint, loadListen, onHotkey, saveListen } from '../utils/listen';
 import { REPLY_EVENT, ReplyEvent, newTurnId } from '../utils/reply';
@@ -24,6 +26,11 @@ import { StrokeIcon } from './Icons';
 // send() as above; talking over Roo stops it at once and becomes the next turn. The turn-taking
 // is utils/listen.ts's Converse. It ends with the toggle, Esc, closing the panel, or five quiet
 // minutes (which closes the panel).
+//
+// Pictures: one image can ride with a question: paste it (⌘V), drop a file on the panel, or
+// press "Screen" to capture the display the panel is on (the panel steps aside for it). Saying
+// "look at my screen" / "what's on my screen" captures it on send. The image is saved in Roo's
+// attachments folder (Rust attach.rs) and both lanes get its path to Read.
 
 type Phase = 'starting' | 'listening' | 'typing' | 'sending' | 'waiting' | 'reply' | 'error';
 
@@ -62,8 +69,15 @@ export function ListenPanel() {
   textRef.current = text;
   const settingsRef = useRef(settings);
   const openedAt = useRef(0);
-  const turn = useRef<{ id: string; message: string; lane: 'fast' | 'full' } | null>(null);
+  const turn = useRef<{ id: string; message: string; lane: 'fast' | 'full'; image: string | null } | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // The picture going with the next question
+  const [image, setImage] = useState<Attachment | null>(null);
+  const imageRef = useRef<Attachment | null>(null);
+  imageRef.current = image;
+  const [attaching, setAttaching] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [screenBlocked, setScreenBlocked] = useState(false); // Screen Recording is off for Roo
   // Conversation mode
   const [converse, setConverse] = useState(false);
   const [heard, setHeard] = useState(''); // the owner's words this turn, Roo's echo taken out
@@ -92,11 +106,34 @@ export function ListenPanel() {
     setPhase('error');
   };
 
-  // Full Roo: start the run, then follow it on pulse://roo-reply.
-  const toFullRoo = useCallback(async (id: string, message: string) => {
-    turn.current = { id, message, lane: 'full' };
+  // Paste, drop or the Screen button: the image is saved by Rust, the chip shows its thumbnail.
+  const attach = useCallback(async (get: () => Promise<Attachment>, screen = false) => {
+    setAttaching(true);
     try {
-      const carried = await invoke<string>('full_lane_message', { message }).catch(() => message);
+      const a = { ...(await get()), screen };
+      setImage(a);
+      setScreenBlocked(false);
+      return a;
+    } catch (e) {
+      if (isScreenPermissionError(e)) {
+        setScreenBlocked(true);
+        setNote('Screen Recording is off for Roo.');
+      } else setNote(String(e instanceof Error ? e.message : e));
+      // The words so far stay in the box; the mic stops so the note can show.
+      if (phaseRef.current === 'listening' || phaseRef.current === 'starting') invoke('cancel_listening').catch(() => {});
+      setPhase('error');
+      return null;
+    } finally {
+      setAttaching(false);
+    }
+  }, []);
+  const captureScreen = useCallback(() => attach(() => invoke<Attachment>('capture_screen'), true), [attach]);
+
+  // Full Roo: start the run, then follow it on pulse://roo-reply.
+  const toFullRoo = useCallback(async (id: string, message: string, image: string | null) => {
+    turn.current = { id, message, lane: 'full', image };
+    try {
+      const carried = await invoke<string>('full_lane_message', { message, image });
       const r = await askLead(PULSE_TARGET, carried);
       if (turn.current?.id !== id) return;
       setRunId(r.run_id);
@@ -110,19 +147,29 @@ export function ListenPanel() {
 
   const send = useCallback(
     async (said: string) => {
-      const message = said.trim();
+      let message = said.trim();
+      let img = imageRef.current;
+      if (!img && wantsScreen(message)) {
+        // "Look at my screen": capture it first, then ask.
+        setPhase('sending');
+        img = await captureScreen();
+        if (!img) return;
+      }
+      if (!message && img) message = defaultQuestion(img);
       if (!message) {
         setNote("Didn't catch anything.");
         setPhase('error');
         return;
       }
+      setImage(null); // it goes with this question
       setPhase('sending');
       setReply('');
-      const kind = briefKindOf(message);
+      const image = img?.path ?? null;
+      const kind = image ? null : briefKindOf(message);
       const id = newTurnId(!!kind);
       try {
         if (kind) {
-          turn.current = { id, message, lane: 'full' };
+          turn.current = { id, message, lane: 'full', image };
           const r = await briefMe(kind);
           setRunId(r.run_id);
           setNote('Roo is writing your brief…');
@@ -130,17 +177,17 @@ export function ListenPanel() {
           await invoke('watch_reply', { id, runId: r.run_id, message });
           return;
         }
-        turn.current = { id, message, lane: 'fast' };
-        const lane = await invoke<'fast' | 'full'>('ask_quick', { id, message });
+        turn.current = { id, message, lane: 'fast', image };
+        const lane = await invoke<'fast' | 'full'>('ask_quick', { id, message, image });
         if (turn.current?.id !== id) return;
-        if (lane === 'full') return toFullRoo(id, message);
+        if (lane === 'full') return toFullRoo(id, message, image);
         setNote('Roo…');
         setPhase('waiting');
       } catch (e) {
         if (turn.current?.id === id) fail(e);
       }
     },
-    [toFullRoo],
+    [toFullRoo, captureScreen],
   );
 
   const start = useCallback(() => {
@@ -157,6 +204,8 @@ export function ListenPanel() {
     setRunId(null);
     setHeard('');
     setAec(null);
+    setImage(null);
+    setScreenBlocked(false);
     setPhase('starting');
     if (s.converse) {
       conv.current = new Converse(s.endpointSecs, Date.now());
@@ -281,7 +330,7 @@ export function ListenPanel() {
           setReply('');
           setNote('Roo is on it…');
           setPhase('waiting');
-          toFullRoo(t.id, t.message);
+          toFullRoo(t.id, t.message, t.image);
         }
       } else if (ev.type === 'step' && ev.text) {
         setNote(`Roo: ${ev.text}`);
@@ -332,6 +381,43 @@ export function ListenPanel() {
     const t = setTimeout(hide, HIDE_AFTER_REPLY_MS);
     return () => clearTimeout(t);
   }, [phase, hover, reply, converse]);
+
+  // ⌘V with an image on the clipboard attaches it (text pastes as usual).
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const file = e.clipboardData ? imageFile(e.clipboardData.items) : null;
+      if (!file || conv.current) return;
+      e.preventDefault();
+      attach(
+        () =>
+          new Promise<string>((resolve, reject) => {
+            const r = new FileReader();
+            r.onload = () => resolve(String(r.result));
+            r.onerror = () => reject(new Error("That image couldn't be read."));
+            r.readAsDataURL(file);
+          }).then((data) => invoke<Attachment>('save_attachment', { data })),
+      );
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, [attach]);
+
+  // A file dropped on the panel (Tauri hands over its path; Rust copies it in).
+  useEffect(() => {
+    const off = getCurrentWebview().onDragDropEvent((e) => {
+      const p = e.payload;
+      if (p.type === 'enter' || p.type === 'over') setDragging(true);
+      else if (p.type === 'leave') setDragging(false);
+      else if (p.type === 'drop') {
+        setDragging(false);
+        const path = p.paths[0];
+        if (path && !conv.current) attach(() => invoke<Attachment>('attach_file', { path }));
+      }
+    });
+    return () => {
+      off.then((u) => u());
+    };
+  }, [attach]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -421,7 +507,7 @@ export function ListenPanel() {
     <div
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      style={{ height: '100vh', boxSizing: 'border-box', background: c.bgElevated, color: c.text, fontFamily: tokens.fonts.sans, border: `1px solid ${c.borderHover}`, padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '10px' }}
+      style={{ height: '100vh', boxSizing: 'border-box', background: c.bgElevated, color: c.text, fontFamily: tokens.fonts.sans, border: dragging ? `2px dashed ${c.accent}` : `1px solid ${c.borderHover}`, padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '10px' }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
         <span
@@ -431,6 +517,16 @@ export function ListenPanel() {
           <StrokeIcon name="mic" size={15} color={listening ? c.accentInk : c.textMuted} />
         </span>
         <span style={{ fontSize: tokens.type.small, color: phase === 'error' ? c.danger : c.textMuted, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label[phase]}</span>
+        {phase !== 'reply' && (
+          <button
+            onClick={() => captureScreen()}
+            disabled={attaching || phase === 'sending' || phase === 'waiting'}
+            title="Attach a capture of this screen (or paste / drop an image)"
+            style={{ background: 'none', border: `1px solid ${c.border}`, borderRadius: 6, padding: '2px 8px', color: c.textMuted, cursor: 'pointer', fontSize: tokens.type.micro, fontFamily: 'inherit', whiteSpace: 'nowrap' }}
+          >
+            📷 Screen
+          </button>
+        )}
         <button onClick={hide} aria-label="Close" style={{ background: 'none', border: 'none', color: c.textDim, cursor: 'pointer', fontSize: tokens.type.small, fontFamily: 'inherit' }}>
           Esc
         </button>
@@ -456,6 +552,29 @@ export function ListenPanel() {
           }}
           style={{ flex: 1, resize: 'none', background: 'transparent', border: 'none', outline: 'none', padding: 0, color: c.text, fontFamily: 'inherit', fontSize: '17px', lineHeight: 1.45 }}
         />
+      )}
+      {screenBlocked && (
+        <div style={{ fontSize: tokens.type.micro, color: c.textMuted, lineHeight: 1.4 }}>
+          Roo needs Screen Recording to see your screen: System Settings &gt; Privacy &amp; Security &gt; Screen Recording, turn on Roo, then quit and reopen Roo.{' '}
+          <button onClick={() => invoke('open_screen_settings').catch(() => {})} style={{ ...link, fontWeight: 600 }}>
+            Open Screen Recording settings
+          </button>
+        </div>
+      )}
+      {phase !== 'reply' && (image || attaching) && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: tokens.type.micro, color: c.textMuted }}>
+          {image ? (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: c.bgCard, border: `1px solid ${c.border}`, borderRadius: 6, padding: '2px 4px 2px 2px' }}>
+              {image.thumb ? <img src={image.thumb} alt="" style={{ height: 24, maxWidth: 48, objectFit: 'cover', borderRadius: 4, display: 'block' }} /> : null}
+              <span>{image.screen ? 'Screen' : 'Image'} attached</span>
+              <button onClick={() => setImage(null)} aria-label="Remove the image" style={{ background: 'none', border: 'none', padding: '0 4px', color: c.textDim, cursor: 'pointer', fontSize: '13px', fontFamily: 'inherit', lineHeight: 1 }}>
+                ×
+              </button>
+            </span>
+          ) : (
+            <span>Attaching…</span>
+          )}
+        </div>
       )}
       <div style={{ display: 'flex', gap: '14px', fontSize: tokens.type.micro, color: c.textDim }}>
         {phase === 'reply' ? (
