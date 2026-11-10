@@ -44,6 +44,8 @@
     ],
     "macOS": {
       "minimumSystemVersion": "10.15",
+      "signingIdentity": "Apple Development: Jonathan Haynes (BJ7A35Q2S5)",
+      "entitlements": "Entitlements.plist",
       "files": {
         "MacOS/pulse-listen": "binaries/pulse-listen"
       }
