@@ -1,3 +1,4 @@
+mod attach;
 mod command;
 mod jarvis;
 mod pty;
@@ -3900,6 +3901,10 @@ pub fn run() {
             quick::watch_reply,
             quick::full_lane_message,
             quick::cancel_reply,
+            attach::save_attachment,
+            attach::attach_file,
+            attach::capture_screen,
+            attach::open_screen_settings,
             usage::read_usage,
             usage::read_preferences,
             usage::set_preference_disabled

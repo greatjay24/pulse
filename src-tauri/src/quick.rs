@@ -37,6 +37,7 @@ use tauri::{AppHandle, Emitter, Manager};
 pub(crate) const REPLY_EVENT: &str = "pulse://roo-reply";
 const QUICK_MODEL: &str = "haiku";
 const QUICK_TIMEOUT: Duration = Duration::from_secs(30);
+const QUICK_TIMEOUT_SEEING: Duration = Duration::from_secs(45); // an image costs a Read and more tokens
 const HANDOFF: &str = "HANDOFF";
 const MESSAGE_MAX: usize = 2000; // longer than this is never a quick question
 const SNAPSHOT_MAX: usize = 9000;
@@ -127,9 +128,12 @@ pub(crate) fn words(message: &str) -> Vec<String> {
         .collect()
 }
 
+// With an image attached, looking at it is what the quick lane is for.
+const SEEING_VERBS: &[&str] = &["look", "read", "check"];
+
 // True when the message should go straight to full Roo. Anything else tries the quick lane,
-// whose model hands off on its own when it can't answer from the snapshot.
-pub(crate) fn needs_full(message: &str) -> bool {
+// whose model hands off on its own when it can't answer from the snapshot (or the image).
+pub(crate) fn needs_full(message: &str, seeing: bool) -> bool {
     let m = message.trim();
     if m.is_empty() || m.chars().count() > 280 || m.contains('\n') {
         return true;
@@ -143,6 +147,7 @@ pub(crate) fn needs_full(message: &str) -> bool {
     let w = words(m);
     let first = w.iter().find(|x| !POLITE.contains(&x.as_str()));
     match first {
+        Some(v) if seeing && SEEING_VERBS.contains(&v.as_str()) => false,
         Some(v) if WORK_VERBS.contains(&v.as_str()) => true,
         // "go" alone is in POLITE ("go ahead and …"); "go" with nothing after is still work
         None => w.iter().any(|x| x == "go"),
@@ -359,23 +364,32 @@ pub(crate) fn build_snapshot(portfolio: Option<&Path>, tracker: Option<&Path>, n
     s
 }
 
-pub(crate) fn system_prompt(snapshot: &str, history: &[(String, String)], now: chrono::DateTime<chrono::Local>) -> String {
+pub(crate) fn system_prompt(snapshot: &str, history: &[(String, String)], now: chrono::DateTime<chrono::Local>, seeing: bool) -> String {
+    let tools = if seeing {
+        "The owner attached an image (often a capture of their screen); its path is at the top of their message. \
+         Your one tool is Read, and only for that image: read it first, then answer from what you see in it. \
+         You cannot read other files, browse, check email, send, draft, schedule or change anything. \
+         Besides the image, all you know is the snapshot below (read from the owner's files a moment ago), the recent exchange, and general knowledge."
+    } else {
+        "You have NO tools. You cannot read files, browse, check email, send, draft, schedule or change anything. \
+         All you know is the snapshot below (read from the owner's files a moment ago), the recent exchange, and general knowledge."
+    };
     let mut p = format!(
         "You are Roo, the owner's assistant, answering in Roo's quick lane (voice and the listening panel).\n\
          It is {}.\n\n\
-         You have NO tools. You cannot read files, browse, check email, send, draft, schedule or change anything. \
-         All you know is the snapshot below (read from the owner's files a moment ago), the recent exchange, and general knowledge.\n\n\
+         {}\n\n\
          Rules:\n\
          - Questions about the owner's list, tasks, what's next, the calendar, what's waiting, the Outbox, decisions, \
          or how a business or project is doing ARE answerable: the snapshot is current, so answer from it.\n\
          - Only if the request asks you to do something (draft, send, change, add, look something up, research) or needs facts \
-         that are not in the snapshot or the recent exchange, reply with exactly {} and nothing else. Full Roo, with tools, takes it from there.\n\
+         that are not in the snapshot, the image or the recent exchange, reply with exactly {} and nothing else. Full Roo, with tools, takes it from there.\n\
          - Otherwise answer directly, out loud: at most two short sentences. Lead with the answer. \
          For a list, name the top three at most and say how many more. More only if the owner asks for detail. \
          No headings, bullets, tables or markdown.\n\
          - Never say or imply you did, started, checked, drafted or scheduled anything, and never promise to.\n\
          - Small talk (hi, thanks) gets one short friendly line.\n",
         now.format("%A %B %-d, %Y, %-I:%M %p"),
+        tools,
         HANDOFF
     );
     if !history.is_empty() {
@@ -389,15 +403,27 @@ pub(crate) fn system_prompt(snapshot: &str, history: &[(String, String)], now: c
     p
 }
 
-pub(crate) fn quick_args(system: &str) -> Vec<String> {
-    [
-        "-p", "--model", QUICK_MODEL, "--tools", "", "--strict-mcp-config", "--setting-sources", "", "--disable-slash-commands",
-        "--no-session-persistence", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--system-prompt",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .chain(std::iter::once(system.to_string()))
-    .collect()
+// `read_dir`: the attachments folder when an image is attached. Then Read is the one tool, and it
+// is allowed in that folder only (a Read anywhere else is refused: nothing can approve it in -p).
+pub(crate) fn quick_args(system: &str, read_dir: Option<&Path>) -> Vec<String> {
+    let mut a: Vec<String> = ["-p", "--model", QUICK_MODEL].iter().map(|s| s.to_string()).collect();
+    match read_dir {
+        Some(d) => {
+            let d = d.to_string_lossy();
+            a.extend(["--tools".into(), "Read".into(), "--allowedTools".into(), format!("Read(/{}/**)", d), "--add-dir".into(), d.to_string()]);
+        }
+        None => a.extend(["--tools".into(), String::new()]),
+    }
+    a.extend(
+        [
+            "--strict-mcp-config", "--setting-sources", "", "--disable-slash-commands", "--no-session-persistence", "--output-format",
+            "stream-json", "--verbose", "--include-partial-messages", "--system-prompt",
+        ]
+        .iter()
+        .map(|s| s.to_string()),
+    );
+    a.push(system.to_string());
+    a
 }
 
 fn claude_bin() -> Result<PathBuf, String> {
@@ -603,9 +629,14 @@ pub(crate) fn with_carried(message: &str, carried: &[(String, String)]) -> Strin
     format!("{}{}", ctx, message)
 }
 
+// image: one of Roo's attachments (attach.rs); its path goes ahead of the question.
 #[tauri::command]
-pub(crate) fn full_lane_message(app: AppHandle, message: String) -> String {
-    with_carried(&message, &unseen_by_full(&app.state::<Replies>()))
+pub(crate) fn full_lane_message(app: AppHandle, message: String, image: Option<String>) -> Result<String, String> {
+    let message = match image.as_deref() {
+        Some(p) => super::attach::image_prompt(&super::attach::attached_image(&app, p)?.to_string_lossy(), &message),
+        None => message,
+    };
+    Ok(with_carried(&message, &unseen_by_full(&app.state::<Replies>())))
 }
 
 fn remember(state: &Replies, asked: &str, answer: &str, full: bool) {
@@ -645,14 +676,25 @@ fn finish_turn(app: &AppHandle, id: &str, cancel: &Arc<AtomicBool>) {
 
 // "fast": the quick lane took it and its events follow; "full": send it to Roo (ask_lead).
 #[tauri::command]
-pub(crate) async fn ask_quick(app: AppHandle, id: String, message: String) -> Result<&'static str, String> {
+pub(crate) async fn ask_quick(app: AppHandle, id: String, message: String, image: Option<String>) -> Result<&'static str, String> {
     if !is_turn_id(&id) {
         return Err("invalid id".to_string());
     }
     let message: String = message.chars().filter(|c| *c != '\0').collect::<String>().trim().to_string();
-    if message.chars().count() > MESSAGE_MAX || needs_full(&message) {
+    let image = match image.as_deref() {
+        Some(p) => Some(super::attach::attached_image(&app, p)?),
+        None => None,
+    };
+    let seeing = image.is_some();
+    if message.chars().count() > MESSAGE_MAX || needs_full(&message, seeing) {
         return Ok("full");
     }
+    let read_dir = image.as_deref().and_then(|p| p.parent()).map(Path::to_path_buf);
+    // What the model is asked (and what the thread and full Roo see of this turn).
+    let message = match image.as_deref() {
+        Some(p) => super::attach::image_prompt(&p.to_string_lossy(), &message),
+        None => message,
+    };
     let claude = match claude_bin() {
         Ok(c) => c,
         Err(_) => return Ok("full"),
@@ -666,14 +708,14 @@ pub(crate) async fn ask_quick(app: AppHandle, id: String, message: String) -> Re
     })
     .await
     .map_err(|e| e.to_string())?;
-    let system = system_prompt(&snapshot, &history, now);
+    let system = system_prompt(&snapshot, &history, now, seeing);
 
     // A neutral working directory: no project CLAUDE.md is read into the quick lane.
     let cwd = std::env::temp_dir().join("pulse-quick");
     std::fs::create_dir_all(&cwd).map_err(|e| e.to_string())?;
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
     let mut cmd = Command::new(&claude);
-    cmd.args(quick_args(&system)).current_dir(&cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    cmd.args(quick_args(&system, read_dir.as_deref())).current_dir(&cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
     for k in BILLING_ENV {
         cmd.env_remove(k);
     }
@@ -697,7 +739,7 @@ pub(crate) async fn ask_quick(app: AppHandle, id: String, message: String) -> Re
         // The timeout: kill claude so the read loop ends.
         let (killer_cancel, killer_child) = (cancel.clone(), child.clone());
         std::thread::spawn(move || {
-            let until = Instant::now() + QUICK_TIMEOUT;
+            let until = Instant::now() + if seeing { QUICK_TIMEOUT_SEEING } else { QUICK_TIMEOUT };
             while Instant::now() < until {
                 if killer_cancel.load(Ordering::SeqCst) {
                     return;
@@ -711,6 +753,7 @@ pub(crate) async fn ask_quick(app: AppHandle, id: String, message: String) -> Re
         let mut answer = String::new();
         let mut handoff = false;
         let mut done = false;
+        let mut said = false; // a message that ends before any text was a Read; the answer follows
         let pass = |text: String, answer: &mut String, sentences: &mut Sentences| {
             answer.push_str(&text);
             emit(&app2, event(id, "fast", "delta", Some(text.clone())));
@@ -724,6 +767,7 @@ pub(crate) async fn ask_quick(app: AppHandle, id: String, message: String) -> Re
             }
             let Ok(ev) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
             if let Some(t) = text_delta(&ev) {
+                said = true;
                 match gate.push(t) {
                     Gated::Hold => {}
                     Gated::Pass(t) => pass(t, &mut answer, &mut sentences),
@@ -732,7 +776,7 @@ pub(crate) async fn ask_quick(app: AppHandle, id: String, message: String) -> Re
                         break;
                     }
                 }
-            } else if is_message_stop(&ev) || ev.get("type").and_then(|t| t.as_str()) == Some("result") {
+            } else if (said && is_message_stop(&ev)) || ev.get("type").and_then(|t| t.as_str()) == Some("result") {
                 match gate.end() {
                     Gated::Handoff => handoff = true,
                     Gated::Pass(t) => pass(t, &mut answer, &mut sentences),
@@ -922,16 +966,27 @@ mod tests {
             "remind me to call mom at 5",
             "go",
         ] {
-            assert!(needs_full(m), "{}", m);
+            assert!(needs_full(m, false), "{}", m);
         }
-        assert!(needs_full(&"x".repeat(300)));
-        assert!(needs_full("two\nlines"));
+        assert!(needs_full(&"x".repeat(300), false));
+        assert!(needs_full("two\nlines", false));
+    }
+
+    #[test]
+    fn looking_at_an_image_stays_quick() {
+        for m in ["look at my screen", "Roo, read this error", "can you check what's on my screen"] {
+            assert!(needs_full(m, false), "{}", m);
+            assert!(!needs_full(m, true), "{}", m);
+        }
+        // Work is still work with a picture attached.
+        assert!(needs_full("draft a reply to this", true));
+        assert!(needs_full("fix the bug in this screenshot", true));
     }
 
     #[test]
     fn questions_try_the_quick_lane() {
         for m in ["hi", "Thanks!", "what's on my list today?", "What's next?", "Anything waiting on me?", "how's Acme doing", "when is my next meeting", "Good morning Roo"] {
-            assert!(!needs_full(m), "{}", m);
+            assert!(!needs_full(m, false), "{}", m);
         }
     }
 
@@ -976,14 +1031,31 @@ mod tests {
 
     #[test]
     fn quick_lane_has_no_tools_and_no_session() {
-        let a = quick_args("sys");
+        let a = quick_args("sys", None);
         let pos = a.iter().position(|x| x == "--tools").unwrap();
         assert_eq!(a[pos + 1], "");
         for f in ["--strict-mcp-config", "--no-session-persistence", "--disable-slash-commands", "--include-partial-messages"] {
             assert!(a.iter().any(|x| x == f), "{}", f);
         }
-        assert!(!a.iter().any(|x| x.contains("agent") || x.contains("allowedTools") || x.contains("resume")));
+        assert!(!a.iter().any(|x| x.contains("agent") || x.contains("allowedTools") || x.contains("resume") || x.contains("add-dir")));
         assert_eq!(a.last().unwrap(), "sys");
+    }
+
+    #[test]
+    fn with_an_image_the_quick_lane_may_read_only_that_folder() {
+        let dir = Path::new("/Users/x/Library/Application Support/com.pulse.app/attachments");
+        let a = quick_args("sys", Some(dir));
+        let at = |f: &str| a[a.iter().position(|x| x == f).unwrap() + 1].clone();
+        assert_eq!(at("--tools"), "Read");
+        assert_eq!(at("--allowedTools"), "Read(//Users/x/Library/Application Support/com.pulse.app/attachments/**)");
+        assert_eq!(at("--add-dir"), dir.to_string_lossy());
+        for f in ["--strict-mcp-config", "--no-session-persistence", "--disable-slash-commands"] {
+            assert!(a.iter().any(|x| x == f), "{}", f);
+        }
+        assert!(!a.iter().any(|x| x.contains("agent") || x.contains("resume") || x.contains("Bash") || x.contains("permission")));
+        assert_eq!(a.last().unwrap(), "sys");
+        let sys = system_prompt("snap", &[], chrono::Local::now(), true);
+        assert!(sys.contains("Your one tool is Read") && !sys.contains("NO tools"));
     }
 
     #[test]
@@ -1035,7 +1107,7 @@ mod tests {
         assert!(snap.contains("Waiting on Sam: the logo"));
         assert!(!snap.contains("low risk"));
         assert!(snap.len() < SNAPSHOT_MAX + 20);
-        let sys = system_prompt(&snap, &[("hi".into(), "Hey.".into())], now);
+        let sys = system_prompt(&snap, &[("hi".into(), "Hey.".into())], now, false);
         assert!(sys.contains("HANDOFF") && sys.contains("Owner: hi") && sys.contains("NO tools"));
         assert!(sys.contains("at most two short sentences"));
         let _ = std::fs::remove_dir_all(&base);
@@ -1079,6 +1151,38 @@ mod tests {
         assert_eq!(result, Some((true, "Three things.".to_string())));
     }
 
+    // The quick lane with an image, against the real claude (Read limited to the folder). Not run by default:
+    // cargo test --lib quick_lane_sees_an_image -- --ignored
+    #[test]
+    #[ignore]
+    fn quick_lane_sees_an_image() {
+        let dir = std::env::temp_dir().join(format!("pulse quick image {}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("20261109-201512-ab12cd34.png");
+        // 1x1 red PNG, scaled up by sips so there is something to see.
+        std::fs::write(&img, [137u8, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 0, 0, 3, 1, 1, 0, 201, 254, 146, 239, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130]).unwrap();
+        Command::new("/usr/bin/sips").args(["-z", "64", "64"]).arg(&img).output().unwrap();
+        let system = system_prompt("(empty)", &[], chrono::Local::now(), true);
+        let out = Command::new(claude_bin().unwrap())
+            .args(quick_args(&system, Some(&dir)))
+            .current_dir(std::env::temp_dir())
+            .env_remove("ANTHROPIC_API_KEY")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .and_then(|mut c| {
+                let prompt = super::super::attach::image_prompt(&img.to_string_lossy(), "What colour is this image? One word.");
+                c.stdin.take().unwrap().write_all(prompt.as_bytes())?;
+                c.wait_with_output()
+            })
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        let result = text.lines().filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok()).find(|v| v["type"] == "result").unwrap();
+        println!("{}", result["result"]);
+        assert!(result["result"].as_str().unwrap().to_lowercase().contains("red"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // The quick lane against this Mac's real files and claude, timed. Not run by default:
     // cargo test --lib quick_lane_timing -- --ignored --nocapture
     #[test]
@@ -1089,17 +1193,17 @@ mod tests {
         let snap = build_snapshot(get_portfolio_dir().ok().as_deref(), get_tracker_dir().ok().as_deref(), now);
         println!("snapshot: {} chars in {:?}", snap.len(), t0.elapsed());
         if let Ok(path) = std::env::var("PULSE_QUICK_DUMP") {
-            std::fs::write(path, system_prompt(&snap, &[], now)).unwrap();
+            std::fs::write(path, system_prompt(&snap, &[], now, false)).unwrap();
             return;
         }
         for msg in ["hi", "what's on my list today?", "what did the landlord say yesterday?", "Draft a reply to the last email from the bank"] {
-            if needs_full(msg) {
+            if needs_full(msg, false) {
                 println!("{:?}: routed to full Roo without trying", msg);
                 continue;
             }
             let t0 = Instant::now();
             let mut child = Command::new(claude_bin().unwrap())
-                .args(quick_args(&system_prompt(&snap, &[], now)))
+                .args(quick_args(&system_prompt(&snap, &[], now, false), None))
                 .current_dir(std::env::temp_dir())
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
