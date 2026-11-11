@@ -116,6 +116,10 @@ const WORK_PHRASES: &[&str] = &[
     "my inbox", "my email", "my emails", "the email", "an email", "emails from", "email from", "pull request",
     "github", "the web", "online", "on the internet", "news", "weather", "stock price", "website", "the repo", "the code",
     "a draft", "the draft",
+    // Accounts and tools the snapshot doesn't hold (Jay 2026-11-11: no "I can't" from the quick lane)
+    "drive", "google doc", "the doc", "a doc", "folder", "the file", "a file", "spreadsheet", "sheet",
+    "notion", "mercury", "stripe", "balance", "invoice", "figma", "canva", "voicemail", "texts",
+    "higgsfield", "vercel", "server", "telegram",
 ];
 const POLITE: &[&str] = &["please", "can", "could", "would", "will", "you", "roo", "hey", "ok", "okay", "so", "and", "then", "now", "go", "ahead", "i", "need", "want", "to", "me"];
 
@@ -383,6 +387,8 @@ pub(crate) fn system_prompt(snapshot: &str, history: &[(String, String)], now: c
          or how a business or project is doing ARE answerable: the snapshot is current, so answer from it.\n\
          - Only if the request asks you to do something (draft, send, change, add, look something up, research) or needs facts \
          that are not in the snapshot, the image or the recent exchange, reply with exactly {} and nothing else. Full Roo, with tools, takes it from there.\n\
+         - If you're not sure the snapshot fully answers it, hand off the same way. Never tell the owner you can't do something, \
+         don't have access, or aren't able to: full Roo has every tool and account, so hand off instead.\n\
          - Otherwise answer directly, out loud: at most two short sentences. Lead with the answer. \
          For a list, name the top three at most and say how many more. More only if the owner asks for detail. \
          No headings, bullets, tables or markdown.\n\
@@ -981,6 +987,25 @@ mod tests {
         // Work is still work with a picture attached.
         assert!(needs_full("draft a reply to this", true));
         assert!(needs_full("fix the bug in this screenshot", true));
+    }
+
+    #[test]
+    fn other_accounts_and_tools_go_to_full_roo() {
+        for m in [
+            "the Aquanta doc should be in my Crafted drive",
+            "what's the Visuo Mercury balance?",
+            "is there a Notion page for Willis?",
+            "did Ron pay the invoice",
+            "what's in the shared folder",
+        ] {
+            assert!(needs_full(m, false), "{}", m);
+        }
+    }
+
+    #[test]
+    fn quick_lane_never_says_it_cant() {
+        let sys = system_prompt("snap", &[], chrono::Local::now(), false);
+        assert!(sys.contains("Never tell the owner you can't"));
     }
 
     #[test]
