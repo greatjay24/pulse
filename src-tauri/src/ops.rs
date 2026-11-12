@@ -653,17 +653,17 @@ mod ops_tests {
         assert_ne!(content_hash(&other).unwrap(), content_hash(&item).unwrap());
     }
 
-    // Same items and constants as bin/test_outbox.py PULSE_TIKTOK_ITEM / PULSE_YOUTUBE_ITEM.
+    // Same items and constants as kit/org/bin/test_outbox.py PULSE_TIKTOK_ITEM / PULSE_YOUTUBE_ITEM.
     #[test]
     fn social_hashes_match_python() {
-        let tiktok = serde_json::json!({"kind": "tiktok_post", "entity": "visuo", "account": "@visuo.io", "title": "TikTok 1/3",
+        let tiktok = serde_json::json!({"kind": "tiktok_post", "entity": "acme", "account": "@acme.studio", "title": "TikTok 1/3",
             "body": "Caption – here", "media": ["/v/clip.mp4"], "ai_label": "yes", "privacy": "public", "schedule": null,
             "notes": "Cover at 0:04"});
-        assert_eq!(content_hash(&tiktok).unwrap(), "d8b9bad70273c312a877fdc846060bdff13a13acd5d52a4deffcac8064d37bfa");
-        let youtube = serde_json::json!({"kind": "youtube_upload", "entity": "visuo", "channel": "visuo", "title": "The Game Cut",
+        assert_eq!(content_hash(&tiktok).unwrap(), "6213203037b5d84071d261c04c1cd46584d498a54fe990df2d41c815d1f68754");
+        let youtube = serde_json::json!({"kind": "youtube_upload", "entity": "acme", "channel": "acme", "title": "The Game Cut",
             "body": "Description", "tags": ["pixel art", "16-bit"], "privacy": "private", "publish_at": "2026-11-10T09:00",
             "category_id": "10", "made_for_kids": "no", "ai_altered": "no", "media": ["/v/cut.mp4"], "notes": null});
-        assert_eq!(content_hash(&youtube).unwrap(), "ef4f96859bf79e8c865da724dc8e18288d34460a762e184a76c6b0e994de844b");
+        assert_eq!(content_hash(&youtube).unwrap(), "60a7c330306fe8a5553f840bfc724454c96bd8d5510af99a2cdb21eea8313095");
         // Privacy is part of what Jay approves.
         let mut public = youtube.clone();
         public["privacy"] = "public".into();

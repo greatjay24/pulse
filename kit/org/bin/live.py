@@ -14,8 +14,14 @@ Transcript lines (one JSON object each, every string redacted):
     {"t":"text","at","text","sub"?}             the agent's words
     {"t":"tool","at","name","summary","sub"?}   a tool call, as one line
     {"t":"error","at","text"}                   a tool call that failed
-    {"t":"result","at","ok","result","cost_usd","secs","turns","models","tokens"?}
+    {"t":"result","at","ok","result","cost_usd","secs","turns","models","tokens"?,"by_model"?,"session_id"?}
 `sub` marks events from a subagent the lead delegated to. Tool outputs are never stored.
+
+Usage (Claude Code): `tokens` is {"input","output","cache_read","cache_write"} for the whole run
+and `by_model` the same plus `cost_usd` per model, both from the result event (Claude Code's own
+API-equivalent figures; on a subscription nothing is charged). Each `rate_limit_event` the
+stream carries (the plan's 5-hour and weekly utilization) is kept in logs/usage/plan.json,
+which bin/usage.py reads.
 
 PORTFOLIO_ROOT overrides the org folder (default: the parent of this bin/).
 """
@@ -27,6 +33,7 @@ ORG = pathlib.Path(os.environ.get("PORTFOLIO_ROOT") or pathlib.Path(__file__).re
 LOGS = ORG / "logs"
 LIVE = LOGS / "live"
 TRANSCRIPTS = LOGS / "transcripts"
+USAGE = LOGS / "usage"
 KEEP_FINISHED_SECS = 2 * 86400      # finished live files are pruned after this
 TEXT_MAX = 6000                     # one transcript message, after redaction
 
@@ -35,6 +42,23 @@ RUN_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,119}$")
 
 def now_iso():
     return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def registry():
+    """portfolio.json, or {} when it's missing or unreadable."""
+    try:
+        reg = json.loads((ORG / "portfolio.json").read_text())
+        return reg if isinstance(reg, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def owner_name(reg=None, default="the owner"):
+    """The owner's first name from portfolio.json ("owner": {"name": ...}), else `default`."""
+    reg = registry() if reg is None else reg
+    owner = reg.get("owner") if isinstance(reg, dict) else None
+    name = owner.get("name") if isinstance(owner, dict) else owner if isinstance(owner, str) else None
+    return name.strip() if isinstance(name, str) and name.strip() else default
 
 
 def new_run_id(agent):
@@ -123,6 +147,16 @@ def bash_summary(cmd):
         return "Adding a tracker task"
     if "act.py --record" in cmd:
         return "Reporting back to the owner"
+    m = re.search(r"pulse\.py delegate\b(.*)", cmd)
+    if m:
+        who = re.findall(r"--to[ =]([a-z0-9_-]+)", m.group(1))
+        return "Handing off to " + (", ".join(dict.fromkeys(who)) or "a lead")
+    if "pulse.py followup add" in cmd:
+        return "Adding a follow-up"
+    if re.search(r"pulse\.py (status|digest)\b", cmd):
+        return "Checking the org"
+    if "outbox_add.py" in cmd:
+        return "Queuing a draft in the Outbox"
     if re.search(r"\bgit\b.*\bcommit\b", cmd):
         return "Committing"
     if re.search(r"\bgh pr create\b", cmd):
@@ -172,6 +206,81 @@ def result_text(content):
     if isinstance(content, list):
         return " ".join(c["text"] for c in content if isinstance(c, dict) and isinstance(c.get("text"), str))
     return ""
+
+
+# --------------------------------------------------------------------------
+# Usage: tokens per run, and the plan's own limit readings (Claude Code)
+# --------------------------------------------------------------------------
+
+TOKEN_KEYS = ("input", "output", "cache_read", "cache_write")
+
+
+def _n(v):
+    return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else 0
+
+
+def tokens_of(u):
+    """{"input","output","cache_read","cache_write"} from an API `usage` or a `modelUsage` entry."""
+    u = u if isinstance(u, dict) else {}
+    return {"input": _n(u.get("input_tokens", u.get("inputTokens"))),
+            "output": _n(u.get("output_tokens", u.get("outputTokens"))),
+            "cache_read": _n(u.get("cache_read_input_tokens", u.get("cacheReadInputTokens"))),
+            "cache_write": _n(u.get("cache_creation_input_tokens", u.get("cacheCreationInputTokens")))}
+
+
+def usage_of(result_event):
+    """(tokens, by_model) for a stream `result` event; (None, None) when it reports none."""
+    mu = result_event.get("modelUsage")
+    by_model = {}
+    if isinstance(mu, dict):
+        for model, u in mu.items():
+            if isinstance(u, dict):
+                cost = u.get("costUSD")
+                by_model[str(model)] = {**tokens_of(u), "cost_usd": cost if isinstance(cost, (int, float)) else None}
+    if by_model:
+        tokens = {k: sum(m[k] for m in by_model.values()) for k in TOKEN_KEYS}
+    elif isinstance(result_event.get("usage"), dict):
+        tokens = tokens_of(result_event["usage"])
+    else:
+        return None, None
+    return tokens, (by_model or None)
+
+
+def _iso_of_epoch(v):
+    try:
+        return datetime.datetime.fromtimestamp(float(v)).astimezone().isoformat(timespec="seconds")
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def plan_reading(ev, run_id=None):
+    """The plan's limit status from a `rate_limit_event`, or None. Windows are keyed by
+    Claude Code's names (five_hour, seven_day, ...); utilization is 0..1."""
+    info = ev.get("rate_limit_info") if isinstance(ev, dict) else None
+    if not isinstance(info, dict):
+        return None
+    windows = {}
+    unified = info.get("unifiedWindows") if isinstance(info.get("unifiedWindows"), dict) else {}
+    for name, w in unified.items():
+        if isinstance(w, dict) and isinstance(w.get("utilization"), (int, float)):
+            windows[str(name)] = {"utilization": float(w["utilization"]), "resets_at": _iso_of_epoch(w.get("resetsAt")),
+                                  "status": w.get("status")}
+    kind = info.get("rateLimitType")
+    if isinstance(kind, str) and kind not in windows and isinstance(info.get("utilization"), (int, float)):
+        windows[kind] = {"utilization": float(info["utilization"]), "resets_at": _iso_of_epoch(info.get("resetsAt")),
+                         "status": info.get("status")}
+    if not windows:
+        return None
+    return {"at": now_iso(), "source": "rate_limit_event", "run_id": run_id, "status": info.get("status"),
+            "using_overage": bool(info.get("isUsingOverage")), "windows": windows}
+
+
+def record_plan(ev, run_id=None):
+    """Keeps the newest plan reading in logs/usage/plan.json. Returns it (or None)."""
+    reading = plan_reading(ev, run_id)
+    if reading:
+        write_json_atomic(USAGE / "plan.json", reading)
+    return reading
 
 
 # --------------------------------------------------------------------------
@@ -288,13 +397,22 @@ class Normalizer:
         elif t == "result":
             stats = event.get("subagent_stats") if isinstance(event.get("subagent_stats"), dict) else {}
             usage_by_model = event.get("modelUsage") if isinstance(event.get("modelUsage"), dict) else {}
+            tokens, by_model = usage_of(event)
+            sid = event.get("session_id")
             out.append({"t": "result", "at": at, "ok": not event.get("is_error"),
                         "result": clip(event.get("result") or "", 4000),
                         "cost_usd": event.get("total_cost_usd"),
                         "secs": round((event.get("duration_ms") or 0) / 1000),
                         "turns": event.get("num_turns"),
                         "models": list(usage_by_model.keys()),
-                        "agents": max(stats.get("spawned") or 0, len(self.agents))})
+                        "agents": max(stats.get("spawned") or 0, len(self.agents)),
+                        "tokens": tokens, "by_model": by_model,
+                        "session_id": sid if isinstance(sid, str) else None})
+        elif t == "rate_limit_event":
+            try:
+                record_plan(event)
+            except OSError:
+                pass
         return [redact_obj(x) for x in out]
 
 
@@ -464,6 +582,8 @@ class LiveRun:
         """Transcript lines from any runner (runners.py): append them, track the team, move the step."""
         self.append(lines)
         for x in lines:
+            if x["t"] == "result" and (x.get("tokens") or x.get("by_model")):
+                self.state.update(tokens=x.get("tokens"), by_model=x.get("by_model"))
             if x["t"] == "deploy":
                 self.deploy(x["agents"], x["at"], write=False)
             elif x["t"] == "agent_done":

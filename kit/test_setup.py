@@ -85,9 +85,19 @@ class SetupE2E(unittest.TestCase):
             self.assertTrue((self.org / e["path"] / "BRIEF.md").read_text().startswith(f"# {e['name']}"))
             self.assertEqual((self.org / e["path"] / "decisions.jsonl").read_text(), "")
             self.assertTrue((self.agents / f"{e['lead']}.md").is_file())
-        for name in ["chief-of-staff"] + MANAGERS:
+        for name in ["chief-of-staff", "pulse"] + MANAGERS:
             self.assertTrue((self.agents / f"{name}.md").is_file(), name)
-        self.assertEqual(len(list(self.agents.glob("*.md"))), 11)
+        # The front door: Roo's own assistant, which ask.py and the app target as "pulse".
+        self.assertEqual((reg["front_door"]["lead"], reg["front_door"]["call_owner"]), ("pulse", "Sam"))
+        door = (self.agents / "pulse.md").read_text()
+        self.assertTrue(door.startswith("---\nname: pulse\n"))
+        for want in ("Sam's front door", f"{self.org}/bin/pulse.py delegate", "Initech", "Draft, never send",
+                     "Ask first for money and deletes"):
+            self.assertIn(want, door)
+        # Every kit script is installed, so the app finds what it calls.
+        for name in ["ask.py", "pulse.py"]:
+            self.assertTrue((self.org / "bin" / name).is_file(), name)
+        self.assertEqual(len(list(self.agents.glob("*.md"))), 12)
         # Every placeholder was filled (bin/ and install.sh hold none that setup owns).
         for p in list(self.agents.glob("*.md")) + [self.org / n for n in ("OPERATING.md", "STATUS_SCHEMA.md", "README.md")] + \
                 list((self.org / "launchd").glob("*.plist")):
@@ -103,7 +113,7 @@ class SetupE2E(unittest.TestCase):
         neutral = (self.org / "agents" / "acme-lead.md").read_text()
         self.assertIn("role: lead\ntier: deep\n", neutral)                  # model-neutral source
         self.assertIn("model: opus\n", acme)                                  # translated for Claude Code
-        self.assertEqual(len(list((self.org / "agents").glob("*.md"))), 11)
+        self.assertEqual(len(list((self.org / "agents").glob("*.md"))), 12)
         self.assertIn("launchd/install.sh", r.stdout)
         self.assertIn('"matcher": "Agent|Task"', r.stdout)
         self.assertIn("SubagentStop", r.stdout)
@@ -191,7 +201,7 @@ class SetupE2E(unittest.TestCase):
         self.assertLess(r.stdout.index("prefix_rule("), r.stdout.index("create  ~/.codex/rules/pulse-org.rules"))   # shown first
         self.assertIn('decision = "forbidden"', rules.read_text())
         self.assertNotIn("Codex guardrail rules (not installed)", r.stdout)
-        self.assertEqual(len(list((self.org / "agents").glob("*.md"))), 11)
+        self.assertEqual(len(list((self.org / "agents").glob("*.md"))), 12)
         self.assertIn("Codex (ChatGPT)", r.stdout)
         self.assertIn("Claude Code only", r.stdout)                      # no hooks snippet for codex
         self.assertNotIn('"matcher"', r.stdout)
