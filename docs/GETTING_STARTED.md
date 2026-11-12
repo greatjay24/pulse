@@ -110,11 +110,18 @@ When setup finishes, click **I ran it, check again** in Roo. Your board appears.
 
 ## 5. Connect your accounts
 
-Open **Connections** in the sidebar. It shows each service your agents can reach: connected,
-needs sign-in, or not set up, and when Roo last checked.
+Open **Connectors** in the sidebar. It shows one card per service: connected or not, which
+account it's signed in as (partly hidden), and when Roo last checked.
 
-- Click a service to see what agents use it for and the exact steps to connect it.
+- **Connect** or **Reconnect** starts the real sign-in for that service. That's a Terminal
+  window with the sign-in command ready, or a browser page. You do the sign-in. Roo never
+  sees your password or token.
+- Services with no sign-in command show the exact steps instead.
 - **Check again** re-tests every connection.
+- To add a service or a Connect button, edit `~/portfolio/connections.json`. Each entry can
+  have an `"account"` and a `"connect"` step, for example
+  `"connect": [{"label": "Sign in to GitHub", "terminal": ["gh", "auth", "login"]}]`. Roo only
+  runs known sign-in commands, so a bad entry can't run anything else.
 
 The ones most people start with:
 
@@ -131,9 +138,9 @@ them to a file.
 
 **Different Google accounts per business.** The claude.ai connectors sign in to one Google
 account. If Acme uses its own Google Workspace account, give that account its own sign-in
-from its Connections entry. Each business can also have its own Chrome profile, so agents
+from its card under Connectors. Each business can also have its own Chrome profile, so agents
 that use the browser act as the right account. List them under `browsers` in
-`portfolio.json`.
+`portfolio.json` and Connectors shows them, with which business uses each.
 
 ## 6. Your daily flow
 
@@ -242,7 +249,7 @@ That refreshes the scripts. Your businesses, reports and agents are left alone.
   again and click **I ran it, check again**.
 - **A lead never runs at night.** Run `python3 ~/portfolio/bin/nightly.py --check`. It says
   what's missing.
-- **A connector says "Needs sign-in".** Open it under Connections and follow
-  the steps, then click **Check again**.
+- **A connector says "Needs sign-in".** Click **Reconnect** on its card under
+  Connectors, finish the sign-in, then click **Check again**.
 - **Voice does nothing.** Turn on Dictation once in System Settings > Keyboard, then allow the
   microphone for Roo.

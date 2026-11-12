@@ -36,10 +36,11 @@ const STEPS: Step[] = [
   {
     title: 'Connect your accounts',
     lines: [
-      'Connections shows each service, whether it is connected, and how to connect the rest.',
+      'Connectors shows a card per service: connected or not, which account, and when Roo last checked.',
+      'Click Connect or Reconnect to start the real sign-in. Services without one show the steps.',
       'Keys and passwords live in your Mac\'s Keychain. Roo never shows them.',
     ],
-    open: { page: 'connections', label: 'Open Connections' },
+    open: { page: 'connections', label: 'Open Connectors' },
   },
   {
     title: 'Start your day on Today',
