@@ -47,11 +47,17 @@ anything. Then it:
 
 - creates `~/portfolio`, your org: one folder per business with a `BRIEF.md` (for you) and a
   `status.json` (for Roo), plus the rules every agent follows (`OPERATING.md`);
-- writes your agents to `~/portfolio/agents`: a lead per business (`<id>-lead`), a chief of
-  staff, and five shared managers (sales, marketing, delivery, finance, admin). They're plain
-  instructions that work with any of the three; setup also puts a copy where your AI looks
-  for them;
+- writes your agents to `~/portfolio/agents`: Roo's own assistant (`pulse`, the one you talk
+  to), a lead per business (`<id>-lead`), a chief of staff, and five shared managers (sales,
+  marketing, delivery, finance, admin). They're plain instructions that work with any of the
+  three; setup also puts a copy where your AI looks for them;
+- installs the scripts Roo runs into `~/portfolio/bin` (chat, the Outbox, usage, goals,
+  memory, undo, connections);
 - never overwrites a file that already exists. Run it again any time to add a business.
+
+**Updating.** After `git -C ~/pulse pull`, run `python3 ~/pulse/kit/setup.py --update-bin` to
+replace the scripts in `~/portfolio/bin` with the kit's (they're kit code, not your data) and
+add any that are new. Your businesses, reports and agents' files are left alone.
 
 At the end it prints two things it does **not** do for you. Do them when you're ready:
 
@@ -126,7 +132,8 @@ A lead brings something to you **only** if it needs:
 
 Everything else, the lead handles and lists under "done". Agents never send email or
 messages, never pay for anything, never merge to main or deploy to production, and never
-delete data. Email goes to your Drafts folder.
+delete data. What they write for others waits in Roo's **Outbox**: you read it, edit it if you
+like, and send it with one click.
 
 ## Using Roo
 
@@ -144,7 +151,34 @@ delete data. Email goes to your Drafts folder.
 - **Money** appears only if you connect an optional tracker that collects payments.
   Without one, your leads report cash in their own numbers on the Board.
 
-## Talk to a lead
+## Talk to Roo
+
+Type (or say) anything in Roo's command box. Roo answers quick things itself and hands longer
+work to the right lead, which runs in the background; the lead's report comes back in the same
+conversation. Start with a business's name ("Acme: draft the pricing page") to go straight to
+that lead. **Brief me** asks Roo for a morning or evening summary. Chats run on the AI you
+chose, with the same guardrails as the night shift. With Claude Code, each lead remembers the
+conversation; with Codex or opencode, each message starts fresh and the lead reads its
+business's files for context.
+
+## Connect email, Stripe and the rest (optional)
+
+Roo's **Connections** page lists what the agents can reach and how to connect each one. The
+short version:
+
+- **Email from the Outbox.** Add each mailbox to `~/portfolio/portfolio.json`:
+  `"email_accounts": {"acme": {"address": "you@acme.com", "entity": "acme"}}` (Gmail by
+  default; add `smtp_host` / `imap_host` for others). Then store its app password in your
+  Keychain: `python3 ~/portfolio/bin/keyring_store.py set acme`. Drafts are saved to that
+  mailbox's Drafts folder; nothing is sent until you click Send in Roo.
+- **Stripe.** `keyring_store.py set stripe:<business id>` (a restricted key the agents use to
+  draft invoices and quotes) and `keyring_store.py set stripe-action:<business id>` (used only
+  when you click Approve).
+- **Claude.ai connectors** (Gmail search, Calendar): connect them in Claude Code with `/mcp`.
+
+Keys live in the macOS Keychain and are never printed or written to a file.
+
+## Talk to a lead in Terminal
 
 Open Terminal and run:
 

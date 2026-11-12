@@ -11,8 +11,10 @@ python3 kit/setup.py --config my-org.json  # same, from a file (see example-conf
 python3 kit/setup.py --dry-run             # show what it would write, write nothing
 ```
 
-Setup creates `~/portfolio` (the org Roo reads), writes the agents to `~/portfolio/agents`
-and installs them where the chosen runner reads them. It never overwrites a file that exists, and it's safe to re-run: add an
+Setup creates `~/portfolio` (the org Roo reads), installs every script in `org/bin` into
+`~/portfolio/bin`, writes the agents (including Roo's front door, `pulse`) to `~/portfolio/agents`
+and installs them where the chosen runner reads them. After pulling a newer kit,
+`python3 kit/setup.py --update-bin` replaces the scripts and adds new ones. It never overwrites a file that exists, and it's safe to re-run: add an
 entity to your config and run it again. It prints, but doesn't run, the two things that
 change your Mac's behavior: the nightly schedule (`sh ~/portfolio/launchd/install.sh`) and
 (Claude Code only) the hooks snippet that lets Roo show your own chat sessions.
@@ -31,8 +33,16 @@ change your Mac's behavior: the nightly schedule (`sh ~/portfolio/launchd/instal
 | `org/bin/policy.py` | The allow and deny lists for headless runs. No sending, no force-push, no merges, no production deploys. |
 | `org/bin/runners.py` | One adapter per agent CLI (claude-code, codex, opencode): the command, the guardrails, and the translation of its events into Roo's transcript lines. |
 | `org/bin/talk.py` | Opens a lead interactively on the org's runner, fenced the same way. |
+| `org/bin/ask.py` | Roo's chat: runs a lead (or the front door) in the background on the org's runner, with the night shift's guardrails. Claude Code resumes each lead's conversation. |
+| `org/bin/pulse.py` | The front door's tools: hand work to leads (`delegate`), follow-ups, `status`, and the morning and evening brief (Roo's Brief me). |
+| `org/bin/outbox.py`, `outbox_add.py`, `outbox_send.py`, `sendguard.py` | The Outbox: agents queue drafts (email, posts, texts, DMs, Stripe actions, YouTube uploads); only Roo's signed one-click approval sends. |
+| `org/bin/email_accounts.py`, `keyring_store.py` | Mailboxes from portfolio.json `email_accounts`; secrets in the macOS Keychain (`keyring_store.py set <name>`). |
+| `org/bin/stripe_api.py`, `stripe_agent.py`, `resend_api.py`, `youtube_api.py`, `connect_youtube.py`, `publish_hooks.py` | Optional integrations behind the Outbox. Each does nothing until its key is in the Keychain. |
+| `org/bin/usage.py`, `learn.py`, `outbox_learn.py`, `memory.py`, `memory_import.py` | Usage report, what Roo learned from your edits and skips, and the memory every agent shares. |
+| `org/bin/goals.py`, `undo.py`, `watch_store.py`, `connections_check.py` | Goals per entity, Undo for things agents did on their own, the Activity log, and the Connections page's checks. |
 | `org/bin/fixtures/` | Recorded codex and opencode event streams the runner tests replay. |
-| `org/bin/test_*.py` | Tests. `python3 ~/portfolio/bin/test_act.py` and `test_live.py`. |
+| `org/bin/test_*.py` | Tests, one file per script: `python3 ~/portfolio/bin/test_ask.py` and so on. |
+| `agents/front-door.md` | Roo's own assistant (agent `pulse`, portfolio.json `front_door`): answers, hands work to the leads, reports back, writes the briefs. Draft never send; asks first for money and deletes. |
 | `agents/director.md` | The template for each entity's lead (`<id>-lead`). Model-neutral: frontmatter `name`, `description`, `role` (lead, chief, manager), `tier` (deep, fast); each runner translates it. |
 | `agents/chief-of-staff.md` | The weekly reviewer who writes `WEEK.md`. |
 | `agents/*-manager.md` | Sales, marketing, delivery, finance and admin, shared by every lead. |
@@ -76,6 +86,14 @@ Claude Code's hooks; with the other runners, Roo shows the night shift and decis
 ## Optional extras
 
 The scripts work with nothing but one runner and python3. These are used only if present:
+
+- **Mailboxes for the Outbox** (`"email_accounts"` in portfolio.json, app passwords in the
+  Keychain via `bin/keyring_store.py set <id>`): drafts are saved to the mailbox and sent on the
+  owner's click. Without one, email items are refused with a message saying how to add one.
+- **Stripe, Resend, YouTube keys** (`keyring_store.py set stripe:<entity>`,
+  `stripe-action:<entity>`, `resend:send`; `connect_youtube.py`): the Outbox kinds that use them.
+- **Scheduled follow-ups and briefs**: `pulse.py tick` (follow-ups that are due) and
+  `pulse.py brief morning` can run from launchd or cron; the kit doesn't schedule them.
 
 - **A task tracker** (`PULSE_TRACKER_DIR`, default `~/project-tracker`, with `todos.json`
   and `add_todo.py`): approving a decision also closes its matching "Decide: ..." task.

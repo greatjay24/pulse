@@ -38,8 +38,10 @@ What it does (and never does):
 - Creates the org folder: portfolio.json, OPERATING.md, STATUS_SCHEMA.md, README.md, bin/,
   launchd/, logs/, history/, assets/logos/ and one folder per entity with a starter
   BRIEF.md, a valid status.json and an empty decisions.jsonl. Then git init and a first commit.
-- Writes the agents, model-neutral, to <org>/agents/: <id>-lead.md per entity,
-  chief-of-staff.md and the five managers. Then installs them where the runner reads them:
+- Installs every script in kit/org/bin into <org>/bin (ask.py, pulse.py, the Outbox, usage...):
+  what Roo runs. --update-bin replaces the ones that changed.
+- Writes the agents, model-neutral, to <org>/agents/: pulse.md (Roo's front door, portfolio.json
+  "front_door"), <id>-lead.md per entity, chief-of-staff.md and the five managers. Then installs them where the runner reads them:
   Claude Code ~/.claude/agents, opencode ~/.config/opencode/agents (new files only, and the
   plan says so before anything is written); Codex reads <org>/agents directly. Codex's rules
   file goes into ~/.codex only with --install-codex-rules, which shows it first.
@@ -56,6 +58,7 @@ sys.path.insert(0, str(KIT / "org" / "bin"))
 import runners  # noqa: E402
 HOME = pathlib.Path.home()
 MANAGERS = ["sales-manager", "marketing-manager", "delivery-manager", "finance-manager", "admin-manager"]
+FRONT_DOOR = "pulse"        # Roo's own assistant: the agent id the app and ask.py target (shown as Roo)
 DEFAULT_GROUPS = ["Companies", "Family", "Personal"]
 PALETTE = ["#3B5BDB", "#9C36B5", "#2B8A3E", "#E8590C", "#0B7285", "#C2255C", "#5C7CFA", "#B08900"]
 SCHEDULES = {"nightly", "weekly", "on-call"}
@@ -65,8 +68,8 @@ LOGO_MAX = 1024 * 1024
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 LANES = ["sales", "marketing", "delivery", "finance", "admin"]
-BIN_FILES = ["act.py", "live.py", "nightly.py", "session_hook.py", "policy.py", "runners.py", "talk.py",
-             "test_act.py", "test_live.py", "test_runners.py"]
+# Every script in org/bin (and its tests) is kit code: installed into <org>/bin, replaced by --update-bin.
+BIN_FILES = sorted(p.name for p in (KIT / "org" / "bin").glob("*.py"))
 HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd", "PreToolUse", "SubagentStart", "SubagentStop"]
 
 
@@ -389,6 +392,9 @@ def merged_registry(path, owner, groups, entities, runner=None, switch=False):
         reg["entities"].append(row)
     reg.setdefault("managers", list(MANAGERS))
     reg.setdefault("chief_of_staff", {"lead": "chief-of-staff", "schedule": "weekly", "output": "WEEK.md"})
+    reg.setdefault("front_door", {"lead": FRONT_DOOR, "call_owner": owner,
+                                  "_comment": "The one assistant the owner talks to in Roo. ask.py targets pulse and org "
+                                              "reach it; it hands work to the leads with bin/pulse.py."})
     return reg
 
 
@@ -467,11 +473,16 @@ def build(answers, org, agents_dir, plan, update_bin=False, switch_runner=False,
         "ENTITY_NAMES": ", ".join(x["name"] for x in all_entities)})
     for m in MANAGERS:
         agents[m] = render((KIT / "agents" / f"{m}.md").read_text(), {"OWNER": owner_name, "ORG": str(org)})
+    # The front door (Roo's own assistant). An org that named a different one keeps it.
+    if (registry.get("front_door") or {}).get("lead") == FRONT_DOOR:
+        agents[FRONT_DOOR] = render((KIT / "agents" / "front-door.md").read_text(), {
+            "OWNER": owner_name, "ORG": str(org), "ENTITY_TABLE": entity_table(org, all_groups, all_entities)})
 
     cos_hint = "it lists the entities; add new ones to its table by hand"
+    tabled = ("chief-of-staff", FRONT_DOOR)
     plan.dir(org / "agents")
     for name, text in agents.items():
-        plan.file(org / "agents" / f"{name}.md", text, hint=cos_hint if name == "chief-of-staff" else "")
+        plan.file(org / "agents" / f"{name}.md", text, hint=cos_hint if name in tabled else "")
     install_for_runner(runner, agents, agents_dir, plan, cos_hint, codex_rules)
     return registry
 
@@ -482,13 +493,13 @@ def install_for_runner(runner, agents, agents_dir, plan, cos_hint="", codex_rule
         plan.dir(agents_dir)
         for name, text in agents.items():
             plan.file(agents_dir / f"{name}.md", runners.for_claude(*runners.split_agent(text)),
-                      hint=cos_hint if name == "chief-of-staff" else "")
+                      hint=cos_hint if name in ("chief-of-staff", FRONT_DOOR) else "")
     elif runner == "opencode":
         d = runners.OpenCode.AGENTS
         plan.dir(d)
         for name, text in agents.items():
             plan.file(d / f"{name}.md", runners.for_opencode(*runners.split_agent(text)),
-                      hint=cos_hint if name == "chief-of-staff" else "")
+                      hint=cos_hint if name in ("chief-of-staff", FRONT_DOOR) else "")
     elif runner == "codex" and codex_rules:
         plan.dir(runners.Codex.RULES.parent)
         plan.file(runners.Codex.RULES, runners.codex_rules(), hint="your edits are kept; delete it to get the kit's again")
