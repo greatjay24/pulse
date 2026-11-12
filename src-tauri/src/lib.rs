@@ -3879,6 +3879,7 @@ pub fn run() {
             ops::save_goal,
             ops::read_connections,
             ops::check_connections,
+            ops::start_connect,
             jarvis::speak,
             jarvis::stop_speaking,
             jarvis::speak_begin,

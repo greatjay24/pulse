@@ -17,6 +17,14 @@ Each entry's `check` says how to tell whether agents can reach it:
   {"type": "keychain", "service": "...", "account": "..."}  the item exists (secret never read)
   {"type": "readable", "path": "~/Library/Messages/chat.db"} openable (Full Disk Access); nothing read
   {"type": "manual"}                               nothing to check; status stays as set
+Optional per entry, shown on Roo's Connectors page and never rewritten here:
+  "account": "you@example.com"                     which account it's signed in as (Roo masks it)
+  "connect": [{"label": "Sign in", "terminal": ["gh", "auth", "login"]},
+              {"label": "Open settings", "url": "https://..."}]
+                                                   what Connect / Reconnect starts. Roo runs only known
+                                                   CLI logins (gh, vercel, claude, codex, opencode) and
+                                                   connect_*.py / keyring_store.py set / gws.py connect
+                                                   scripts in bin/ or the tracker, in Terminal.app.
 Status is connected | needs-auth | not-set-up. Never prints or stores a secret: commands
 run with their output parsed for status words only, and `security` is called without -w.
 
@@ -40,9 +48,13 @@ KIT_BIN = str(ORG / "bin")
 def starter(reg):
     """A first connections.json: what agents commonly reach, each with how to connect it."""
     ents = [e["id"] for e in reg.get("entities", []) if isinstance(e, dict) and e.get("id")]
-    def row(id_, name, category, for_, access, mode, check, steps, notes=""):
-        return {"id": id_, "name": name, "category": category, "for": for_, "entities": list(ents), "access": access,
-                "mode": mode, "status": "not-set-up", "check": check, "connect_steps": steps, "notes": notes, "sources": []}
+    def row(id_, name, category, for_, access, mode, check, steps, notes="", connect=None):
+        r = {"id": id_, "name": name, "category": category, "for": for_, "entities": list(ents), "access": access,
+             "mode": mode, "status": "not-set-up", "check": check, "connect_steps": steps, "notes": notes, "sources": []}
+        if connect:
+            r["connect"] = connect
+        return r
+    claude_connectors = [{"label": "Open claude.ai connectors", "url": "https://claude.ai/settings/connectors"}]
     return {
         "_comment": "What the agents can reach. bin/connections_check.py refreshes each status from its `check`.",
         "systems": [
@@ -55,15 +67,17 @@ def starter(reg):
             row("gmail-connector", "Gmail (claude.ai connector)", "Communication", "Search and read mail, write drafts",
                 "Claude Code's claude.ai Gmail connector", "read + draft", {"type": "mcp", "name": "claude.ai Gmail"},
                 ["In Claude Code: /mcp, then connect claude.ai Gmail (or connect it at claude.ai, Settings > Connectors)."],
-                "Its send, reply and trash tools are on the agents' deny list."),
+                "Its send, reply and trash tools are on the agents' deny list.", claude_connectors),
             row("calendar", "Google Calendar (claude.ai connector)", "Scheduling", "Read your calendar, propose holds",
                 "Claude Code's claude.ai Google Calendar connector", "read + holds",
                 {"type": "mcp", "name": "claude.ai Google Calendar"},
-                ["In Claude Code: /mcp, then connect claude.ai Google Calendar."]),
+                ["In Claude Code: /mcp, then connect claude.ai Google Calendar."], connect=claude_connectors),
             row("github", "GitHub", "Engineering", "Branches, pull requests, CI", "the gh CLI, signed in",
-                "branches and PRs; merges need your yes", {"type": "cli", "cmd": "gh"}, ["brew install gh && gh auth login"]),
+                "branches and PRs; merges need your yes", {"type": "cli", "cmd": "gh"}, ["brew install gh && gh auth login"],
+                connect=[{"label": "Sign in to GitHub", "terminal": ["gh", "auth", "login"]}]),
             row("vercel", "Vercel", "Engineering", "Preview deploys", "the vercel CLI, signed in",
-                "previews; production needs your yes", {"type": "cli", "cmd": "vercel"}, ["npm i -g vercel && vercel login"]),
+                "previews; production needs your yes", {"type": "cli", "cmd": "vercel"}, ["npm i -g vercel && vercel login"],
+                connect=[{"label": "Sign in to Vercel", "terminal": ["vercel", "login"]}]),
             row("stripe", "Stripe", "Money", "Draft invoices and quotes; refunds and charges only on your click",
                 "a restricted key per business in the Keychain (stripe:<entity>), and an action key (stripe-action:<entity>)",
                 "draft; act on your click", {"type": "keychain", "service": KEYCHAIN_SERVICE, "account": f"stripe:{ents[0]}" if ents else "stripe"},
