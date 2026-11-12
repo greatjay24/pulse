@@ -277,6 +277,12 @@ npm run tauri dev
 npm run tauri build
 ```
 
+The build signs with whatever identity is in `APPLE_SIGNING_IDENTITY`, and is ad-hoc
+signed when it's unset, which is fine for your own Mac. To keep macOS permissions
+(microphone, screen recording) across rebuilds, sign with a stable identity, e.g. add
+`export APPLE_SIGNING_IDENTITY="Apple Development: Your Name (TEAMID)"` to `~/.zshenv`
+(`security find-identity -v -p codesigning` lists yours).
+
 ## Development
 
 ### Prerequisites
