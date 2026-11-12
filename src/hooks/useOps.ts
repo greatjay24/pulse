@@ -87,3 +87,12 @@ export async function checkConnections() {
   if (DEMO) return demo('re-check every connection');
   await invoke<string>('check_connections');
 }
+
+// Starts a connection's sign-in (step `step` of its `connect` list). Returns what Roo opened.
+export async function startConnect(id: string, step = 0): Promise<string | null> {
+  if (DEMO) {
+    demo('open the sign-in for this connection');
+    return null;
+  }
+  return invoke<string>('start_connect', { id, step });
+}

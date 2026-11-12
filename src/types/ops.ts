@@ -147,6 +147,16 @@ export interface Connection {
   connect_steps: string[];
   notes?: string;
   sources?: string[];
+  account?: string; // which account it's signed in as (an address or a username, never a secret)
+  connect?: ConnectStep | ConnectStep[]; // the sign-in flow the Connect button runs
+}
+
+// A sign-in flow Roo can start. Rust (ops::plan_connect) only runs allowlisted ones: known CLI
+// logins and connect scripts in ~/portfolio/bin or the tracker, opened in Terminal.app.
+export interface ConnectStep {
+  label?: string;
+  terminal?: string[];
+  url?: string;
 }
 
 export interface ConnectionsDoc {

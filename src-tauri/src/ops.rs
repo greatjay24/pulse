@@ -553,6 +553,180 @@ pub async fn check_connections() -> Result<String, String> {
     Ok(v.to_string())
 }
 
+// Connect / Reconnect: run a system's own sign-in flow. connections.json says what to run
+// ("connect": [{"label": ..., "terminal": [argv]} or {"label": ..., "url": "https://..."}]),
+// but agents can write that file, so nothing in it runs unless it passes this allowlist:
+// a known CLI login, or a connect script inside ~/portfolio/bin or the tracker. Terminal
+// steps open in Terminal.app, so the owner sees the command and types any secret there;
+// Roo never sees a token or a key.
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum ConnectPlan {
+    Url(String),
+    Terminal(Vec<String>),
+}
+
+const CONNECT_CLIS: &[&[&str]] = &[
+    &["gh", "auth", "login"],
+    &["gh", "auth", "refresh"],
+    &["vercel", "login"],
+    &["claude"],
+    &["codex", "login"],
+    &["opencode", "auth", "login"],
+];
+
+fn connect_arg_ok(a: &str) -> bool {
+    !a.is_empty() && a.len() <= 200 && a.chars().all(|c| c.is_ascii_alphanumeric() || "@:_./~=+-".contains(c))
+}
+
+pub(crate) fn plan_connect(action: &serde_json::Value, home: &Path, roots: &[PathBuf]) -> Result<ConnectPlan, String> {
+    if let Some(url) = action.get("url").and_then(|u| u.as_str()) {
+        let ok = url.starts_with("https://") && url.len() <= 500 && !url.chars().any(|c| c.is_whitespace() || c.is_control());
+        return if ok { Ok(ConnectPlan::Url(url.to_string())) } else { Err("only https links can be opened".into()) };
+    }
+    let argv: Vec<String> = action
+        .get("terminal")
+        .and_then(|t| t.as_array())
+        .ok_or("no connect step")?
+        .iter()
+        .map(|a| a.as_str().map(str::to_string).ok_or("connect step arguments must be text"))
+        .collect::<Result<_, _>>()?;
+    if argv.is_empty() || argv.len() > 8 || !argv.iter().all(|a| connect_arg_ok(a)) {
+        return Err("connect step has arguments Roo won't run".into());
+    }
+    if CONNECT_CLIS.iter().any(|cli| cli.len() == argv.len() && cli.iter().zip(&argv).all(|(a, b)| a == b)) {
+        return Ok(ConnectPlan::Terminal(argv));
+    }
+    if argv[0] != "python3" || argv.len() < 2 {
+        return Err(format!("Roo only runs sign-in commands it knows; run it yourself: {}", argv.join(" ")));
+    }
+    let raw = &argv[1];
+    let expanded = match raw.strip_prefix("~/") {
+        Some(rest) => home.join(rest),
+        None => PathBuf::from(raw),
+    };
+    let script = expanded.canonicalize().map_err(|_| format!("{} not found", raw))?;
+    if !roots.iter().any(|r| script.starts_with(r)) || script.extension().and_then(|e| e.to_str()) != Some("py") {
+        return Err("connect scripts must live in ~/portfolio/bin or the tracker".into());
+    }
+    let stem = script.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let sub = argv.get(2).map(String::as_str);
+    // connect_*.py scripts, the Keychain helper's `set` (hidden prompt), and the Google Workspace
+    // helper's `connect` (browser consent). Nothing else, so no other bin script can be reached.
+    let allowed = stem.starts_with("connect") || (stem == "keyring_store" && sub == Some("set")) || (stem == "gws" && sub == Some("connect"));
+    if !allowed {
+        return Err(format!("{} is not a sign-in script", stem));
+    }
+    let python = PYTHON_CANDIDATES.iter().find(|p| Path::new(p).is_file()).ok_or("python3 not found")?;
+    let mut out = vec![python.to_string(), script.to_string_lossy().into_owned()];
+    out.extend(argv[2..].iter().cloned());
+    Ok(ConnectPlan::Terminal(out))
+}
+
+fn connect_script(argv: &[String]) -> String {
+    let quoted: Vec<String> = argv.iter().map(|a| format!("'{}'", a)).collect();
+    format!(
+        "#!/bin/zsh -l\nclear\necho 'Roo: connecting. Follow the prompts below.'\necho\n{}\necho\necho 'Done. Go back to Roo and click Check again.'\n",
+        quoted.join(" ")
+    )
+}
+
+#[tauri::command]
+pub fn start_connect(id: String, step: usize) -> Result<String, String> {
+    if !is_slug(&id) {
+        return Err("bad connection id".into());
+    }
+    let root = get_portfolio_dir()?;
+    let doc = read_portfolio_json(&resolve_portfolio_file(&root, ".", "connections.json")?)?;
+    let system = doc["systems"]
+        .as_array()
+        .and_then(|a| a.iter().find(|s| s["id"].as_str() == Some(id.as_str())))
+        .ok_or("no such connection")?;
+    let steps = match &system["connect"] {
+        serde_json::Value::Array(a) => a.clone(),
+        v @ serde_json::Value::Object(_) => vec![v.clone()],
+        _ => vec![],
+    };
+    let action = steps.get(step).ok_or("this connection has no sign-in step")?;
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    let mut roots = vec![root.join("bin").canonicalize().unwrap_or(root.join("bin"))];
+    if let Ok(t) = crate::get_tracker_dir() {
+        roots.push(t);
+    }
+    match plan_connect(action, &home, &roots)? {
+        ConnectPlan::Url(url) => {
+            std::process::Command::new("open").arg(&url).spawn().map_err(|e| e.to_string())?;
+            Ok("Opened the sign-in page in your browser.".into())
+        }
+        ConnectPlan::Terminal(argv) => {
+            let file = std::env::temp_dir().join(format!("roo-connect-{}.command", id));
+            fs::write(&file, connect_script(&argv)).map_err(|e| e.to_string())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&file, fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
+            }
+            std::process::Command::new("open").args(["-a", "Terminal"]).arg(&file).spawn().map_err(|e| e.to_string())?;
+            Ok("Opened Terminal with the sign-in. Finish it there, then click Check again.".into())
+        }
+    }
+}
+
+#[cfg(test)]
+mod connect_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn tmp() -> (PathBuf, PathBuf) {
+        let base = std::env::temp_dir().join(format!("roo-connect-test-{}", std::process::id()));
+        let bin = base.join("portfolio/bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(bin.join("connect_youtube.py"), "").unwrap();
+        fs::write(bin.join("keyring_store.py"), "").unwrap();
+        fs::write(bin.join("outbox_send.py"), "").unwrap();
+        (base.canonicalize().unwrap(), bin.canonicalize().unwrap())
+    }
+
+    #[test]
+    fn known_cli_logins_run_others_do_not() {
+        let (home, bin) = tmp();
+        let roots = [bin];
+        assert_eq!(plan_connect(&json!({"terminal": ["gh", "auth", "login"]}), &home, &roots), Ok(ConnectPlan::Terminal(vec!["gh".into(), "auth".into(), "login".into()])));
+        assert!(plan_connect(&json!({"terminal": ["gh", "repo", "delete"]}), &home, &roots).is_err());
+        assert!(plan_connect(&json!({"terminal": ["rm", "-rf", "~"]}), &home, &roots).is_err());
+        assert!(plan_connect(&json!({"terminal": ["gh", "auth", "login;rm"]}), &home, &roots).is_err());
+        assert!(plan_connect(&json!({"terminal": ["vercel", "login", "$(id)"]}), &home, &roots).is_err());
+    }
+
+    #[test]
+    fn only_connect_scripts_in_the_allowed_folders() {
+        let (home, bin) = tmp();
+        let roots = [bin];
+        let ok = plan_connect(&json!({"terminal": ["python3", "~/portfolio/bin/connect_youtube.py", "main"]}), &home, &roots);
+        assert!(matches!(ok, Ok(ConnectPlan::Terminal(ref a)) if a.last().map(String::as_str) == Some("main")));
+        assert!(plan_connect(&json!({"terminal": ["python3", "~/portfolio/bin/keyring_store.py", "set", "stripe:acme"]}), &home, &roots).is_ok());
+        assert!(plan_connect(&json!({"terminal": ["python3", "~/portfolio/bin/keyring_store.py", "get", "stripe:acme"]}), &home, &roots).is_err());
+        assert!(plan_connect(&json!({"terminal": ["python3", "~/portfolio/bin/outbox_send.py"]}), &home, &roots).is_err());
+        assert!(plan_connect(&json!({"terminal": ["python3", "~/portfolio/bin/../bin/outbox_send.py", "connect"]}), &home, &roots).is_err());
+        assert!(plan_connect(&json!({"terminal": ["python3", "/tmp/connect_evil.py"]}), &home, &roots).is_err());
+    }
+
+    #[test]
+    fn links_must_be_https() {
+        let (home, bin) = tmp();
+        let roots = [bin];
+        assert_eq!(plan_connect(&json!({"url": "https://claude.ai/settings/connectors"}), &home, &roots), Ok(ConnectPlan::Url("https://claude.ai/settings/connectors".into())));
+        assert!(plan_connect(&json!({"url": "file:///etc/passwd"}), &home, &roots).is_err());
+        assert!(plan_connect(&json!({"url": "javascript:alert(1)"}), &home, &roots).is_err());
+    }
+
+    #[test]
+    fn script_quotes_every_argument() {
+        let s = connect_script(&["/usr/bin/python3".into(), "/x/connect_a.py".into(), "acme".into()]);
+        assert!(s.contains("'/usr/bin/python3' '/x/connect_a.py' 'acme'"));
+    }
+}
+
 #[cfg(test)]
 mod ops_tests {
     #[test]

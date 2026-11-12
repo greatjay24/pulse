@@ -606,11 +606,20 @@ export interface PortfolioEntity {
   logo_dark?: string; // the same mark for dark backgrounds
   color?: string; // hex; tints the initial when there is no logo
   runner?: string | { name: string; [k: string]: unknown }; // overrides the org's agent CLI for this entity
+  browser?: string; // key into the registry's `browsers`: the Chrome profile this business's agents use
+}
+
+// One Chrome profile per business, for Claude in Chrome. Only the name reaches the UI's text;
+// other fields (the extension's device id) are never shown.
+export interface RegistryBrowser {
+  name?: string;
+  [k: string]: unknown;
 }
 
 export interface PortfolioRegistry {
   groups: PortfolioGroup[];
   entities: PortfolioEntity[];
+  browsers?: Record<string, RegistryBrowser>;
 }
 
 export interface EntityMetric {
