@@ -29,8 +29,10 @@
 
 ## Getting started
 
-New here? Read **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** (one page, no
-engineering needed). In short:
+New here? Read **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)**, the step-by-step
+tutorial: install, setting up your businesses and leads, connecting accounts, the daily flow
+and the safety gates. No engineering needed. The same steps are in the app under **Help**.
+In short:
 
 1. Install one agent CLI and sign in: Codex (with a ChatGPT plan), Claude Code, or opencode
    (any provider). Make sure `python3` works.

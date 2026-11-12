@@ -33,6 +33,7 @@ const MAIN_NAV: { id: string; label: string; icon: string }[] = [
   { id: 'outbox', label: 'Outbox', icon: 'mail' }, // messages agents wrote, sent on the owner's click
   { id: 'goals', label: 'Goals', icon: 'target' },
   { id: 'connections', label: 'Connections', icon: 'globe' },
+  { id: 'help', label: 'Help', icon: 'help' }, // the getting-started guide (docs/GETTING_STARTED.md)
 ];
 
 // Helper to get favicon URL from domain

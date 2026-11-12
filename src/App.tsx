@@ -35,6 +35,7 @@ import { OutboxPage } from './components/OutboxPage';
 import { GoalsPage } from './components/GoalsPage';
 import { TasksPage } from './components/TasksPage';
 import { ConnectionsPage } from './components/ConnectionsPage';
+import { HelpPage } from './components/HelpPage';
 import { UsagePage } from './components/UsagePage';
 import { useLive } from './hooks/useLive';
 import { liveSignals, trayRuns } from './utils/live';
@@ -1037,6 +1038,7 @@ function DashboardContent() {
         {page === 'goals' && !selectedEntity && <GoalsPage snapshot={portfolio.snapshot} />}
         {page === 'tasks' && !selectedEntity && <TasksPage tracker={portfolio.tracker} onChanged={portfolio.refresh} />}
         {page === 'connections' && !selectedEntity && <ConnectionsPage snapshot={portfolio.snapshot} />}
+        {page === 'help' && !selectedEntity && <HelpPage onNavigate={handleNavChange} />}
         {page === 'usage' && !selectedEntity && <UsagePage snapshot={portfolio.snapshot} onOpenConversation={openConversation} />}
 
         {/* SaaS metrics pages: kept behind the Settings toggle */}
