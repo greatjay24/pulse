@@ -1,6 +1,6 @@
 [package]
 name = "pulse"
-version = "0.2.0"
+version = "0.3.0"
 description = "Roo: the board, today's decisions and money across the portfolio"
 authors = ["you"]
 edition = "2021"
