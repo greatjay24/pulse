@@ -121,6 +121,18 @@ export function PulseIcon({ size = 18, color }: IconProps) {
   );
 }
 
+// Help icon (question mark in a circle)
+export function HelpIcon({ size = 18, color }: IconProps) {
+  const { tokens } = useTheme();
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color || tokens.colors.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+      <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3" />
+      <line x1="12" y1="17" x2="12.01" y2="17" />
+    </svg>
+  );
+}
+
 // Refresh icon
 export function RefreshIcon({ size = 18, color }: IconProps) {
   const { tokens } = useTheme();
@@ -499,6 +511,7 @@ export function Icon({ name, size = 18, color }: { name: string; size?: number; 
     case 'home': return <HomeIcon size={size} color={color} />;
     case 'pulse': return <PulseIcon size={size} color={color} />;
     case 'refresh': return <RefreshIcon size={size} color={color} />;
+    case 'help': return <HelpIcon size={size} color={color} />;
     case 'arrow-up': return <ArrowUpIcon size={size} color={color} />;
     case 'arrow-down': return <ArrowDownIcon size={size} color={color} />;
     case 'activity': return <ActivityIcon size={size} color={color} />;

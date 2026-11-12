@@ -1,37 +1,67 @@
 # Getting started with Roo
 
-Roo is a desktop dashboard for people who run more than one business. Each business
-gets an AI **lead**: an agent that works every night, handles what it can, and writes a
-short report. Your agents can run on **ChatGPT** (through OpenAI's Codex), **Claude** (through
-Claude Code), or almost any other model (through opencode), and you can switch later. You see the reports, the decisions waiting on you, and what your
-agents are doing right now, all in one window.
+This guide takes you from zero to a working Roo in about 20 minutes. You don't need to be an
+engineer. Every step says what to click or what to paste.
 
-## What you need
+The same steps are in the app under **Help** in the sidebar.
+
+## Contents
+
+1. [What Roo is](#1-what-roo-is)
+2. [What you need](#2-what-you-need)
+3. [Install and first run](#3-install-and-first-run)
+4. [Set up your businesses and leads](#4-set-up-your-businesses-and-leads)
+5. [Connect your accounts](#5-connect-your-accounts)
+6. [Your daily flow](#6-your-daily-flow)
+7. [The safety gates](#7-the-safety-gates)
+8. [Night shift, runners and limits](#8-night-shift-runners-and-limits)
+9. [Troubleshooting](#9-troubleshooting)
+
+## 1. What Roo is
+
+Roo is a desktop app for people who run more than one thing: a company, a side project, a
+family business. Each one gets an AI **lead**. A lead is an agent that reads that business's
+files, does the work nobody needs to sign off on, and writes a short report.
+
+You see every report, every decision waiting on you, and every agent at work, in one window.
+You talk to **Roo**, the assistant at the front. Roo answers quick questions itself and hands
+bigger jobs to the right lead.
+
+Everything runs on your Mac. Your files stay in a folder you own (`~/portfolio`). The agents
+use the AI plan you already pay for.
+
+## 2. What you need
 
 - A Mac (macOS 10.15 or later).
 - **One AI to run your agents**, installed and signed in. Pick the one you already pay for:
-  - **ChatGPT → Codex.** Install: `npm install -g @openai/codex` (or `brew install codex`).
-    Then run `codex login` and choose **Sign in with ChatGPT**. Your agents use your ChatGPT plan.
-  - **Claude → Claude Code.** Install it from Anthropic's Claude Code page, then run `claude`
-    once and sign in. Your agents use your Claude plan.
-  - **Anything else → opencode.** `npm install -g opencode-ai` (or `brew install opencode`),
-    then `opencode auth login` for your provider (OpenAI, Anthropic, Google, a local model…).
-- **python3**. Most Macs have it. If Terminal says it's missing, run `xcode-select --install`.
-- Optional: **GitHub's `gh` tool**, if you want your leads to open pull requests for you.
+  - **Claude:** install Claude Code from Anthropic's Claude Code page, run `claude` once in
+    Terminal and sign in.
+  - **ChatGPT:** run `npm install -g @openai/codex` (or `brew install codex`), then
+    `codex login` and choose **Sign in with ChatGPT**.
+  - **Anything else:** run `npm install -g opencode-ai` (or `brew install opencode`), then
+    `opencode auth login` for your provider.
+- **python3.** Most Macs have it. If Terminal says it's missing, run `xcode-select --install`.
+- Optional: GitHub's `gh` tool, if you want leads to open pull requests for you.
 
-## 1. Install Roo
+Chat, voice and team runs work best with Claude Code. Codex and opencode run the night shift
+and the leads, one job at a time.
 
-1. Download the latest `.dmg` from the [Releases](https://github.com/greatjay24/pulse/releases) page.
-2. Open it and drag Roo into Applications.
-3. The app isn't signed by Apple yet, so the first time, **right-click Roo and choose Open**,
-   then click Open again. On macOS 15 or later, if it only offers "Done", open System Settings
-   → Privacy & Security, scroll down and click **Open Anyway**. After that it opens normally.
+## 3. Install and first run
 
-Roo opens on a welcome screen. It checks for Codex, Claude Code or opencode, and python3, and
-shows the setup command. Click **Try the demo** to look around a made-up org first. Nothing in the demo is
-real, and its buttons don't do anything.
+1. Download the latest `.dmg` from the [Releases](https://github.com/greatjay24/pulse/releases)
+   page.
+2. Open it and drag **Roo** into Applications.
+3. The app isn't signed by Apple yet. The first time, **right-click Roo and choose Open**,
+   then click Open again. On macOS 15 or later, if it only offers "Done", open System
+   Settings > Privacy & Security, scroll down and click **Open Anyway**.
 
-## 2. Run setup
+Roo opens on a welcome screen. It checks for your AI and python3, and shows the setup
+command.
+
+Want to look around first? Click **Try the demo**. It loads a made-up org (Acme Studio,
+Northwind Supply, Globex Rentals). Nothing in it is real and its buttons do nothing.
+
+## 4. Set up your businesses and leads
 
 Copy the command from the welcome screen into Terminal:
 
@@ -39,154 +69,180 @@ Copy the command from the welcome screen into Terminal:
 git clone https://github.com/greatjay24/pulse.git ~/pulse && python3 ~/pulse/kit/setup.py
 ```
 
-Setup asks your first name, how you group your businesses (for example Companies, Family,
-Personal), and for each business: a short id, its name, a one-line description, a color and
-an optional logo. Last, it asks **which AI runs your agents**, offering the ones it finds
-installed, and checks that you're signed in. It shows you the plan before it writes
-anything. Then it:
+Setup asks you a few questions:
 
-- creates `~/portfolio`, your org: one folder per business with a `BRIEF.md` (for you) and a
-  `status.json` (for Roo), plus the rules every agent follows (`OPERATING.md`);
-- writes your agents to `~/portfolio/agents`: Roo's own assistant (`pulse`, the one you talk
-  to), a lead per business (`<id>-lead`), a chief of staff, and five shared managers (sales,
-  marketing, delivery, finance, admin). They're plain instructions that work with any of the
-  three; setup also puts a copy where your AI looks for them;
-- installs the scripts Roo runs into `~/portfolio/bin` (chat, the Outbox, usage, goals,
-  memory, undo, connections);
-- never overwrites a file that already exists. Run it again any time to add a business.
+- Your first name.
+- How you group your businesses. For example: Companies, Family, Personal.
+- For each business: a short id (`acme`), its name (`Acme Studio`), one line on what it does,
+  a color and an optional logo.
+- Which AI runs your agents. It offers the ones it finds and checks you're signed in.
 
-**Updating.** After `git -C ~/pulse pull`, run `python3 ~/pulse/kit/setup.py --update-bin` to
-replace the scripts in `~/portfolio/bin` with the kit's (they're kit code, not your data) and
-add any that are new. Your businesses, reports and agents' files are left alone.
+It shows you the plan before it writes anything. Then it creates:
 
-At the end it prints two things it does **not** do for you. Do them when you're ready:
+- `~/portfolio`, your org. One folder per business, each with a `BRIEF.md` (for you to edit)
+  and a `status.json` (the report Roo reads).
+- `~/portfolio/OPERATING.md`, the rules every agent follows.
+- Your agents in `~/portfolio/agents`:
+  - **Roo**, the assistant you talk to.
+  - **A lead per business**, named `<id>-lead` (for example `acme-lead`).
+  - **A chief of staff**, who reads everything each week and picks your top moves.
+  - **Five shared managers**: sales, marketing, delivery, finance and admin. Any lead can
+    hand them work.
+- The scripts Roo runs, in `~/portfolio/bin`.
 
-- **Turn on the night shift:** `sh ~/portfolio/launchd/install.sh`
-- **Show your own chat sessions in Roo** (Claude Code only): paste the hooks snippet it
-  prints into `~/.claude/settings.json`.
+Setup never overwrites a file that already exists.
 
-Click **I ran it, check again** in Roo, and your board appears.
+**Make the leads yours.** Open each business's `BRIEF.md` and write a few lines: what the
+business sells, who the customers are, what matters this quarter, what to leave alone. The
+lead reads it before every run. A good brief is the biggest upgrade you can make.
 
-## What happens every night
+**Add a business later.** Run setup again. It adds the new one and leaves the rest alone.
 
-At 5:30am each lead reads its business's brief, looks at what changed, does the work that
-needs nobody's sign-off (research, drafts, fixes on a branch, notes), and rewrites its
-report. On Mondays at 6:30am the chief of staff reads everything and writes `WEEK.md`:
-your three moves for the week. You can run a shift by hand with
-`python3 ~/portfolio/bin/nightly.py`, or test that everything is wired with `--check`.
-
-## ChatGPT or Claude, and switching later
-
-The choice lives in one line of `~/portfolio/portfolio.json`:
-
-```
-"runner": "codex"
-```
-
-Change it to `"claude-code"` or `"opencode"` and the next run uses that one. Each lead finds
-the instructions it needs the first time it runs there. Or run setup again with
-`--runner claude-code` (or `codex`, `opencode`), which also installs the files and checks
-you're signed in. One business can use a different AI from the rest: add
-`"runner": "claude-code"` to that business in the same file. To pick a model, use
-`"runner": {"name": "codex", "model": "<model name>"}`.
-
-What differs:
-
-- **Teams.** Claude Code and opencode leads can hand work to the managers in parallel.
-  Codex leads work solo: they do the same jobs themselves, one after another, and Roo shows
-  "worked solo".
-- **Cost.** Roo shows dollars when the AI reports them (Claude Code, opencode) and token
-  counts when it only reports tokens (Codex). It never estimates.
-- **Guardrails.** All three get the same rules: no sending, no paying, no force-pushes,
-  merges or production deploys. For Codex, setup can also install those rules into Codex's
-  own settings; it shows you the file and only does it when you run
-  `python3 ~/pulse/kit/setup.py --install-codex-rules`.
-
-## What your agents can see
-
-A lead works in `~/portfolio` and nowhere else, unless you list more folders for it. To let
-the Acme lead work on its website code, add the folder to that business in
+**Let a lead touch code.** By default a lead works only inside `~/portfolio`. To let the
+Acme lead work on its website, add the folder to that business in
 `~/portfolio/portfolio.json`:
 
 ```
 "dirs": ["~/code/acme-site"]
 ```
 
-How strictly that's enforced depends on the AI:
+When setup finishes, click **I ran it, check again** in Roo. Your board appears.
 
-- **Codex** enforces it for everything: the operating system blocks every command from
-  reading or writing anywhere else in your home folder.
-- **Claude Code** enforces it for its own file tools and for shell commands like `ls` and
-  `cat`. Other programs a lead runs, like `git` or a script, aren't fenced by Claude Code.
-- **opencode** enforces it for its file tools; shell commands are checked by matching the
-  command's text, which is best-effort.
+## 5. Connect your accounts
 
-## The four gates
+Open **Connections** in the sidebar. It shows each service your agents can reach: connected,
+needs sign-in, or not set up, and when Roo last checked.
 
-A lead brings something to you **only** if it needs:
+- Click a service to see what agents use it for and the exact steps to connect it.
+- **Check again** re-tests every connection.
 
-1. **A decision** only you can make (strategy, pricing, people, partners).
-2. **Money or a signature** (any spend, contract, purchase or filing).
-3. **A relationship**: anything sent in your name. The lead drafts it; you send it.
+The ones most people start with:
+
+| Service | What agents do with it | How you connect it |
+|---|---|---|
+| Email | Save drafts. You send from the Outbox. | Add the mailbox to `portfolio.json`, then store its app password with `keyring_store.py set <id>` |
+| Google Calendar and Drive | Read your calendar and files, make docs | In Claude Code, type `/mcp` and connect the claude.ai connectors |
+| GitHub | Branches and pull requests | `gh auth login` |
+| Vercel | Preview deploys | `vercel login` |
+| Stripe | Draft invoices and quotes | A restricted key per business, stored in the Keychain |
+
+Keys and passwords go in your Mac's Keychain. Roo never shows them, prints them or writes
+them to a file.
+
+**Different Google accounts per business.** The claude.ai connectors sign in to one Google
+account. If Acme uses its own Google Workspace account, give that account its own sign-in
+from its Connections entry. Each business can also have its own Chrome profile, so agents
+that use the browser act as the right account. List them under `browsers` in
+`portfolio.json`.
+
+## 6. Your daily flow
+
+**Morning: Today.** Roo opens on Today. The top line says how many moves you have this week,
+how many decisions need you, and the cash that came in. Below it: what the night shift did,
+the decisions waiting on you, and each business, worst first.
+
+**Decide.** Every decision comes with the lead's recommendation.
+
+- **Approve** tells the lead to do it now.
+- **Reject** drops it.
+- **Discuss** sends the lead your question. The answer shows up under the decision.
+
+**Outbox: one click to send.** Anything an agent writes for someone else waits here: emails,
+posts, texts, invoices. Read it, edit it if you like, and click **Send** (or **Approve**).
+Nothing leaves until you click. Roo learns from what you edit and what you skip.
+
+**Board.** Every business as a card, colored by health. Click one for its full report:
+metrics, decisions, next moves, risks, and what got done this week.
+
+**Goals.** Each business's goals and how close it is. You set the targets. Leads update the
+numbers they can measure and flag the ones at risk.
+
+**Conversations.** Every run, word for word, grouped by business. Secrets are hidden. Type
+under any thread to keep talking with that lead.
+
+**Activity.** What the org did: runs, decisions, drafts, your clicks, and what it cost.
+
+**Talk to Roo.** Press ⌘K and type, or start with a business name to go straight to its
+lead:
+
+```
+Acme: draft a follow-up to the bakery that asked about pricing
+```
+
+Say **Brief me** for a morning or evening summary.
+
+**Voice.** Press ⌥⇧Space anywhere on your Mac and speak. Speech turns into text on the Mac.
+A pause sends it to Roo. Roo can read its replies aloud. Change the voice, speed and hotkey in
+Settings > General. The first time, macOS asks for the microphone and speech recognition.
+
+**Telegram (optional).** If you run a Telegram bot for your org, Roo sends the meeting brief
+there when your Mac is closed or locked, so you stay in the loop from your phone. The bot
+isn't in the starter kit yet. Make one with Telegram's BotFather if you want it.
+
+## 7. The safety gates
+
+Agents do the work. You make the calls that matter. A lead brings you something **only** if
+it needs one of these:
+
+1. **A decision only you can make**: strategy, pricing, people, partners.
+2. **Money or a signature**: any spend, contract, purchase or filing.
+3. **A relationship**: anything sent in your name. The lead drafts it. You send it.
 4. **Your taste**: sign-off on anything that goes public.
 
-Everything else, the lead handles and lists under "done". Agents never send email or
-messages, never pay for anything, never merge to main or deploy to production, and never
-delete data. What they write for others waits in Roo's **Outbox**: you read it, edit it if you
-like, and send it with one click.
+And these are always yours, every time:
 
-## Using Roo
+- **Sending.** Agents never send email, texts, DMs or posts. They draft. You click Send.
+- **Money.** Agents never pay, buy or move money. Refunds, charges and plan changes wait for
+  your Approve click.
+- **Deletes.** Agents never delete data. They can archive.
+- **Form submits.** Agents can fill in a web form for you. You read it and click Submit.
+- **Passwords and IDs.** Agents never type passwords, card numbers, bank numbers or
+  government IDs.
 
-- **Today** opens first: one line (moves, decisions, cash), last night's shift, the
-  decisions waiting on you, and each business, worst health first.
-- **Approve, Reject or Discuss.** Every decision comes with a recommendation. **Approve**
-  tells the lead to carry it out now. **Reject** drops it. **Discuss** sends the lead your
-  question; its answer appears under the decision. Anything touching money or a relationship
-  asks you to confirm first.
-- **Working now** shows each agent while it runs, what it's doing this second, and the team
-  it deployed (a lead can hand work to the managers in parallel).
-- **Board** is every business as a card; click one for its full report.
-- **Activity** is what the org did: runs, decisions, drafts and cost.
-- **Conversations** is every run, word for word, grouped by business. Secrets are redacted.
-- **Money** appears only if you connect an optional tracker that collects payments.
-  Without one, your leads report cash in their own numbers on the Board.
+Out of the box, agents also never merge to main or deploy to production. You can loosen that
+per business later in `OPERATING.md`.
 
-## Talk to Roo
+## 8. Night shift, runners and limits
 
-Type (or say) anything in Roo's command box. Roo answers quick things itself and hands longer
-work to the right lead, which runs in the background; the lead's report comes back in the same
-conversation. Start with a business's name ("Acme: draft the pricing page") to go straight to
-that lead. **Brief me** asks Roo for a morning or evening summary. Chats run on the AI you
-chose, with the same guardrails as the night shift. With Claude Code, each lead remembers the
-conversation; with Codex or opencode, each message starts fresh and the lead reads its
-business's files for context.
-
-## Connect email, Stripe and the rest (optional)
-
-Roo's **Connections** page lists what the agents can reach and how to connect each one. The
-short version:
-
-- **Email from the Outbox.** Add each mailbox to `~/portfolio/portfolio.json`:
-  `"email_accounts": {"acme": {"address": "you@acme.com", "entity": "acme"}}` (Gmail by
-  default; add `smtp_host` / `imap_host` for others). Then store its app password in your
-  Keychain: `python3 ~/portfolio/bin/keyring_store.py set acme`. Drafts are saved to that
-  mailbox's Drafts folder; nothing is sent until you click Send in Roo.
-- **Stripe.** `keyring_store.py set stripe:<business id>` (a restricted key the agents use to
-  draft invoices and quotes) and `keyring_store.py set stripe-action:<business id>` (used only
-  when you click Approve).
-- **Claude.ai connectors** (Gmail search, Calendar): connect them in Claude Code with `/mcp`.
-
-Keys live in the macOS Keychain and are never printed or written to a file.
-
-## Talk to a lead in Terminal
-
-Open Terminal and run:
+**Turn on the night shift.** Run this once:
 
 ```
-python3 ~/portfolio/bin/talk.py acme
+sh ~/portfolio/launchd/install.sh
 ```
 
-(use your own business's id). It opens that lead in whichever AI you chose, already knowing
-the business and the rules. Ask it anything: "what's slipping?", "draft the follow-up to the
-bakery", "plan the launch". For the whole picture, run
-`python3 ~/portfolio/bin/talk.py chief-of-staff "weekly review"`.
+At 5:30am each lead reads its brief, checks what changed, does what it can, and rewrites its
+report. On Mondays the chief of staff writes `WEEK.md`: your three moves for the week. To run
+a shift by hand: `python3 ~/portfolio/bin/nightly.py`. To test the wiring:
+add `--check`.
+
+**Switch AI later.** One line in `~/portfolio/portfolio.json` picks the AI:
+
+```
+"runner": "claude-code"
+```
+
+Use `"codex"` or `"opencode"` instead and the next run uses that one. One business can use a
+different AI from the rest: add `"runner"` to that business.
+
+**What agents can see.** A lead works in `~/portfolio` and the folders you list in its
+`dirs`. Codex enforces that for every command. Claude Code and opencode enforce it for their
+own file tools; other programs a lead runs are not fenced.
+
+**Talk to a lead in Terminal.** Run `python3 ~/portfolio/bin/talk.py acme` (your own id). It
+opens that lead in your AI, already knowing the business and the rules.
+
+**Updating.** Run `git -C ~/pulse pull`, then `python3 ~/pulse/kit/setup.py --update-bin`.
+That refreshes the scripts. Your businesses, reports and agents are left alone.
+
+## 9. Troubleshooting
+
+- **"Roo is damaged" or it won't open.** Right-click > Open, or System Settings > Privacy &
+  Security > Open Anyway.
+- **The board is empty.** Setup didn't finish, or `~/portfolio` is somewhere else. Run setup
+  again and click **I ran it, check again**.
+- **A lead never runs at night.** Run `python3 ~/portfolio/bin/nightly.py --check`. It says
+  what's missing.
+- **A connector says "Needs sign-in".** Open it under Connections and follow
+  the steps, then click **Check again**.
+- **Voice does nothing.** Turn on Dictation once in System Settings > Keyboard, then allow the
+  microphone for Roo.
