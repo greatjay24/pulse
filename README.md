@@ -172,7 +172,7 @@ Roo is also where you tell the org what to do.
   before) are listed with Claude Code's name and status; Roo mirrors them read-only and "Go to
   window" brings one forward. Nothing is ever typed into them. Layout: full page, or beside
   Roo's chat. Needs `brew install tmux`; Roo writes its tmux settings to
-  `~/.config/roo/tmux.conf` (no status bar, no Esc delay, outer scrollback). Listing Terminal.app
+  `~/.config/roo/tmux.conf` (no status bar, no Esc delay, outer scrollback, prefix Ctrl-] so Ctrl-B stays Claude's). Listing Terminal.app
   windows asks once for Automation permission (Roo > Terminal).
 
 How it runs: Roo calls `~/portfolio/bin/ask.py <entity|lead> --message "..."`

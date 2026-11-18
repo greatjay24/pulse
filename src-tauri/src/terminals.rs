@@ -35,8 +35,11 @@ const PEEK_MAX: usize = 200 * 1024;
 // Applied to the tmux server whenever Roo starts or attaches a session (and by open-sessions.sh
 // when it starts the server), so tmux behaves like a plain terminal in Roo and in Terminal.app:
 // no status bar (Roo has tabs), no Esc delay (Claude Code reads Esc), the outer terminal keeps
-// its own scrollback and selection (no alternate screen, no mouse capture), true colour.
+// its own scrollback and selection (no alternate screen, no mouse capture), true colour. The prefix
+// moves off Ctrl-B, which Claude Code uses (background a running command); Ctrl-] then d detaches.
 pub(crate) const TMUX_CONF: &str = "# Managed by Roo: rewritten when Roo starts a terminal. Edits here are replaced.\n\
+set -g prefix C-]\n\
+bind C-] send-prefix\n\
 set -g default-terminal \"xterm-256color\"\n\
 set -s escape-time 0\n\
 set -g history-limit 50000\n\
@@ -850,6 +853,27 @@ mod tests {
     fn attach_script_names_the_exact_session() {
         let s = attach_script("/opt/homebrew/bin/tmux", "Jay's");
         assert!(s.ends_with("exec /opt/homebrew/bin/tmux -u attach-session -t '=Jay'\\''s'\n"), "{s}");
+    }
+
+    // Roo's settings load cleanly into real tmux and leave Ctrl-B to Claude Code.
+    #[test]
+    fn tmux_conf_loads() {
+        let Some(bin) = tmux_bin() else { return };
+        let sock = format!("pulse-conf-{}", std::process::id());
+        let conf = std::env::temp_dir().join(format!("{}.conf", sock));
+        std::fs::write(&conf, TMUX_CONF).unwrap();
+        let t = |args: &[&str]| {
+            let mut all = vec!["-L", sock.as_str()];
+            all.extend_from_slice(args);
+            tmux(bin, &all)
+        };
+        t(&["-f", &conf.to_string_lossy(), "new-session", "-d", "-s", "c"]).unwrap();
+        assert!(t(&["source-file", &conf.to_string_lossy()]).is_ok(), "re-applying is harmless");
+        assert_eq!(t(&["show", "-gv", "prefix"]).unwrap().trim(), "C-]");
+        assert_eq!(t(&["show", "-gv", "status"]).unwrap().trim(), "off");
+        assert_eq!(t(&["show", "-sv", "escape-time"]).unwrap().trim(), "0");
+        t(&["kill-server"]).ok();
+        let _ = std::fs::remove_file(&conf);
     }
 
     // Real tmux, on a private socket: start, list, attach through a pty, detach, the session lives on.
