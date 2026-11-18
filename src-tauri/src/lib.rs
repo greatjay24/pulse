@@ -2,6 +2,7 @@ mod attach;
 mod command;
 mod jarvis;
 mod pty;
+mod terminals;
 mod proactive;
 mod ops;
 mod usage;
@@ -3864,9 +3865,15 @@ pub fn run() {
             setup_check,
             command::ask_lead,
             command::stop_run,
-            command::open_in_terminal,
             command::list_org_agents,
-            pty::pty_open,
+            terminals::term_list,
+            terminals::term_new,
+            terminals::term_attach,
+            terminals::term_kill,
+            terminals::term_open_outside,
+            terminals::term_focus,
+            terminals::term_peek,
+            terminals::term_folders,
             pty::pty_write,
             pty::pty_resize,
             pty::pty_close,

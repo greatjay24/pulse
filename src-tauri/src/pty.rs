@@ -1,22 +1,30 @@
 // ==========================================
-// Terminal: a real Claude Code session in a Roo tab
+// Terminal tabs: a real terminal attached to a tmux session
 // ==========================================
-// Each tab is a pseudo-terminal running the owner's login shell, which runs
-// `claude --agent <lead>` (or plain `claude`) in ~ with their normal environment and sign-in.
-// The only command a tab can start is claude; what the owner types goes to it as keystrokes.
-// Output streams to the window as `pty://data` events; `pty://exit` says a tab's session ended.
+// Each Roo terminal tab is a pseudo-terminal running `tmux attach -t =<session>`. The session
+// itself lives in tmux (terminals.rs starts it), so closing a tab or quitting Roo only detaches:
+// whatever runs inside keeps running, and Terminal.app can attach to the same session.
+//
+// Output is sent to the tab as raw bytes over its own IPC channel (an ArrayBuffer in the page;
+// xterm.js decodes UTF-8 across chunks itself). Reads are coalesced for a few milliseconds so a
+// burst of output is one message, not hundreds, while a single keystroke's echo still goes at once.
+// When the client ends (the session ended, or it was detached elsewhere) the channel gets
+// `{"exit": true}`.
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
-use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, State};
+use std::sync::{mpsc, Mutex};
+use std::time::{Duration, Instant};
+use tauri::ipc::{Channel, InvokeResponseBody};
+use tauri::State;
 
-const MAX_TABS: usize = 8;
-const WRITE_MAX: usize = 64 * 1024;
+const MAX_TABS: usize = 24;
+const WRITE_MAX: usize = 256 * 1024; // a big paste arrives in one write
 const SHELL_FALLBACK: &str = "/bin/zsh";
+const COALESCE: Duration = Duration::from_millis(4);
+const FLUSH_AT: usize = 256 * 1024;
 
 struct Session {
     master: Box<dyn MasterPty + Send>,
@@ -30,19 +38,8 @@ pub(crate) struct Ptys {
     sessions: Mutex<HashMap<u32, Session>>,
 }
 
-#[derive(Clone, Serialize)]
-struct PtyData {
-    id: u32,
-    data: String,
-}
-
-#[derive(Clone, Serialize)]
-struct PtyExit {
-    id: u32,
-}
-
 // The owner's login shell when it is a real, listed shell; zsh otherwise.
-fn login_shell() -> String {
+pub(crate) fn login_shell() -> String {
     let listed = std::fs::read_to_string("/etc/shells").unwrap_or_default();
     std::env::var("SHELL")
         .ok()
@@ -50,79 +47,61 @@ fn login_shell() -> String {
         .unwrap_or_else(|| SHELL_FALLBACK.to_string())
 }
 
-// What the shell runs. The agent is already checked against the org (a slug, so no quoting
-// is needed); keys exported by the shell's own startup files are unset so a stray key can't
-// switch billing.
-pub(crate) fn shell_command(agent: Option<&str>) -> String {
-    let run = match agent {
-        Some(a) => format!("exec claude --agent {}", a),
-        None => "exec claude".to_string(),
-    };
-    format!("unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; {}", run)
+fn size(cols: u16, rows: u16) -> PtySize {
+    PtySize { rows: rows.clamp(5, 500), cols: cols.clamp(20, 1000), pixel_width: 0, pixel_height: 0 }
 }
 
-// Splits bytes into the longest valid UTF-8 prefix and the bytes of a character cut off at
-// the end of a read, which are carried into the next read.
-pub(crate) fn utf8_split(buf: &[u8]) -> (String, Vec<u8>) {
-    match std::str::from_utf8(buf) {
-        Ok(s) => (s.to_string(), Vec::new()),
-        Err(e) if e.error_len().is_none() => {
-            let (ok, rest) = buf.split_at(e.valid_up_to());
-            (String::from_utf8_lossy(ok).into_owned(), rest.to_vec())
+// Collects chunks from `rx` into batches: the first chunk of a batch waits for nothing; after it,
+// more is gathered while it keeps arriving within `window`, up to `max` bytes. Returns None when
+// the reader has finished and everything was handed out.
+pub(crate) fn next_batch(rx: &mpsc::Receiver<Vec<u8>>, window: Duration, max: usize) -> Option<Vec<u8>> {
+    let mut out = rx.recv().ok()?;
+    let started = Instant::now();
+    while out.len() < max {
+        let left = window.saturating_sub(started.elapsed());
+        match rx.recv_timeout(left) {
+            Ok(more) => out.extend_from_slice(&more),
+            Err(_) => break,
         }
-        Err(_) => (String::from_utf8_lossy(buf).into_owned(), Vec::new()),
     }
+    Some(out)
 }
 
-#[tauri::command]
-pub(crate) fn pty_open(app: AppHandle, ptys: State<'_, Ptys>, agent: Option<String>, cols: u16, rows: u16) -> Result<u32, String> {
-    let agent = super::command::check_agent(agent.as_deref())?;
+// Starts `cmd` on a new pty and streams its output to `channel`. Returns the tab's pty id.
+pub(crate) fn spawn(ptys: &Ptys, cmd: CommandBuilder, cols: u16, rows: u16, channel: Channel<InvokeResponseBody>) -> Result<u32, String> {
     if ptys.sessions.lock().map_err(|e| e.to_string())?.len() >= MAX_TABS {
         return Err(format!("close a tab first (at most {} at once)", MAX_TABS));
     }
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let pair = native_pty_system()
-        .openpty(PtySize { rows: rows.clamp(5, 500), cols: cols.clamp(20, 1000), pixel_width: 0, pixel_height: 0 })
-        .map_err(|e| format!("could not open a terminal: {}", e))?;
-
-    let mut cmd = CommandBuilder::new(login_shell());
-    cmd.args(["-l", "-i", "-c", &shell_command(agent.as_deref())]);
-    cmd.cwd(&home);
-    cmd.env_remove("ANTHROPIC_API_KEY");
-    cmd.env_remove("ANTHROPIC_AUTH_TOKEN");
-    cmd.env("TERM", "xterm-256color");
-    cmd.env("COLORTERM", "truecolor");
-    if std::env::var("LANG").is_err() {
-        cmd.env("LANG", "en_US.UTF-8");
-    }
-    let child = pair.slave.spawn_command(cmd).map_err(|e| format!("could not start claude: {}", e))?;
+    let pair = native_pty_system().openpty(size(cols, rows)).map_err(|e| format!("could not open a terminal: {}", e))?;
+    let child = pair.slave.spawn_command(cmd).map_err(|e| format!("could not start the terminal: {}", e))?;
     drop(pair.slave);
 
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     let id = ptys.next.fetch_add(1, Ordering::Relaxed) + 1;
-    ptys.sessions
-        .lock()
-        .map_err(|e| e.to_string())?
-        .insert(id, Session { master: pair.master, writer, child });
+    ptys.sessions.lock().map_err(|e| e.to_string())?.insert(id, Session { master: pair.master, writer, child });
 
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
     std::thread::spawn(move || {
-        let mut buf = [0u8; 16 * 1024];
-        let mut carry: Vec<u8> = Vec::new();
+        let mut buf = vec![0u8; 64 * 1024];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    carry.extend_from_slice(&buf[..n]);
-                    let (text, rest) = utf8_split(&carry);
-                    carry = rest;
-                    if !text.is_empty() {
-                        let _ = app.emit("pty://data", PtyData { id, data: text });
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
                     }
                 }
             }
         }
-        let _ = app.emit("pty://exit", PtyExit { id });
+    });
+    std::thread::spawn(move || {
+        while let Some(batch) = next_batch(&rx, COALESCE, FLUSH_AT) {
+            if channel.send(InvokeResponseBody::Raw(batch)).is_err() {
+                break;
+            }
+        }
+        let _ = channel.send(InvokeResponseBody::Json("{\"exit\":true}".to_string()));
     });
     Ok(id)
 }
@@ -141,13 +120,12 @@ pub(crate) fn pty_write(ptys: State<'_, Ptys>, id: u32, data: String) -> Result<
 pub(crate) fn pty_resize(ptys: State<'_, Ptys>, id: u32, cols: u16, rows: u16) -> Result<(), String> {
     let sessions = ptys.sessions.lock().map_err(|e| e.to_string())?;
     let s = sessions.get(&id).ok_or("that terminal has closed")?;
-    s.master
-        .resize(PtySize { rows: rows.clamp(5, 500), cols: cols.clamp(20, 1000), pixel_width: 0, pixel_height: 0 })
-        .map_err(|e| e.to_string())
+    s.master.resize(size(cols, rows)).map_err(|e| e.to_string())
 }
 
 fn hang_up(mut s: Session) {
-    // The shell leads its own session: a hangup to the group ends claude and what it started.
+    // The pty's process (a tmux client) leads its own session: a hangup detaches it. The tmux
+    // session it was attached to, and everything running in it, carries on.
     #[cfg(unix)]
     if let Some(pid) = s.child.process_id() {
         extern "C" {
@@ -162,6 +140,7 @@ fn hang_up(mut s: Session) {
     let _ = s.child.wait();
 }
 
+// Closing a tab detaches it (see hang_up); the session keeps running.
 #[tauri::command]
 pub(crate) fn pty_close(ptys: State<'_, Ptys>, id: u32) -> Result<(), String> {
     let s = ptys.sessions.lock().map_err(|e| e.to_string())?.remove(&id);
@@ -171,7 +150,7 @@ pub(crate) fn pty_close(ptys: State<'_, Ptys>, id: u32) -> Result<(), String> {
     Ok(())
 }
 
-// Quitting Roo ends every tab's session.
+// Quitting Roo detaches every tab.
 pub(crate) fn close_all(ptys: &Ptys) {
     if let Ok(mut sessions) = ptys.sessions.lock() {
         for (_, s) in sessions.drain() {
@@ -185,27 +164,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shell_runs_only_claude() {
-        assert_eq!(shell_command(Some("acme-lead")), "unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; exec claude --agent acme-lead");
-        assert_eq!(shell_command(None), "unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; exec claude");
-    }
-
-    #[test]
-    fn utf8_cut_mid_character_is_carried() {
-        let bytes = "ok ✓".as_bytes();
-        let (text, rest) = utf8_split(&bytes[..bytes.len() - 1]);
-        assert_eq!(text, "ok ");
-        assert_eq!(rest, &bytes[3..bytes.len() - 1]);
-        let mut next = rest.clone();
-        next.push(bytes[bytes.len() - 1]);
-        assert_eq!(utf8_split(&next), ("✓".to_string(), vec![]));
-        // Bytes that are invalid (not just cut off) never stall the stream.
-        assert_eq!(utf8_split(&[0xff, b'a']).1, Vec::<u8>::new());
+    fn batches_coalesce_a_burst_but_never_hold_the_first_chunk() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(b"a".to_vec()).unwrap();
+        tx.send(b"b".to_vec()).unwrap();
+        tx.send(b"c".to_vec()).unwrap();
+        assert_eq!(next_batch(&rx, Duration::from_millis(20), 1024).unwrap(), b"abc");
+        // A lone chunk comes back after at most the window.
+        tx.send(b"x".to_vec()).unwrap();
+        let t = Instant::now();
+        assert_eq!(next_batch(&rx, Duration::from_millis(5), 1024).unwrap(), b"x");
+        assert!(t.elapsed() < Duration::from_millis(200));
+        // A batch stops growing at `max`.
+        tx.send(vec![1; 8]).unwrap();
+        tx.send(vec![2; 8]).unwrap();
+        tx.send(vec![3; 8]).unwrap();
+        assert_eq!(next_batch(&rx, Duration::from_millis(20), 10).unwrap().len(), 16);
+        assert_eq!(next_batch(&rx, Duration::from_millis(1), 10).unwrap(), vec![3; 8]);
+        drop(tx);
+        assert!(next_batch(&rx, Duration::from_millis(1), 10).is_none());
     }
 
     #[test]
     fn a_real_pty_runs_a_shell() {
-        let pair = native_pty_system().openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }).unwrap();
+        let pair = native_pty_system().openpty(size(80, 24)).unwrap();
         let mut cmd = CommandBuilder::new("/bin/sh");
         cmd.args(["-c", "printf pulse-pty-ok"]);
         let mut child = pair.slave.spawn_command(cmd).unwrap();

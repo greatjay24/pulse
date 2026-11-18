@@ -162,10 +162,18 @@ Roo is also where you tell the org what to do.
   with their tool steps and any team the lead deploys. While a lead is replying, Enter
   queues your next message (it goes when the reply ends, in the same conversation) and
   "Stop and send" ends the reply first. Stop ends a run and everything it started.
-- **Terminal**: real `claude --agent <lead>` (or plain `claude`) sessions in tabs, started
-  in your home folder through your login shell, so your environment and sign-in are the
-  usual ones. Up to eight tabs; closing one ends its session. "Open in Terminal.app" opens
-  the same thing outside Roo.
+- **Terminal**: every terminal session on the Mac, in tabs. Terminals opened from Roo (⌘T: pick
+  a folder from the tracker's projects, optionally start `claude` with the same name, optionally
+  as a lead) and from `~/portfolio/bin/open-sessions.sh` run inside a named tmux session, so a
+  tab is a real terminal (xterm.js, WebGL, true colour, search, clickable links, SF Mono) and
+  Terminal.app can attach to the same session ("Also open in Terminal.app"). Closing a tab (⌘W)
+  or quitting Roo only detaches; "End session" stops it. ⌘1–9 switch tabs, ⌘F finds, ⌘+/⌘−
+  size text, ⇧Enter is a new line in Claude. Terminal.app windows that aren't tmux (opened
+  before) are listed with Claude Code's name and status; Roo mirrors them read-only and "Go to
+  window" brings one forward. Nothing is ever typed into them. Layout: full page, or beside
+  Roo's chat. Needs `brew install tmux`; Roo writes its tmux settings to
+  `~/.config/roo/tmux.conf` (no status bar, no Esc delay, outer scrollback). Listing Terminal.app
+  windows asks once for Automation permission (Roo > Terminal).
 
 How it runs: Roo calls `~/portfolio/bin/ask.py <entity|lead> --message "..."`
 (`--new`, `--session <id>`, `--stop <run_id>`), the same way decisions call `act.py`.

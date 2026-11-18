@@ -160,16 +160,6 @@ pub(crate) async fn stop_run(run_id: String) -> Result<String, String> {
     run_ask(ask_script(&root)?, vec![format!("--stop={}", run_id)], STOP_TIMEOUT).await
 }
 
-// "Open in Terminal.app": a one-off .command file Terminal runs, so no Apple Events
-// permission is needed. The agent is checked against the org; the file holds nothing else.
-pub(crate) fn terminal_script(agent: Option<&str>) -> String {
-    let run = match agent {
-        Some(a) => format!("exec claude --agent {}", a),
-        None => "exec claude".to_string(),
-    };
-    format!("#!/bin/zsh -l\ncd ~ || exit 1\nunset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN\nrm -f \"$0\"\n{}\n", run)
-}
-
 pub(crate) fn check_agent(agent: Option<&str>) -> Result<Option<String>, String> {
     match agent {
         None => Ok(None),
@@ -185,26 +175,6 @@ pub(crate) fn check_agent(agent: Option<&str>) -> Result<Option<String>, String>
             }
         }
     }
-}
-
-#[tauri::command]
-pub(crate) fn open_in_terminal(agent: Option<String>) -> Result<(), String> {
-    let agent = check_agent(agent.as_deref())?;
-    let dir = std::env::temp_dir().join("pulse-terminal");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = dir.join(format!("{}-{}.command", agent.as_deref().unwrap_or("claude"), std::process::id()));
-    std::fs::write(&path, terminal_script(agent.as_deref())).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
-    }
-    std::process::Command::new("/usr/bin/open")
-        .args(["-a", "Terminal"])
-        .arg(&path)
-        .spawn()
-        .map_err(|e| format!("could not open Terminal: {}", e))?;
-    Ok(())
 }
 
 #[tauri::command]
@@ -268,13 +238,5 @@ mod tests {
         assert!(target_known(&root, "org").is_ok());
         assert!(target_known(&root, "globex").is_err());
         let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn terminal_script_runs_only_claude() {
-        let s = terminal_script(Some("acme-lead"));
-        assert!(s.ends_with("exec claude --agent acme-lead\n"));
-        assert!(s.contains("unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN"));
-        assert!(terminal_script(None).ends_with("exec claude\n"));
     }
 }
