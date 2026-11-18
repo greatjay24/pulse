@@ -433,7 +433,7 @@ function KindTag({ m }: { m: OutboxMessage }) {
   );
 }
 
-function OutboxItem({ entry, entity, onDone }: { entry: OutboxEntry; entity?: PortfolioEntity; onDone: () => void }) {
+export function OutboxItem({ entry, entity, onDone }: { entry: OutboxEntry; entity?: PortfolioEntity; onDone: () => void }) {
   const { tokens } = useTheme();
   const c = tokens.colors;
   const m = entry.item;

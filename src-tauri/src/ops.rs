@@ -262,6 +262,55 @@ pub async fn outbox_mark_handsent(id: String) -> Result<String, String> {
     Ok(v.to_string())
 }
 
+// ------------------------------------------
+// Texts: Google Voice conversations (bin/voice_texts.py: read-only Gmail + voice_text Outbox items)
+// ------------------------------------------
+
+const TEXTS_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// "+13135550123": what voice_texts.py accepts as a conversation id.
+pub(crate) fn is_e164(n: &str) -> bool {
+    n.len() >= 8 && n.len() <= 16 && n.starts_with('+') && n[1..].chars().all(|c| c.is_ascii_digit())
+}
+
+#[tauri::command]
+pub async fn texts_list(refresh: Option<bool>) -> Result<String, String> {
+    let mut args = vec!["list".to_string()];
+    if refresh.unwrap_or(false) {
+        args.push("--refresh".into());
+    }
+    Ok(run_script_async("voice_texts.py", args, None, TEXTS_TIMEOUT).await?.to_string())
+}
+
+#[tauri::command]
+pub async fn texts_thread(number: String) -> Result<String, String> {
+    if !is_e164(&number) {
+        return Err("invalid phone number".into());
+    }
+    Ok(run_script_async("voice_texts.py", vec!["thread".into(), number], None, TEXTS_TIMEOUT).await?.to_string())
+}
+
+#[tauri::command]
+pub async fn texts_read(number: String) -> Result<String, String> {
+    if !is_e164(&number) {
+        return Err("invalid phone number".into());
+    }
+    Ok(run_script_async("voice_texts.py", vec!["read".into(), number], None, SCRIPT_TIMEOUT).await?.to_string())
+}
+
+// Queues a voice_text Outbox item (never sends). Jay sends it with the Outbox's own Send click.
+#[tauri::command]
+pub async fn texts_reply(number: String, body: String) -> Result<String, String> {
+    if !is_e164(&number) {
+        return Err("invalid phone number".into());
+    }
+    let body = body.trim().to_string();
+    if body.is_empty() || body.chars().count() > 1600 {
+        return Err("a text is 1 to 1600 characters".into());
+    }
+    Ok(run_script_async("voice_texts.py", vec!["reply".into(), number], Some(body), TEXTS_TIMEOUT).await?.to_string())
+}
+
 // The owner posted an approved post/text/DM/Slack message by hand.
 #[tauri::command]
 pub async fn outbox_mark_published(id: String) -> Result<String, String> {
@@ -710,6 +759,15 @@ mod ops_tests {
         assert!(edit_fields_ok(&serde_json::json!({"amount": 1})).is_err());
         assert!(edit_fields_ok(&serde_json::json!({})).is_err());
         assert!(edit_fields_ok(&serde_json::json!("body")).is_err());
+    }
+
+    #[test]
+    fn texts_numbers_are_e164() {
+        assert!(is_e164("+13135550123"));
+        assert!(!is_e164("13135550123"));
+        assert!(!is_e164("+1313555012a"));
+        assert!(!is_e164("+1; rm -rf"));
+        assert!(!is_e164("+1"));
     }
 
     #[test]

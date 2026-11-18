@@ -30,6 +30,7 @@ const MAIN_NAV: { id: string; label: string; icon: string }[] = [
   { id: 'money', label: 'Money', icon: 'wallet' },
   { id: 'usage', label: 'Usage', icon: 'trending-up' }, // where the Claude plan goes: by day, business, lead, model
   { id: 'terminal', label: 'Terminal', icon: 'terminal' }, // Claude Code sessions with any lead, in tabs
+  { id: 'texts', label: 'Texts', icon: 'mobile' }, // Google Voice conversations; replies queue in the Outbox
   { id: 'outbox', label: 'Outbox', icon: 'mail' }, // messages agents wrote, sent on the owner's click
   { id: 'goals', label: 'Goals', icon: 'target' },
   { id: 'connections', label: 'Connections', icon: 'globe' },
