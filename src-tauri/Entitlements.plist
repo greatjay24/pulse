@@ -5,5 +5,8 @@
   <!-- Hardened runtime blocks the mic unless this is declared (conversation mode, dictation). -->
   <key>com.apple.security.device.audio-input</key>
   <true/>
+  <!-- The Terminal page reads Terminal.app's window list and brings a window to the front. -->
+  <key>com.apple.security.automation.apple-events</key>
+  <true/>
 </dict>
 </plist>

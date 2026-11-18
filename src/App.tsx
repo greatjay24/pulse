@@ -42,7 +42,7 @@ import { migrateApps } from './utils/platforms';
 import { DEMO } from './utils/orgSource';
 import { DemoBadge, Toast, Welcome } from './components/Welcome';
 import { CommandBox } from './components/CommandBox';
-import { TerminalPage, TerminalRequest } from './components/TerminalPage';
+import { TerminalLayout, TerminalPage, TerminalRequest } from './components/TerminalPage';
 import { chiefOf, frontDoorOf } from './utils/command';
 import { useVoice } from './hooks/useVoice';
 import { useReplyVoice } from './hooks/useReplyVoice';
@@ -90,6 +90,23 @@ function DashboardContent() {
   const [tvMode, setTvMode] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const [terminalRequest, setTerminalRequest] = useState<TerminalRequest | null>(null);
+  // The terminal as its own page, or beside Roo's chat (remembered).
+  const [terminalLayout, setTerminalLayoutState] = useState<TerminalLayout>(() => {
+    try {
+      return localStorage.getItem('roo.terminal.layout') === 'split' ? 'split' : 'full';
+    } catch {
+      return 'full';
+    }
+  });
+  const setTerminalLayout = useCallback((l: TerminalLayout) => {
+    setTerminalLayoutState(l);
+    try {
+      localStorage.setItem('roo.terminal.layout', l);
+    } catch {
+      // not remembered; still switches
+    }
+  }, []);
+  const rooChatFocus = useMemo<ConversationFocus>(() => ({ entity: PULSE_THREAD, nonce: 0 }), []);
   const [orgAgents, setOrgAgents] = useState<string[]>([]);
   const portfolio = usePortfolio();
   const [detailPanel, setDetailPanel] = useState<{ isOpen: boolean; type: DetailPanelType; originRect: CardRect | null }>({
@@ -965,7 +982,7 @@ function DashboardContent() {
       )}
 
       {/* Main Content */}
-      <main ref={mainRef} style={{ flex: 1, minWidth: 0, padding: tvMode ? '40px 56px' : compact ? '28px 24px' : '36px 48px', overflow: 'auto' }}>
+      <main ref={mainRef} style={{ flex: 1, minWidth: 0, padding: tvMode ? '40px 56px' : page === 'terminal' && !selectedEntity ? '14px 16px' : compact ? '28px 24px' : '36px 48px', overflow: 'auto' }}>
         {/* An entity's dashboard, over the page it was opened from */}
         {selectedEntity && (
           <EntityDashboard
@@ -1029,7 +1046,17 @@ function DashboardContent() {
 
         {/* Terminal: Claude Code sessions in tabs; kept mounted so they outlive a page switch */}
         {terminalUsed && (
-          <TerminalPage agents={orgAgents} request={terminalRequest} visible={page === 'terminal' && !selectedEntity} />
+          <div style={{ display: page === 'terminal' && !selectedEntity ? 'flex' : 'none', gap: '14px', height: '100%', minHeight: 0 }}>
+            {/* "Beside chat": Roo's own thread on the left. The terminal stays in the same slot, so its tabs live on. */}
+            {terminalLayout === 'split' && page === 'terminal' && !selectedEntity && (
+              <div style={{ flex: '0 0 42%', minWidth: 0, overflow: 'auto' }}>
+                <ConversationsPage snapshot={portfolio.snapshot} focus={rooChatFocus} onOpenTerminal={openTerminal} />
+              </div>
+            )}
+            <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>
+              <TerminalPage agents={orgAgents} request={terminalRequest} visible={page === 'terminal' && !selectedEntity} layout={terminalLayout} onLayout={setTerminalLayout} />
+            </div>
+          </div>
         )}
 
         {/* Operations: the Outbox (one-click send), goals per business, connected systems */}
