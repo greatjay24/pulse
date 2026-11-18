@@ -8,6 +8,7 @@ mod usage;
 mod todos;
 mod quick;
 mod tts;
+mod threads;
 
 use chrono::{Datelike, Timelike};
 use serde::{Deserialize, Serialize};
@@ -3875,6 +3876,7 @@ pub fn run() {
             ops::undo_action,
             ops::outbox_mark_published,
             ops::outbox_send,
+            threads::read_email_thread,
             ops::read_goals,
             ops::save_goal,
             ops::read_connections,

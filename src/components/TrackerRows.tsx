@@ -1,8 +1,9 @@
-import { ReactNode } from 'react';
+import { ReactNode, useState } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { TrackerEmail, TrackerNote, TrackerRepo, TrackerTask, Urgency } from '../types';
 import { formatIdle, formatWaiting, isGate, openExternal } from '../utils/tracker';
 import { Icon } from './Icons';
+import { EmailThreadModal, isThreadLink } from './EmailThread';
 
 function UrgencyDot({ urgency }: { urgency: Urgency | null }) {
   const { tokens } = useTheme();
@@ -125,10 +126,11 @@ export function TaskRow({ task, now }: { task: TrackerTask; now: number }) {
 
 export function ReplyRow({ email }: { email: TrackerEmail }) {
   const { tokens } = useTheme();
+  const [reading, setReading] = useState(false);
   const from = email.name && email.sender ? `${email.name} <${email.sender}>` : email.name || email.sender || 'Unknown sender';
   const age = email.age_days === null ? null : email.age_days < 1 ? 'today' : `${Math.floor(email.age_days)}d`;
-  return (
-    <Row url={email.url}>
+  const inner = (
+    <>
       <UrgencyDot urgency={email.urgency} />
       <span style={{ flex: 1, minWidth: 0 }}>
         <span style={{ display: 'block', fontSize: '15px', fontWeight: 500, lineHeight: 1.45 }}>{email.subject || '(no subject)'}</span>
@@ -138,7 +140,33 @@ export function ReplyRow({ email }: { email: TrackerEmail }) {
         </span>
       </span>
       {age && <span style={{ fontSize: '12px', color: tokens.colors.textDim, whiteSpace: 'nowrap', marginTop: '3px' }}>{age}</span>}
-    </Row>
+    </>
+  );
+  // A Gmail link Roo can read opens the whole thread here; anything else still opens in the browser.
+  if (!isThreadLink(email.url)) return <Row url={email.url}>{inner}</Row>;
+  const url = email.url;
+  return (
+    <>
+      <button
+        onClick={() => setReading(true)}
+        title="Read the thread"
+        onMouseEnter={(e) => (e.currentTarget.style.background = tokens.colors.bgCardHover)}
+        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+        style={{
+          display: 'flex', gap: '12px', alignItems: 'flex-start', width: '100%', padding: '12px 16px', textAlign: 'left',
+          fontFamily: 'inherit', color: tokens.colors.text, background: 'transparent', border: 'none',
+          borderRadius: tokens.radius.sm, transition: 'background 0.15s ease', cursor: 'pointer',
+        }}
+      >
+        {inner}
+        <span style={{ marginTop: '3px', flexShrink: 0, opacity: 0.6 }}>
+          <Icon name="mail" size={12} color={tokens.colors.textDim} />
+        </span>
+      </button>
+      {reading && (
+        <EmailThreadModal title={email.subject || '(no subject)'} source={{ link: url }} fallbackUrl={url} onClose={() => setReading(false)} />
+      )}
+    </>
   );
 }
 
