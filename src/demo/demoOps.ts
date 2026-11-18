@@ -34,6 +34,24 @@ export function demoOutbox(): OutboxSnapshot {
         },
       },
       {
+        content: 'demo-voice',
+        item: {
+          ...base, id: 'demo-acme-text-rosa', kind: 'voice_text', entity: 'acme', account: 'personal', to: ['+13125550142'],
+          contact: 'Rosa M', subject: 'Text to Rosa M', in_reply_to: 'demo-v2@txt.voice.google.com', references: ['demo-v2@txt.voice.google.com'],
+          reply_to: '16505166084.13125550142.demo@txt.voice.google.com', reply_subject: 'New text message from Rosa M',
+          link: 'https://voice.google.com/u/0/messages?itemId=t.%2B13125550142',
+          conversation: [
+            { at: iso(28 * 3_600_000), dir: 'in', kind: 'missed-call', text: null, withheld: null },
+            { at: iso(27 * 3_600_000), dir: 'in', kind: 'voicemail', text: 'Hey, it is Rosa, call me back about the menu shoot when you get a sec.', withheld: null },
+            { at: iso(26 * 3_600_000), dir: 'out', kind: 'text', text: 'On a call, will text you after.', withheld: null },
+            { at: iso(3 * 3_600_000), dir: 'in', kind: 'text', text: 'Are the photos up yet? Want to show my partner tonight.', withheld: null },
+          ],
+          body: 'Not yet, going up this afternoon. I will send you the preview link by 5.',
+          why: 'Rosa texted three hours ago asking about the photos; the preview goes live today.',
+          created_by: 'acme-lead', created_at: iso(2 * 3_600_000), status: 'pending',
+        },
+      },
+      {
         content: 'demo-4',
         item: {
           ...base, id: 'demo-northwind-invoice-1043', kind: 'stripe_send_invoice', entity: 'northwind', account: 'northwind', to: [],

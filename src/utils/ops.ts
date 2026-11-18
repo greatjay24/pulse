@@ -93,6 +93,26 @@ export function kindOf(m: OutboxMessage): OutboxKind {
 export const PUBLISH_KINDS: OutboxKind[] = ['post', 'text', 'dm', 'slack', 'tiktok_post'];
 export const isEmailKind = (k: OutboxKind) => k === 'email' || k === 'resend_email';
 export const isMoneyKind = (k: OutboxKind) => k.startsWith('stripe_');
+export const isVoiceKind = (k: OutboxKind) => k === 'voice_text';
+
+// ---------- Google Voice texts (bin/outbox.py VOICE_*) ----------
+
+export const VOICE_LINE = '+16505166084';
+export const VOICE_WEB = 'https://voice.google.com/u/0/messages';
+export const SMS_WARN = 480; // over ~3 SMS segments: Voice may split or trim it
+export const TEXT_MAX = 1600;
+
+// "+13139999167" -> "(313) 999-9167"; other countries stay as given.
+export function prettyPhone(n: string | null | undefined): string {
+  const d = (n ?? '').replace(/[^0-9]/g, '');
+  const us = d.length === 11 && d.startsWith('1') ? d.slice(1) : d.length === 10 ? d : null;
+  return us ? `(${us.slice(0, 3)}) ${us.slice(3, 6)}-${us.slice(6)}` : n ?? '';
+}
+
+// The conversation in Google Voice on the web.
+export function voiceLink(m: OutboxMessage): string {
+  return m.link && m.link.startsWith('https://voice.google.com/') ? m.link : VOICE_WEB;
+}
 
 const CHANNEL_LABEL: Record<string, string> = {
   instagram: 'Instagram',
@@ -118,6 +138,8 @@ export function kindLabel(m: OutboxMessage): string {
       return 'Email';
     case 'resend_email':
       return 'Email via Resend';
+    case 'voice_text':
+      return 'Voice text';
     case 'post':
       return m.channel === 'newsletter' ? 'Newsletter' : m.channel === 'site' ? 'Site post' : `${channelLabel(m.channel)} post`;
     case 'text':
@@ -156,6 +178,7 @@ export function primaryLabel(k: OutboxKind): 'Send' | 'Publish' | 'Approve' | 'U
 export const EDITABLE: Partial<Record<OutboxKind, (keyof OutboxEdit)[]>> = {
   email: ['to', 'cc', 'subject', 'body'],
   resend_email: ['to', 'cc', 'subject', 'body'],
+  voice_text: ['body'],
   post: ['title', 'body', 'link'],
   text: ['to', 'body'],
   dm: ['to', 'body', 'link'],

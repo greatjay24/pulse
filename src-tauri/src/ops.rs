@@ -111,6 +111,9 @@ const HASH_FIELDS: &[(&str, &[&str])] = &[
     ("stripe_subscription", &["action", "stripe_id", "customer_id", "items", "amount", "currency", "interval", "days_until_due", "subject", "body"]),
     ("stripe_charge", &["customer_id", "customer", "payment_method", "card", "amount", "currency", "description", "statement_descriptor_suffix", "subject", "body"]),
     ("resend_email", &["from", "from_name", "reply_to", "to", "cc", "subject", "body", "in_reply_to", "references"]),
+    // A Google Voice reply: the number, the text and the Voice thread it goes into (contact and
+    // conversation are display only).
+    ("voice_text", &["to", "body", "reply_to", "in_reply_to", "references"]),
     ("tiktok_post", &["account", "title", "body", "media", "ai_label", "privacy", "schedule", "notes"]),
     ("youtube_upload", &["channel", "title", "body", "tags", "privacy", "publish_at", "category_id", "made_for_kids", "ai_altered", "media", "notes"]),
 ];
@@ -246,6 +249,16 @@ pub async fn outbox_edit(id: String, fields: serde_json::Value) -> Result<String
     }
     edit_fields_ok(&fields)?;
     let v = run_script_async("outbox.py", vec!["edit".into(), id], Some(fields.to_string()), SCRIPT_TIMEOUT).await?;
+    Ok(v.to_string())
+}
+
+// Jay sent a Voice text himself from the Google Voice app ("Copy & open Voice"), then said so.
+#[tauri::command]
+pub async fn outbox_mark_handsent(id: String) -> Result<String, String> {
+    if !is_outbox_id(&id) {
+        return Err("invalid outbox id".to_string());
+    }
+    let v = run_script_async("outbox.py", vec!["handsent".into(), id], None, SCRIPT_TIMEOUT).await?;
     Ok(v.to_string())
 }
 
@@ -651,6 +664,27 @@ mod ops_tests {
         let mut other = item.clone();
         other["from"] = "hello@notify.example.com".into();
         assert_ne!(content_hash(&other).unwrap(), content_hash(&item).unwrap());
+    }
+
+    // Expected values computed with bin/sendguard.py content_hash on the same items.
+    #[test]
+    fn voice_text_hash_matches_python() {
+        let item = serde_json::json!({"kind": "voice_text", "entity": "crafted", "to": ["+13139999167"], "contact": "Lamar H",
+            "body": "Hey Lamar – Thursday at 2 works.\nSee you then.",
+            "reply_to": "16505166084.13139999167.abc123@txt.voice.google.com", "in_reply_to": "orig@txt.voice.google.com",
+            "references": ["a@x.example", "orig@txt.voice.google.com"], "conversation": [{"dir": "in", "text": "hi"}]});
+        assert_eq!(content_hash(&item).unwrap(), "2b57aa7fa10a17d16d257f3e522d5f026500d166d245f8c5c22432eca5248657");
+        // No Voice thread to reply into yet.
+        let mut bare = item.clone();
+        bare["reply_to"] = serde_json::Value::Null;
+        bare["in_reply_to"] = serde_json::Value::Null;
+        bare["references"] = serde_json::json!([]);
+        assert_eq!(content_hash(&bare).unwrap(), "d8219a927f32dd980c144d68aaff95bb7f3dc7d7647e9de8665c63bc8f4ac4c1");
+        // The contact name and the conversation are display only.
+        let mut shown = item.clone();
+        shown["contact"] = "Someone else".into();
+        shown["conversation"] = serde_json::json!([]);
+        assert_eq!(content_hash(&shown).unwrap(), content_hash(&item).unwrap());
     }
 
     // Same items and constants as kit/org/bin/test_outbox.py PULSE_TIKTOK_ITEM / PULSE_YOUTUBE_ITEM.

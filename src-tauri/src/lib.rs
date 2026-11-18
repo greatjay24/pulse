@@ -3882,6 +3882,7 @@ pub fn run() {
             ops::outbox_skip,
             ops::undo_action,
             ops::outbox_mark_published,
+            ops::outbox_mark_handsent,
             ops::outbox_send,
             threads::read_email_thread,
             ops::read_goals,

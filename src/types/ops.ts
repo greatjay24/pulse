@@ -5,6 +5,7 @@ export type OutboxStatus = 'pending' | 'sending' | 'sent' | 'approved' | 'publis
 export type OutboxKind =
   | 'email'
   | 'resend_email'
+  | 'voice_text'
   | 'post'
   | 'text'
   | 'dm'
@@ -47,6 +48,13 @@ export interface OutboxMessage {
   from_name?: string | null;
   reply_to?: string | null;
   resend_id?: string | null;
+  // voice_text: a reply from Jay's Google Voice number. reply_to is the Voice gateway address
+  // (null: nobody has texted from that number yet, so it can only be sent from the Voice app);
+  // link opens the conversation in voice.google.com.
+  contact?: string | null;
+  reply_subject?: string | null;
+  conversation?: VoiceTextRow[]; // recent texts with that number, oldest first; display only
+  sent_by_hand?: boolean;
   // post / dm / slack
   channel?: string | null;
   title?: string | null;
@@ -81,6 +89,15 @@ export interface OutboxMessage {
   description?: string | null; // on the customer's receipt
   statement_descriptor_suffix?: string | null;
   result?: Record<string, unknown> | null;
+}
+
+// One row of a voice_text conversation. text is third-party content: plain text only.
+export interface VoiceTextRow {
+  at: string | null;
+  dir: 'in' | 'out';
+  kind?: 'text' | 'voicemail' | 'missed-call' | 'group-text';
+  text: string | null;
+  withheld: string | null; // why the text isn't shown (one-time codes, short codes)
 }
 
 // What Roo may change in an item, by kind (bin/outbox.py EDITABLE is the authority).

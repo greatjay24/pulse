@@ -1,9 +1,9 @@
 import { ReactNode, useState } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { PortfolioEntity, PortfolioSnapshot } from '../types';
-import { OutboxEdit, OutboxEntry, OutboxMessage } from '../types/ops';
-import { editOutbox, markPublished, sendOutbox, skipOutbox, useOutbox } from '../hooks/useOps';
-import { EDITABLE, PUBLISH_KINDS, channelLabel, composeUrl, formatMinor, isEmailKind, isMoneyKind, isWebLink, kindLabel, kindOf, pasteText, placeholders, primaryLabel, socialChannel, splitAddresses } from '../utils/ops';
+import { OutboxEdit, OutboxEntry, OutboxMessage, VoiceTextRow } from '../types/ops';
+import { editOutbox, markHandSent, markPublished, sendOutbox, skipOutbox, useOutbox } from '../hooks/useOps';
+import { EDITABLE, PUBLISH_KINDS, SMS_WARN, TEXT_MAX, VOICE_LINE, channelLabel, composeUrl, formatMinor, isEmailKind, isMoneyKind, isVoiceKind, isWebLink, kindLabel, kindOf, pasteText, placeholders, prettyPhone, primaryLabel, socialChannel, splitAddresses, voiceLink } from '../utils/ops';
 import { openExternal } from '../utils/tracker';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { showToast } from '../utils/toast';
@@ -47,11 +47,22 @@ async function copy(text: string, what = 'Copied') {
   }
 }
 
+// Who a Voice text goes to: the contact's name, else the number.
+const voiceWho = (m: OutboxMessage) => m.contact || prettyPhone(m.to[0]);
+
+// Copy & open Voice: the text on the clipboard, the conversation in Google Voice in the browser.
+async function copyAndOpenVoice(m: OutboxMessage) {
+  await copy(m.body, `Copied. Paste it into the conversation with ${voiceWho(m)}, send it, then mark it sent.`);
+  openExternal(voiceLink(m));
+}
+
 // What a click does, said plainly for the demo and the button's title.
 function clickMeans(m: OutboxMessage): string {
   switch (kindOf(m)) {
     case 'email':
       return 'send this message from the right mailbox, threaded, and mark it sent';
+    case 'voice_text':
+      return `send this text from your Voice number ${prettyPhone(VOICE_LINE)} to ${voiceWho(m)} and mark it sent`;
     case 'resend_email':
       return `send this message through Resend as ${m.from ?? 'the sender shown'} and mark it sent`;
     case 'youtube_upload':
@@ -120,6 +131,99 @@ function ThreadAbove({ id }: { id: string }) {
   );
 }
 
+// Text-message bubbles. Every string here is third-party or agent text: rendered as plain text only.
+function Bubble({ out, draft, children }: { out: boolean; draft?: boolean; children: ReactNode }) {
+  const { tokens } = useTheme();
+  const c = tokens.colors;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: out ? 'flex-end' : 'flex-start' }}>
+      <div
+        style={{
+          maxWidth: '78%',
+          padding: '8px 12px',
+          borderRadius: '16px',
+          ...(out ? { borderBottomRightRadius: '4px' } : { borderBottomLeftRadius: '4px' }),
+          background: out ? VOICE_BLUE : c.bgElevated,
+          color: out ? '#ffffff' : c.text,
+          border: out ? (draft ? `2px dashed rgba(255,255,255,0.55)` : 'none') : `1px solid ${c.border}`,
+          fontSize: tokens.type.body,
+          lineHeight: 1.45,
+          whiteSpace: 'pre-wrap',
+          overflowWrap: 'anywhere',
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+const VOICE_BLUE = '#1a73e8';
+
+function VoiceRow({ r }: { r: VoiceTextRow }) {
+  const { tokens } = useTheme();
+  const c = tokens.colors;
+  const out = r.dir === 'out';
+  const when = r.at && !Number.isNaN(Date.parse(r.at))
+    ? new Date(r.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : null;
+  let content: ReactNode;
+  if (r.kind === 'missed-call') content = <span style={{ fontStyle: 'italic' }}>Missed call</span>;
+  else if (r.withheld) content = <span style={{ fontStyle: 'italic' }}>(withheld: {r.withheld})</span>;
+  else if (r.kind === 'voicemail') content = <>Voicemail: {r.text ?? '(no transcript)'}</>;
+  else content = r.text ?? '';
+  return (
+    <div>
+      <Bubble out={out}>{content}</Bubble>
+      {when && (
+        <div style={{ fontSize: tokens.type.micro, color: c.textDim, marginTop: '2px', textAlign: out ? 'right' : 'left' }}>
+          {when}{r.kind === 'group-text' ? ' · group text' : ''}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CharCount({ n }: { n: number }) {
+  const { tokens } = useTheme();
+  const c = tokens.colors;
+  const long = n > SMS_WARN;
+  return (
+    <div style={{ fontSize: tokens.type.micro, color: n > TEXT_MAX ? c.danger : long ? c.warning : c.textDim, textAlign: 'right', marginTop: '4px' }}>
+      {n} characters{long ? `: long for a text (over ${SMS_WARN}), it may arrive split or cut` : ''}
+    </div>
+  );
+}
+
+function VoiceTextPreview({ m }: { m: OutboxMessage }) {
+  const { tokens } = useTheme();
+  const c = tokens.colors;
+  const number = m.to[0] ?? '';
+  const rows = m.conversation ?? [];
+  return (
+    <>
+      <div style={{ fontSize: tokens.type.small, color: c.textMuted, lineHeight: 1.6 }}>
+        Text from your Voice number {prettyPhone(VOICE_LINE)} → <span style={{ color: c.text, fontWeight: 600 }}>{m.contact || prettyPhone(number)}</span>
+        {m.contact && <> · {prettyPhone(number)}</>}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px', padding: '14px', border: `1px solid ${c.border}`, borderRadius: tokens.radius.md, maxHeight: '420px', overflow: 'auto' }}>
+        {rows.length === 0 && <div style={{ fontSize: tokens.type.micro, color: c.textDim, textAlign: 'center' }}>No earlier texts with this number in Roo</div>}
+        {rows.map((r, i) => <VoiceRow key={i} r={r} />)}
+        <div>
+          <Bubble out draft>{m.body}</Bubble>
+          <div style={{ fontSize: tokens.type.micro, color: c.textDim, marginTop: '2px', textAlign: 'right' }}>Draft</div>
+        </div>
+      </div>
+      <CharCount n={m.body.length} />
+      {!m.reply_to && (
+        <div style={{ marginTop: '8px', fontSize: tokens.type.small, color: c.textMuted }}>
+          Nobody has texted from this number yet, so send it from the Voice app.
+        </div>
+      )}
+    </>
+  );
+}
+
 function Preview({ m }: { m: OutboxMessage }) {
   const { tokens } = useTheme();
   const c = tokens.colors;
@@ -153,6 +257,8 @@ function Preview({ m }: { m: OutboxMessage }) {
       </>
     );
   }
+
+  if (isVoiceKind(kind)) return <VoiceTextPreview m={m} />;
 
   if (isMoneyKind(kind)) {
     const rows: [string, ReactNode][] = [];
@@ -296,6 +402,7 @@ function EditForm({ m, onSave, onCancel, busy }: { m: OutboxMessage; onSave: (f:
       {has('title') && <label style={meta}>Title <input value={title} onChange={(e) => setTitle(e.target.value)} style={field} placeholder="none" /></label>}
       {has('link') && <label style={meta}>Link <input value={link} onChange={(e) => setLink(e.target.value)} style={field} placeholder="https://" /></label>}
       <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={Math.min(18, Math.max(6, body.split('\n').length + 1))} style={{ ...field, fontFamily: 'inherit', lineHeight: 1.55, resize: 'vertical' }} />
+      {isVoiceKind(kindOf(m)) && <CharCount n={body.length} />}
       <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
         <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
         <button className="btn btn-secondary" disabled={busy} onClick={onCancel}>Cancel</button>
@@ -333,14 +440,18 @@ function OutboxItem({ entry, entity, onDone }: { entry: OutboxEntry; entity?: Po
   const kind = kindOf(m);
   const label = primaryLabel(kind);
   const [editing, setEditing] = useState(false);
-  const [busy, setBusy] = useState<'go' | 'save' | 'skip' | null>(null);
+  const [busy, setBusy] = useState<'go' | 'save' | 'skip' | 'hand' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [skipping, setSkipping] = useState(false);
   const [skipWhy, setSkipWhy] = useState('');
   const [confirming, setConfirming] = useState(false);
+  // voice_text: Copy & open Voice was clicked, so offer Mark sent.
+  const [openedVoice, setOpenedVoice] = useState(false);
+  const voice = isVoiceKind(kind);
+  const canSend = !voice || !!m.reply_to;
   const now = Date.now();
 
-  const run = async (what: 'go' | 'save' | 'skip', fn: () => Promise<unknown>) => {
+  const run = async (what: 'go' | 'save' | 'skip' | 'hand', fn: () => Promise<unknown>) => {
     setBusy(what);
     setError(null);
     try {
@@ -360,7 +471,8 @@ function OutboxItem({ entry, entity, onDone }: { entry: OutboxEntry; entity?: Po
       const res = await sendOutbox(m.id, entry.content, clickMeans(m));
       if (res.warning) showToast(res.warning);
       if (!res.ok) return;
-      if (isEmailKind(kind)) showToast(`Sent to ${m.to.join(', ')}${kind === 'resend_email' ? ` as ${m.from}` : ''}`);
+      if (voice) showToast(`Text sent to ${voiceWho(m)} from your Voice number`);
+      else if (isEmailKind(kind)) showToast(`Sent to ${m.to.join(', ')}${kind === 'resend_email' ? ` as ${m.from}` : ''}`);
       else if (kind === 'youtube_upload') showToast(res.next_step ?? 'Uploading to YouTube in the background');
       else if (composeUrl(m)) await copyAndOpen(m, `Approved and copied. Paste it into ${channelLabel(socialChannel(m))}, then mark it published.`);
       else if (PUBLISH_KINDS.includes(kind)) await copy(pasteText(m), 'Approved and copied. Paste it where it goes, then mark it published.');
@@ -399,15 +511,29 @@ function OutboxItem({ entry, entity, onDone }: { entry: OutboxEntry; entity?: Po
 
       {!editing && (
         <div style={{ display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
-          <button className="btn btn-primary" disabled={!!busy} onClick={approve} title={`Click to ${clickMeans(m)}`} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Icon name={isEmailKind(kind) ? 'mail' : isMoneyKind(kind) ? 'credit-card' : kind === 'youtube_upload' ? 'cloud' : 'check'} size={14} color="currentColor" /> {busy === 'go' ? busyLabel : label}
-          </button>
+          {canSend && (
+            <button className="btn btn-primary" disabled={!!busy} onClick={approve} title={`Click to ${clickMeans(m)}`} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Icon name={voice ? 'mobile' : isEmailKind(kind) ? 'mail' : isMoneyKind(kind) ? 'credit-card' : kind === 'youtube_upload' ? 'cloud' : 'check'} size={14} color="currentColor" /> {busy === 'go' ? busyLabel : voice ? 'Send text' : label}
+            </button>
+          )}
           {EDITABLE[kind] && (
             <button className="btn btn-secondary" disabled={!!busy} onClick={() => setEditing(true)}>Edit</button>
           )}
           <button className="btn btn-secondary" disabled={!!busy} onClick={() => setSkipping((v) => !v)}>
             {busy === 'skip' ? 'Skipping…' : 'Skip'}
           </button>
+          {voice && (
+            <button className={`btn ${canSend || openedVoice ? 'btn-secondary' : 'btn-primary'}`} disabled={!!busy}
+              onClick={async () => { await copyAndOpenVoice(m); setOpenedVoice(true); }}
+              title="Copy the text and open the conversation in Google Voice, to send it yourself" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Icon name="external-link" size={14} color="currentColor" /> Copy &amp; open Voice
+            </button>
+          )}
+          {voice && openedVoice && (
+            <button className="btn btn-primary" disabled={!!busy} onClick={() => run('hand', () => markHandSent(m.id))} title="You sent it from the Google Voice app: mark it sent">
+              {busy === 'hand' ? 'Saving…' : 'Mark sent'}
+            </button>
+          )}
           {isMoneyKind(kind) && <span style={{ fontSize: tokens.type.micro, color: c.textDim }}>To change it, ask the lead to edit it in Stripe and queue it again.</span>}
         </div>
       )}
@@ -546,13 +672,14 @@ function RecentRow({ entry, entity }: { entry: OutboxEntry; entity?: PortfolioEn
   const m = entry.item;
   const tone = m.status === 'sent' || m.status === 'published' ? c.success : m.status === 'skipped' ? c.textDim : c.danger;
   const when = m.sent_at ?? m.published_at ?? m.skipped_at ?? m.created_at;
-  const who = m.to.length ? m.to.join(', ') : m.customer ?? channelLabel(m.channel);
+  const voice = isVoiceKind(kindOf(m));
+  const who = voice ? voiceWho(m) : m.to.length ? m.to.join(', ') : m.customer ?? channelLabel(m.channel);
   return (
     <li style={{ display: 'flex', gap: '10px', fontSize: tokens.type.small, lineHeight: 1.5, padding: '8px 0', borderBottom: `1px solid ${c.border}` }}>
       <span style={{ color: tone, fontWeight: 600, width: '72px', flexShrink: 0 }}>{m.status}</span>
       <span style={{ flex: 1, minWidth: 0 }}>
         <span style={{ fontWeight: 600 }}>{m.subject}</span>
-        <span style={{ color: c.textMuted }}> · {kindLabel(m)}{who ? ` · ${who}` : ''} · {entity?.name ?? m.entity}</span>
+        <span style={{ color: c.textMuted }}> · {kindLabel(m)}{who ? ` · ${who}` : ''} · {entity?.name ?? m.entity}{voice && m.sent_by_hand ? ' · sent from the Voice app' : ''}</span>
         {isWebLink(m.link) && (isMoneyKind(kindOf(m)) || kindOf(m) === 'youtube_upload') && ['sent', 'published'].includes(m.status) && (
           <button onClick={() => openExternal(m.link!)} style={{ marginLeft: '8px', background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: c.accent, fontSize: tokens.type.small, fontFamily: 'inherit' }}>
             open
@@ -562,7 +689,7 @@ function RecentRow({ entry, entity }: { entry: OutboxEntry; entity?: PortfolioEn
         {m.error && (
           <div style={{ color: c.danger }}>
             {m.error}
-            {(m.status === 'sending' || m.status === 'failed') && (isMoneyKind(kindOf(m)) ? ' Check it in Stripe before queueing it again.' : kindOf(m) === 'email' ? ' Check Sent in Gmail before trying again.' : kindOf(m) === 'resend_email' ? ' Check Emails in the Resend dashboard before trying again.' : kindOf(m) === 'youtube_upload' ? ' Check Content in YouTube Studio before trying again.' : '')}
+            {(m.status === 'sending' || m.status === 'failed') && (isMoneyKind(kindOf(m)) ? ' Check it in Stripe before queueing it again.' : kindOf(m) === 'email' ? ' Check Sent in Gmail before trying again.' : kindOf(m) === 'resend_email' ? ' Check Emails in the Resend dashboard before trying again.' : kindOf(m) === 'youtube_upload' ? ' Check Content in YouTube Studio before trying again.' : voice ? ' Check the conversation in Google Voice before trying again.' : '')}
           </div>
         )}
       </span>
@@ -661,7 +788,7 @@ export function OutboxCard({ snapshot, onOpen }: { snapshot: PortfolioSnapshot |
             <span style={{ fontWeight: 600 }}>{entities.find((x) => x.id === e.item.entity)?.name ?? e.item.entity}</span>{' '}
             <span style={{ color: c.textMuted }}>
               {kindLabel(e.item)}: {e.item.subject}
-              {e.item.to.length > 0 && isEmailKind(kindOf(e.item)) ? ` → ${e.item.to.join(', ')}` : ''}
+              {e.item.to.length > 0 && isEmailKind(kindOf(e.item)) ? ` → ${e.item.to.join(', ')}` : isVoiceKind(kindOf(e.item)) ? ` → ${voiceWho(e.item)}` : ''}
             </span>
           </li>
         ))}
