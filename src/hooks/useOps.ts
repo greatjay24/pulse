@@ -69,6 +69,12 @@ export async function markPublished(id: string) {
   await invoke<string>('outbox_mark_published', { id });
 }
 
+// A Voice text Jay sent himself from the Google Voice app (after Copy & open Voice).
+export async function markHandSent(id: string) {
+  if (DEMO) return demo('mark it sent');
+  await invoke<string>('outbox_mark_handsent', { id });
+}
+
 // note: Jay's reason ("too long", "no hook"). Roo's nightly learning turns repeated reasons into lessons.
 export async function skipOutbox(id: string, note?: string) {
   if (DEMO) return demo('mark it skipped; the Gmail draft stays where it is');
