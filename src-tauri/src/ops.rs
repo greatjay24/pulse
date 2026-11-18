@@ -78,7 +78,7 @@ pub(crate) fn run_script(root: &Path, script: &str, args: &[String], stdin: Opti
     }
 }
 
-async fn run_script_async(script: &'static str, args: Vec<String>, stdin: Option<String>, timeout: Duration) -> Result<serde_json::Value, String> {
+pub(crate) async fn run_script_async(script: &'static str, args: Vec<String>, stdin: Option<String>, timeout: Duration) -> Result<serde_json::Value, String> {
     let root = get_portfolio_dir()?;
     tauri::async_runtime::spawn_blocking(move || run_script(&root, script, &args, stdin.as_deref(), timeout))
         .await
@@ -157,7 +157,7 @@ pub(crate) fn content_hash(item: &serde_json::Value) -> Result<String, String> {
     Ok(hex::encode(Sha256::digest(parts.join("\u{1e}").as_bytes())))
 }
 
-fn is_outbox_id(s: &str) -> bool {
+pub(crate) fn is_outbox_id(s: &str) -> bool {
     is_slug(s) && !s.contains('_')
 }
 

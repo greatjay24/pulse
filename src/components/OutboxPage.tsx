@@ -9,6 +9,7 @@ import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { showToast } from '../utils/toast';
 import { Card, Notice, PageHeader, SectionHeading, SectionLabel } from './BoardUI';
 import { Icon } from './Icons';
+import { EmailThread } from './EmailThread';
 
 const RECENT_SHOWN = 15;
 
@@ -105,6 +106,20 @@ function Body({ text, boxed = false }: { text: string; boxed?: boolean }) {
   );
 }
 
+// The conversation a reply draft answers, Gmail-style, above the draft itself (Roo reads it read-only).
+function ThreadAbove({ id }: { id: string }) {
+  const { tokens } = useTheme();
+  const [shown, setShown] = useState(true);
+  return (
+    <div style={{ margin: '12px 0 4px' }}>
+      <button className="btn btn-secondary" onClick={() => setShown(!shown)} style={{ fontSize: tokens.type.micro, marginBottom: '8px' }}>
+        {shown ? 'Hide the thread' : 'Show the thread'}
+      </button>
+      {shown && <EmailThread source={{ outbox: id }} hideDraft />}
+    </div>
+  );
+}
+
 function Preview({ m }: { m: OutboxMessage }) {
   const { tokens } = useTheme();
   const c = tokens.colors;
@@ -127,7 +142,13 @@ function Preview({ m }: { m: OutboxMessage }) {
           {m.cc.length > 0 && <Meta label="Cc">{m.cc.join(', ')}</Meta>}
           {m.in_reply_to && <div style={{ color: c.textDim }}>Reply in the existing thread</div>}
         </div>
-        <div style={{ fontSize: '17px', fontWeight: 600, margin: '12px 0 8px' }}>{m.subject}</div>
+        {kind === 'email' && m.in_reply_to && <ThreadAbove id={m.id} />}
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'baseline', flexWrap: 'wrap', margin: '12px 0 8px' }}>
+          <span style={{ fontSize: '17px', fontWeight: 600 }}>{m.subject}</span>
+          <span style={{ fontSize: tokens.type.micro, fontWeight: 600, color: c.warning, border: `1px solid ${c.warning}`, borderRadius: '6px', padding: '0 6px' }}>
+            Draft — not sent
+          </span>
+        </div>
         <Body text={m.body} />
       </>
     );
