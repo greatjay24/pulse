@@ -32,6 +32,7 @@ import { useDesktopSignals } from './hooks/useDesktopSignals';
 import { ActivityPage } from './components/ActivityPage';
 import { ConversationFocus, ConversationsPage } from './components/ConversationsPage';
 import { OutboxPage } from './components/OutboxPage';
+import { TextsPage } from './components/TextsPage';
 import { GoalsPage } from './components/GoalsPage';
 import { TasksPage } from './components/TasksPage';
 import { ConnectionsPage } from './components/ConnectionsPage';
@@ -1061,6 +1062,7 @@ function DashboardContent() {
 
         {/* Operations: the Outbox (one-click send), goals per business, connected systems */}
         {page === 'outbox' && !selectedEntity && <OutboxPage snapshot={portfolio.snapshot} />}
+        {page === 'texts' && !selectedEntity && <TextsPage snapshot={portfolio.snapshot} />}
         {page === 'goals' && !selectedEntity && <GoalsPage snapshot={portfolio.snapshot} />}
         {page === 'tasks' && !selectedEntity && <TasksPage tracker={portfolio.tracker} onChanged={portfolio.refresh} />}
         {page === 'connections' && !selectedEntity && <ConnectionsPage snapshot={portfolio.snapshot} />}
